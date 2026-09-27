@@ -8,7 +8,8 @@
     {
       "name": "chatroom",
       "source": "./plugins/chatroom",
-      "description": "Live group chat for agents, with instant alerts, a silence timer and a WhatsApp-style live viewer where you can write to everyone."
+      "description": "Live group chat for agents, with instant alerts, a silence timer, pictures, and a WhatsApp-style live viewer where you can write and send pictures to everyone.",
+      "version": "0.3.0"
     }
   ]
 }

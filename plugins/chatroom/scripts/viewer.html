@@ -97,6 +97,22 @@
   #newer { position: fixed; right: 26px; bottom: 90px; background: var(--accent); color: #fff; border: 0; border-radius: 18px;
            padding: 8px 14px; font-weight: 600; cursor: pointer; display: none; box-shadow: 0 2px 6px rgba(0,0,0,.25); z-index: 3; }
   #empty { text-align: center; color: var(--muted); margin-top: 60px; }
+  .pics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .pics img { max-width: 100%; max-height: 320px; border-radius: 6px; display: block; cursor: zoom-in;
+              box-shadow: 0 1px 2px var(--shadow); background: rgba(127,127,127,.12); }
+  .pics.many img { max-height: 200px; max-width: calc(50% - 3px); object-fit: cover; }
+  .pill .pics { justify-content: center; } .pill .pics img { max-height: 160px; }
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: none; place-items: center; z-index: 20;
+              cursor: zoom-out; padding: 18px; }
+  #lightbox.open { display: grid; }
+  #lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
+  #attach { background: transparent; border: 0; font-size: 20px; cursor: pointer; padding: 0 6px; color: var(--muted); }
+  #pending { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 8px; }
+  #pending:empty { display: none; }
+  #pending .chip { position: relative; }
+  #pending img { height: 54px; border-radius: 5px; display: block; }
+  #pending button { position: absolute; top: -6px; right: -6px; border: 0; border-radius: 50%; width: 18px; height: 18px;
+                    font-size: 11px; line-height: 18px; padding: 0; cursor: pointer; background: #d64545; color: #fff; }
 
   /* composer */
   footer { background: var(--header); padding: 8px 12px 4px; border-top: 1px solid var(--border); }
@@ -155,8 +171,12 @@
 <div class="strip" id="strip"></div>
 <main id="feed"><div id="empty"></div></main>
 <button id="newer"></button>
+<div id="lightbox"><img alt=""></div>
 <footer>
+  <div id="pending"></div>
   <div class="compose">
+    <button id="attach" title="Allega foto · Attach pictures (anche incolla / trascina · paste or drop)">📎</button>
+    <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
     <textarea id="box" rows="1"></textarea>
     <button id="send">➤</button>
   </div>
@@ -276,13 +296,19 @@ function badge(text) {
 function nearBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 140; }
 function matches(m) { return !query || (m.text + ' ' + m.from).toLowerCase().includes(query); }
 
+function pics(m) {
+  const list = Array.isArray(m.images) ? m.images : [];
+  if (!list.length) return '';
+  return `<div class="pics${list.length > 1 ? ' many' : ''}">` +
+    list.map(src => `<img loading="lazy" src="${esc(src)}" alt="#${m.n}">`).join('') + '</div>';
+}
 function build(m) {
   let el;
   if (isStatus(m)) {
     const p = profile(m.from);
     el = document.createElement('div');
     el.className = 'pill status';
-    el.innerHTML = `${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b> · ${inline(m.text)} <span class="num">#${m.n} ${m.time}</span>`;
+    el.innerHTML = `${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b> · ${inline(m.text)} <span class="num">#${m.n} ${m.time}</span>` + pics(m);
     if (!$('optStatus').checked) el.classList.add('hidden');
     lastFrom = null;
   } else if (isClosed(m.text)) {
@@ -298,7 +324,8 @@ function build(m) {
       (first ? `<div class="who-line"><span class="name" style="color:${p.color}">${esc(m.from)}</span>` +
                (p.role ? `<span class="role">${esc(p.role)}</span>` : '') + `</div>` : '') +
       (b ? `<div class="badge ${b.cls}">${esc(b.label)}</div><br>` : '') +
-      `<div class="text">${render(m.text)}</div><div class="meta"><span class="num">#${m.n}</span>${m.time}</div></div>`;
+      `<div class="text">${render(m.text)}</div>` + pics(m) +
+      `<div class="meta"><span class="num">#${m.n}</span>${m.time}</div></div>`;
     lastFrom = m.from;
   }
   el.id = 'm' + m.n;
@@ -407,17 +434,46 @@ async function poll() {
 
 /* composer */
 const box = $('box'), send = $('send');
+let pending = [];
+function showPending() {
+  $('pending').innerHTML = pending.map((f, i) =>
+    `<span class="chip"><img src="${f.data}" alt=""><button data-i="${i}" title="✕">✕</button></span>`).join('');
+}
+function addFiles(files) {
+  for (const file of files) {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type) || pending.length >= 6) continue;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ext = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif'}[file.type];
+      const name = file.name && /\.[A-Za-z]+$/.test(file.name) ? file.name : 'foto' + ext;
+      pending.push({name, data: reader.result}); showPending();
+    };
+    reader.readAsDataURL(file);
+  }
+}
 async function sendMessage() {
-  const text = box.value.trim(); if (!text) return;
+  const text = box.value.trim(); if (!text && !pending.length) return;
   send.disabled = true;
   try {
-    const r = await fetch('post', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text})});
-    if (r.ok) { box.value = ''; box.style.height = ''; feed.scrollTop = feed.scrollHeight; poll(); }
+    const r = await fetch('post', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                   body: JSON.stringify({text, images: pending})});
+    if (r.ok) { box.value = ''; box.style.height = ''; pending = []; showPending(); feed.scrollTop = feed.scrollHeight; poll(); }
     else alert(t().notSent + await r.text());
   } catch (e) { alert(t().notSent + t().unreachable); }
   send.disabled = false; box.focus();
 }
 send.addEventListener('click', sendMessage);
+$('attach').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
+$('pending').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+  pending.splice(+b.dataset.i, 1); showPending(); });
+box.addEventListener('paste', e => { const files = [...(e.clipboardData || {}).files || []]; if (files.length) { e.preventDefault(); addFiles(files); } });
+document.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+document.addEventListener('drop', e => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+feed.addEventListener('click', e => { const img = e.target.closest('.pics img'); if (!img) return;
+  $('lightbox').querySelector('img').src = img.src; $('lightbox').classList.add('open'); });
+$('lightbox').addEventListener('click', () => $('lightbox').classList.remove('open'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').classList.remove('open'); });
 box.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 box.addEventListener('input', () => { box.style.height = ''; box.style.height = Math.min(box.scrollHeight, 150) + 'px'; });
 

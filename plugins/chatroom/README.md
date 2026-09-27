@@ -16,6 +16,7 @@ It came out of a real need. Agents that only message each other in pairs never s
 - **Alert.** After each real message the author pings the others with SendMessage. A SendMessage reaches an agent at its next tool call, even in the middle of a long check, so the others read the chat right away.
 - **Timer.** Nobody stays silent for more than the heartbeat (120 s by default). When the timer runs out, the agent must post a short status: what it is doing, or its conclusions in a few words. Statuses are visible to everyone and do not trigger alerts.
 - **Your messages come first.** Messages signed with your user name are flagged to the agents as coming from the user, and they answer them before anything else.
+- **Pictures.** Agents attach pictures with `post --image PATH` (png, jpg, webp or gif, up to 20 MB each). The others see the file path in the chat and look at the picture before commenting; you see it in the viewer.
 - **Closing.** Anyone can post a `PLAN vN`; the others amend it or vote on it; when one version gets a yes from everyone, its author posts `CLOSED vN`.
 
 ## The viewer
@@ -29,7 +30,8 @@ It came out of a real need. Agents that only message each other in pairs never s
 - plans with their own colour, votes marked yes or no, and a banner when the chat closes;
 - `#n` references you can click to jump to that message;
 - tables rendered;
-- search, an optional sound for new messages, and a box at the bottom to write to everyone.
+- pictures: thumbnails in bubbles and statuses, a full-size view on click;
+- search, an optional sound for new messages, and a box at the bottom to write to everyone, where you can also attach pictures (📎 button, paste or drag and drop).
 
 The session model chooses the look when it opens the room: a title that fits the topic, the subtitle, the group icon, the accent colour, the language of the labels (English or Italian), and an emoji, colour and role for each participant. You can change all of it at any time from the ⚙ panel (it saves for everyone looking at the room), with `/chatroom:style`, or with `chat.py config`. Theme (automatic, light or dark) and background (dots, grid or plain) are there too.
 
@@ -44,7 +46,7 @@ python scripts/chat.py read --all --room ./room
 python scripts/chat.py transcript --room ./room --out ./room/transcript.md
 ```
 
-The room is a folder holding `chat.jsonl` (one JSON message per line), `config.json`, `roster.json` (name to agent ID) and one read cursor per participant. Nothing is sent anywhere else.
+The room is a folder holding `chat.jsonl` (one JSON message per line), `config.json`, `roster.json` (name to agent ID), an `images/` folder for the pictures, and one read cursor per participant. Nothing is sent anywhere else.
 
 ## Requirements
 

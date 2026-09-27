@@ -1,7 +1,7 @@
 {
   "name": "chatroom",
   "description": "Live group chat for agents: several agents discuss in parallel in one shared room, with instant alerts, a silence timer that forces status updates, and a WhatsApp-style live viewer where you can write to everyone.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "ArtyomITA"
   },

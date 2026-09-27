@@ -12,6 +12,9 @@ python "{{CHAT}}" post --as {{NAME}} --room "{{ROOM}}" <<'EOF'
 your message
 EOF
 - write a STATUS (no alert is sent, but everyone reads it): add --status to the post command.
+- attach PICTURES (photos, previews, screenshots, crops): add --image PATH to the post command, once per picture, always with a
+  caption in the heredoc. Everyone sees them, the user too, in the viewer. Pictures posted by others appear in read as file
+  paths: look at them with the Read tool before you comment. When your work produces something visual, show it.
 
 RULES OF THE CHAT:
 1. Messages are SHORT (at most ~150 words) and many. Answer by naming the person (@NAME) and the message number (#n). No monologues.

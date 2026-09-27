@@ -15,7 +15,8 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
   chat.py init --room DIR --topic "..." --participants A,B,C [look options, see below]
   chat.py config --room DIR key=value ... [--profile ...]   (change the look or the settings of an existing room)
   chat.py roster --room DIR A=<agentId> B=<agentId> ...     (the lead writes it right after spawning the agents)
-  chat.py post --as NAME [--status]                         (text on stdin: use a quoted heredoc <<'EOF' ... EOF)
+  chat.py post --as NAME [--status] [--image PATH ...]      (text on stdin: use a quoted heredoc <<'EOF' ... EOF;
+                                                            --image attaches a picture, once per picture)
   chat.py read --as NAME                                    (new messages since your last read)
   chat.py read --all                                        (the whole chat)
   chat.py wait --as NAME [--timeout 100]                    (blocks until someone else writes or your timer expires)
@@ -28,9 +29,11 @@ Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --a
 "NAME|emoji|#color|role" once per participant. The viewer's settings panel changes the same fields.
 """
 import argparse
+import base64
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +47,10 @@ LOOK_KEYS = {'title': str, 'subtitle': str, 'icon': str, 'accent': str, 'theme':
              'heartbeat': int, 'user_name': str, 'topic': str}
 CHOICES = {'theme': ('auto', 'light', 'dark'), 'wallpaper': ('dots', 'plain', 'grid'), 'lang': ('en', 'it')}
 COLOR = re.compile(r'^#[0-9a-fA-F]{6}$')
+IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+               '.gif': 'image/gif'}
+IMAGE_MAX_BYTES = 20 * 1024 * 1024
+IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
 
 
 def clean_look(key, value):
@@ -156,16 +163,56 @@ class Room:
         finally:
             os.rmdir(self.lock)
 
-    def append(self, name, text, status=False):
+    def append(self, name, text, status=False, images=None):
         def write():
             n = len(self.messages()) + 1
             entry = {'n': n, 'time': time.strftime('%H:%M:%S'), 'ts': time.time(), 'from': name, 'text': text}
             if status:
                 entry['kind'] = 'status'
+            if images:
+                entry['images'] = list(images)
             with self.chat.open('a', encoding='utf-8') as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + '\n')
             return n
         return self.locked(write)
+
+    # ------------------------------------------------------------------ pictures
+    @property
+    def images_dir(self):
+        return self.dir / 'images'
+
+    def _image_name(self, name, index, suffix):
+        stem = re.sub(r'[^A-Za-z0-9_-]+', '_', Path(name).stem)[:40] or 'image'
+        return f'{int(time.time() * 1000)}_{index}_{stem}{suffix}'
+
+    def store_image_file(self, path, index=0):
+        """Copy a picture into the room, so the viewer can show it and the room stays self-contained."""
+        src = Path(path).expanduser().resolve()
+        suffix = src.suffix.lower()
+        if suffix not in IMAGE_TYPES:
+            raise ValueError(f'{src.name}: not a picture (allowed: ' + ', '.join(sorted(IMAGE_TYPES)) + ')')
+        if not src.is_file():
+            raise ValueError(f'{src}: file not found')
+        if src.stat().st_size > IMAGE_MAX_BYTES:
+            raise ValueError(f'{src.name}: larger than {IMAGE_MAX_BYTES // (1024 * 1024)} MB')
+        self.images_dir.mkdir(exist_ok=True)
+        name = self._image_name(src.name, index, suffix)
+        shutil.copyfile(src, self.images_dir / name)
+        return f'images/{name}'
+
+    def store_image_bytes(self, filename, data, index=0):
+        suffix = Path(filename or 'image.png').suffix.lower() or '.png'
+        if suffix not in IMAGE_TYPES:
+            raise ValueError('not a picture')
+        if len(data) > IMAGE_MAX_BYTES:
+            raise ValueError('picture too large')
+        self.images_dir.mkdir(exist_ok=True)
+        name = self._image_name(filename or 'image', index, suffix)
+        (self.images_dir / name).write_bytes(data)
+        return f'images/{name}'
+
+    def image_path(self, rel):
+        return (self.dir / rel).resolve()
 
     # ------------------------------------------------------------------ reading
     def silence(self, name, items=None):
@@ -178,7 +225,11 @@ class Room:
             tag = ' [STATUS]' if m.get('kind') in ('status', 'stato') else ''
             if m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
-            print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}\n", flush=True)
+            print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}", flush=True)
+            if m.get('images'):
+                paths = ', '.join(str(self.image_path(r)) for r in m['images'])
+                print(f"[{len(m['images'])} IMAGE(S) attached - look at them with the Read tool: {paths}]", flush=True)
+            print(flush=True)
 
     def timer_warning(self, name):
         limit, age = self.heartbeat(), self.silence(name)
@@ -255,15 +306,19 @@ def cmd_roster(room, a):
 
 
 def cmd_post(room, a):
-    text = sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
-    if not text:
+    text = '' if sys.stdin.isatty() else sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
+    try:
+        images = [room.store_image_file(p, i) for i, p in enumerate(a.image or [])]
+    except ValueError as exc:
+        sys.exit(f'error: {exc}')
+    if not text and not images:
         sys.exit('empty message')
-    n = room.append(a.name, text, a.status)
-    print(f'posted #{n}')
+    n = room.append(a.name, text, a.status, images)
+    print(f'posted #{n}' + (f' with {len(images)} image(s)' if images else ''))
     if a.status:
         return
     others = {k: v for k, v in room.roster().items() if k != a.name}
-    first = ' '.join(text.split())[:140]
+    first = ' '.join(text.split())[:140] + (f' [+{len(images)} image(s)]' if images else '')
     if others:
         targets = '; '.join(f'{k} = {v}' for k, v in others.items())
         print(f"ALERT: now send with SendMessage, to each of ({targets}), the text: "
@@ -289,6 +344,8 @@ def cmd_transcript(room, a):
     for m in room.messages():
         kind = ' (status)' if m.get('kind') in ('status', 'stato') else ''
         lines += [f"**#{m['n']} · {m['time']} · {m['from']}{kind}**", '', m['text'], '']
+        for i, rel in enumerate(m.get('images') or []):
+            lines += [f"![#{m['n']} image {i + 1}]({rel})", '']
     text = '\n'.join(lines)
     if a.out:
         Path(a.out).write_text(text, encoding='utf-8')
@@ -323,6 +380,13 @@ def cmd_serve(room, a):
             if path == '/chat.jsonl':
                 body = room.chat.read_bytes() if room.chat.exists() else b''
                 return self.send(200, body, 'application/x-ndjson; charset=utf-8')
+            if path.startswith('/images/'):
+                name = path[len('/images/'):]
+                target = room.images_dir / name
+                ctype = IMAGE_TYPES.get(Path(name).suffix.lower())
+                if not IMAGE_NAME.match(name) or not ctype or not target.is_file():
+                    return self.send(404, 'not found', 'text/plain')
+                return self.send(200, target.read_bytes(), ctype)
             if path == '/config.json':
                 return self.send(200, json.dumps(room.config(), ensure_ascii=False), 'application/json; charset=utf-8')
             self.send(404, 'not found', 'text/plain')
@@ -335,9 +399,18 @@ def cmd_serve(room, a):
                 return self.send(400, 'bad request', 'text/plain')
             if path == '/post':
                 text = str(body.get('text', '')).strip()
-                if not text:
+                images = []
+                try:
+                    for i, item in enumerate((body.get('images') or [])[:6]):
+                        data = str(item.get('data', ''))
+                        data = data.split(',', 1)[1] if data.startswith('data:') else data
+                        images.append(room.store_image_bytes(str(item.get('name', 'image.png')),
+                                                             base64.b64decode(data), i))
+                except (ValueError, TypeError, AttributeError) as exc:
+                    return self.send(400, f'bad image: {exc}', 'text/plain')
+                if not text and not images:
                     return self.send(400, 'empty message', 'text/plain')
-                n = room.append(room.config().get('user_name', 'USER'), text[:4000])
+                n = room.append(room.config().get('user_name', 'USER'), text[:4000], images=images)
                 return self.send(200, json.dumps({'n': n}), 'application/json')
             if path == '/config':
                 settings = {k: v for k, v in body.items() if k in LOOK_KEYS and k not in ('user_name', 'topic')}
@@ -375,6 +448,7 @@ def main():
     p.add_argument('--heartbeat', type=int)
     p.add_argument('--user-name')
     p.add_argument('--profile', action='append', help='"NAME|emoji|#color|role", once per participant')
+    p.add_argument('--image', action='append', help='post: attach a picture (png, jpg, webp, gif); repeat for more')
     p.add_argument('--out')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--host', default='127.0.0.1')
