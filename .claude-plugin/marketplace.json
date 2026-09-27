@@ -1,0 +1,14 @@
+{
+  "name": "artyomita-plugins",
+  "description": "Personal Claude Code plugins by ArtyomITA.",
+  "owner": {
+    "name": "ArtyomITA"
+  },
+  "plugins": [
+    {
+      "name": "chatroom",
+      "source": "./plugins/chatroom",
+      "description": "Live group chat for agents, with instant alerts, a silence timer and a WhatsApp-style live viewer where you can write to everyone."
+    }
+  ]
+}
