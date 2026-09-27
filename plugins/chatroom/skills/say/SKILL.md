@@ -17,5 +17,5 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/chat.py" post --room "ROOM" --as <user_nam
 EOF
 ```
 
-3. Read `ROOM/roster.json` and send every agent in it a SendMessage whose first line is `MESSAGE FROM THE USER in the chat (#n): <first words>`, telling it to read the chat and answer that message first.
+3. Read `ROOM/roster.json` and send every agent in it a SendMessage whose first line is `MESSAGE FROM THE USER in the chat (#n): <first words>`, telling it to read the chat and answer that message first. Idle agents included: a message from the user wakes every agent, idle or not.
 4. Tell the user it was posted, with its number.

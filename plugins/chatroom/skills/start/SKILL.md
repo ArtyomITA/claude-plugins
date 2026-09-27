@@ -1,6 +1,6 @@
 ---
 name: start
-description: Open a live group chat where several agents discuss a topic together, in parallel and without turns, in one shared room that everyone reads. Includes an instant alert when someone writes, a silence timer that forces short status updates, a closing rule with plan versions and votes, and a WhatsApp-style live viewer where the user can write to everyone. Use when the user wants agents to debate, brainstorm, challenge each other or agree on a plan together, or asks for a "council", "group chat", "shared room" or "swarm that talks".
+description: Open a live group chat where several agents discuss a topic together, in parallel and without turns, in one shared room that everyone reads. Includes an instant alert when someone writes, a silence timer that forces short status updates with the percentage done, an idle state that only a tag wakes, a closing rule with plan versions and votes, and a WhatsApp-style live viewer where the user can write to everyone. Use when the user wants agents to debate, brainstorm, challenge each other or agree on a plan together, or asks for a "council", "group chat", "shared room" or "swarm that talks".
 argument-hint: "[topic] [roles or number of agents]"
 ---
 
@@ -74,12 +74,12 @@ The agent IDs exist only once the agents are spawned, so the prompts cannot cont
 python "CHAT" roster --room "ROOM" NAME1=<agentId1> NAME2=<agentId2> NAME3=<agentId3>
 ```
 
-From then on, every `post` prints an ALERT with the others' IDs, and the author pings them with SendMessage. A SendMessage reaches an agent at its next tool call, even mid-task, which is what makes the alert instant. Subagents have no ListAgents, so the roster is how they find each other.
+From then on, every `post` prints an ALERT with the others' IDs, and the author pings them with SendMessage. A SendMessage reaches an agent at its next tool call, even mid-task, which is what makes the alert instant. Subagents have no ListAgents, so the roster is how they find each other. Agents that are idle are left out of the ALERT unless the message tags them (`@NAME`, or `@all` / `@tutti` / `@everyone`) or comes from the user.
 
 ## 6. While the chat runs
 
-- The user may write in the viewer. If the user writes to you instead, post it for them and ping everyone: see `/chatroom:say`.
-- Check `python "CHAT" status --room "ROOM"` when you are woken up. If a participant has been silent for more than twice the heartbeat, send it a SendMessage telling it to read the chat and post a status.
+- The user may write in the viewer, tag agents there (`@NAME`) and send quick commands (`/accelera`, `/resoconto`, `/menoparole`, `/consegna`, `/prove`, `/pausa`). Right after the roster, start the relay so a tag reaches a busy agent at once: run `python "CHAT" alerts --room "ROOM" --follow` under the Monitor tool (or as a background command you check), and for each line it prints send the SendMessage ping it shows. If the user writes to you instead, post it for them and ping everyone: see `/chatroom:say`. To send a quick command yourself: `python "CHAT" command NAME --room "ROOM" --as LEAD` (without NAME it lists them), then send the ALERT it prints.
+- Check `python "CHAT" status --room "ROOM"` when you are woken up. If a participant has been silent for more than twice the heartbeat, send it a SendMessage telling it to read the chat and post a status (with its percentage). A participant listed under `idle` is not silent: it posted one idle status and waits to be tagged, and the timer does not apply to it. Leave it alone; if it is needed, post a message that tags it (`@NAME`), which wakes it.
 - Do not steer the discussion yourself unless the user asks you to. When you do post, use `--as LEAD`.
 
 ## 7. When it ends
@@ -100,6 +100,8 @@ Then tell the user, from the transcript and the reports only:
 ## Known pitfalls
 
 - Agents tend to stop early. The template tells them to keep waiting until the chat is closed; if one stops anyway, you can bring it back with SendMessage.
+- Every status must carry the percentage of the agent's part that is done (`60%`, `written 70% / verified 50%`); chat.py refuses a status without one and says how to rewrite it.
+- An agent with nothing to do reads the new messages, posts one `--idle` status and then waits up to 540 s per call; only a tag, a tag to everyone, a message from the user (or the lead), or a `PLAN`, a `VOTE` or a `CLOSED` wakes it. A second idle is refused, and so is an idle with unread messages.
 - Text must be posted with a quoted heredoc (`<<'EOF'`), otherwise apostrophes break the shell command.
 - The chat is append-only JSON lines protected by a lock directory (`ROOM/chat.lock`). If a process was killed mid-write and the lock stays, chat.py removes it after about 20 seconds.
 - Every agent is a full model instance: a long chat with 3-5 agents costs a lot of tokens. Say so to the user if they ask for more than 5 agents.

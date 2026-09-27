@@ -1,27 +1,41 @@
 """A group chat on a shared file, for Claude Code agents that run at the same time.
 
 Every message is one JSON line in <room>/chat.jsonl and everyone sees every message: there are no turns, each
-participant reads and writes whenever it wants. Two rules are built in, because agents left alone go quiet for long
-stretches while they verify things:
+participant reads and writes whenever it wants. Three rules are built in, because agents left alone go quiet for long
+stretches while they verify things, or keep writing "still waiting" when they have nothing to do:
 
 - the TIMER: a participant silent for more than `heartbeat` seconds gets a warning on every read, and `wait` returns
-  at once, until it posts at least a status (--status): what it is doing, or its conclusions in a few words;
+  at once, until it posts at least a status (--status): the percentage of its part that is done (for example "60%"
+  or "written 70% / verified 50%") and what it is doing, or its conclusions in a few words. A status without a
+  percentage is refused;
+- the IDLE state: a participant with nothing to do until someone else acts posts ONE idle status (--idle: what it
+  waits for and from whom, with its percentage) and then loops on `wait`. While it is idle the timer does not apply
+  to it, a second --idle is refused, and `wait` returns only for a message that tags it (@NAME, any case), a tag to
+  everyone (@all, @tutti, @everyone) or a message from the user (or the lead); the other messages stay unread until
+  then. The idle state ends as soon as it posts anything else;
 - the ALERT: after a real message, `post` prints the SendMessage ping the author must send to the others. A message
   sent with SendMessage reaches an agent at its next tool call, even in the middle of a long verification, so the
-  others read the chat right away instead of at their next `wait`.
+  others read the chat right away instead of at their next `wait`. Idle participants are left out of the ping unless
+  the message tags them (or everyone), or comes from the user (or the lead).
 
 Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
 
   chat.py init --room DIR --topic "..." --participants A,B,C [look options, see below]
   chat.py config --room DIR key=value ... [--profile ...]   (change the look or the settings of an existing room)
   chat.py roster --room DIR A=<agentId> B=<agentId> ...     (the lead writes it right after spawning the agents)
-  chat.py post --as NAME [--status] [--image PATH ...]      (text on stdin: use a quoted heredoc <<'EOF' ... EOF;
+  chat.py post --as NAME [--status|--idle] [--image PATH ...]
+                                                            (text on stdin: use a quoted heredoc <<'EOF' ... EOF;
                                                             --image attaches a picture, once per picture)
   chat.py read --as NAME                                    (new messages since your last read)
   chat.py read --all                                        (the whole chat)
-  chat.py wait --as NAME [--timeout 100]                    (blocks until someone else writes or your timer expires)
-  chat.py status                                            (messages and seconds of silence per participant)
+  chat.py wait --as NAME [--timeout 100]                    (blocks until someone else writes or your timer expires,
+                                                            at most 110 s; when you are idle it blocks until someone
+                                                            tags you, at most 540 s)
+  chat.py status                                            (messages, seconds of silence and idle state per
+                                                            participant)
   chat.py transcript [--out FILE]                           (the whole chat as Markdown)
+  chat.py command [NAME] [--as AUTHOR]                      (a quick command, see COMMANDS; no NAME lists them)
+  chat.py alerts [--follow]                                 (the lead's relay: a SendMessage line per user message)
   chat.py serve [--port 8765]                               (the live viewer, with a box to write as the user)
 
 Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --accent (#rrggbb), --theme
@@ -51,6 +65,150 @@ IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                '.gif': 'image/gif'}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
+STATUS_KINDS = ('status', 'stato')        # 'stato' is how the first versions wrote a status
+IDLE = 'idle'
+PERCENT = re.compile(r'\d[^\S\n]?%')
+# a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all
+BROADCAST = re.compile(r'^\s*(PLAN|PIANO)\s*v\d+|^\s*(CLOSED|CHIUSO)\b|\b(VOTE|VOTO)\s*v?\d+\s*:', re.IGNORECASE)
+EVERYONE = ('all', 'tutti', 'everyone')   # @all, @tutti, @everyone tag every participant
+WAIT_MAX, IDLE_WAIT_MAX = 110, 540
+
+# Quick commands: the user sends them from the viewer (type / in the box) or the lead with `chat.py command NAME`.
+# One prompt each, written from Anthropic's prompting guidance (proactive action, independent steps together,
+# time as a signal, updates that lead with the outcome) and kept general: they state the logic, not a model quirk.
+COMMANDS = {
+    'accelera': {
+        'en': ('speedup', '⚡', 'Speed up and anticipate steps, same quality',
+               '@all SPEED UP. Time matters: do not spend time that can be avoided, and the earlier a correct result '
+               'arrives, the better. Make routine decisions yourself and keep going; stop only when different '
+               'readings would lead to really different work. While something runs, prepare the next step. When two '
+               'actions do not depend on each other, do them together in the same turn. Quality does not drop: the '
+               'planned checks stay, but do not re-check what is already verified. Do not spawn subagents: you do '
+               'the work yourself.'),
+        'it': ('accelera', '⚡', 'Accelerare e anticipare i passi, stessa qualità',
+               "@tutti ACCELERA. Il tempo conta: non spendete tempo evitabile, e prima arriva un risultato corretto "
+               "meglio è. Le scelte di routine decidetele voi e andate avanti; fermatevi solo quando letture diverse "
+               "porterebbero a lavori davvero diversi. Mentre qualcosa gira, preparate il passo dopo. Quando due "
+               "azioni non dipendono l'una dall'altra, fatele insieme nello stesso turno. La qualità non cala: le "
+               "prove previste restano, ma non ricontrollate ciò che è già verificato. Non evocate subagenti: il "
+               "lavoro lo fate voi.")},
+    'resoconto': {
+        'en': ('report', '📋', 'A short report from everyone',
+               '@all REPORT for the user. Each of you writes ONE short message (not a status): first line the outcome '
+               '(what you did, what you found); then the percentage of your part, written and verified; what is '
+               'missing; what blocks you or what you need from someone; your next action. Numbers and evidence '
+               '(files, #messages, pictures) instead of adjectives. Then go straight back to work.'),
+        'it': ('resoconto', '📋', 'Un resoconto breve da ognuno',
+               "@tutti RESOCONTO per il committente. Ognuno scriva UN solo messaggio breve (non uno status): prima "
+               "riga l'esito (cosa hai fatto, cosa hai trovato); poi la percentuale della tua parte, scritto e "
+               "verificato; cosa manca; cosa ti blocca o cosa ti serve da qualcuno; la prossima azione. Numeri e prove "
+               "(file, #messaggi, foto) al posto degli aggettivi. Poi tornate subito al lavoro.")},
+    'menoparole': {
+        'en': ('lesstalk', '🤫', 'A little less talk, a little more work',
+               '@all A little less talk and a little more work (not drastically). Write when you have a result, a '
+               'finding that changes something, a change of direction or a question that blocks you. Do not announce '
+               'what you are about to do: do it. No repeating what was already said, no thanks or redundant '
+               'summaries. Statuses stay, in one or two lines with the percentage. Always answer when someone tags '
+               'you.'),
+        'it': ('menoparole', '🤫', "Un po' meno parole, un po' più lavoro",
+               "@tutti Un po' meno parole e un po' più lavoro (senza esagerare). Scrivete quando avete un risultato, "
+               "una scoperta che cambia qualcosa, un cambio di strada o una domanda che vi blocca. Non annunciate "
+               "cosa state per fare: fatelo. Niente ripetizioni di cose già dette, niente ringraziamenti o riepiloghi "
+               "ridondanti. Gli status restano, in una o due righe con la percentuale. Rispondete sempre quando "
+               "qualcuno vi tagga.")},
+    'consegna': {
+        'en': ('deliver', '🎯', 'Converge on the delivery',
+               '@all TOWARD THE DELIVERY. No new ideas and no widening of scope: finish what is open. Whoever has the '
+               'fullest picture writes the draft (done, evidence, numbers, open points); the others amend it or vote '
+               'within a few messages. What does not fit goes to the open points or to the ideas for the lead.'),
+        'it': ('consegna', '🎯', 'Convergere sulla consegna',
+               "@tutti VERSO LA CONSEGNA. Niente idee nuove né allargamenti di scopo: finite quello che è aperto. Chi "
+               "ha il quadro più completo scriva la bozza (fatto, prova, numeri, aperti); gli altri la emendano o "
+               "votano entro pochi messaggi. Quello che non entra va negli aperti o nelle idee per l'orchestratore.")},
+    'prove': {
+        'en': ('evidence', '🔍', 'Back every claim with evidence',
+               '@all EVIDENCE. Every recent claim that still has no evidence gets it now: a picture with --image, a '
+               'measurement with numbers and load, or file:line. Whoever has visible work shows it in the chat. What '
+               'cannot be proven is written as "not verified", without rounding up.'),
+        'it': ('prove', '🔍', 'Ogni affermazione con la sua prova',
+               "@tutti PROVE. Ogni affermazione recente ancora senza prova la riceve adesso: una foto con --image, "
+               "una misura con numeri e carico, oppure file:riga. Chi ha lavoro visibile lo mostri in chat. Quello "
+               "che non si può provare si scrive \"non verificato\", senza arrotondare.")},
+    'pausa': {
+        'en': ('pause', '⏸', 'Finish the step, save the state, go idle',
+               '@all PAUSE. Finish the step in progress without leaving files half done. Then each of you writes '
+               'where you got to (percentage, what is missing, how to resume) and goes idle with --idle until '
+               'tagged.'),
+        'it': ('pausa', '⏸', 'Finire il passo, salvare lo stato, idle',
+               "@tutti PAUSA. Finite il passo in corso senza lasciare file a metà. Poi ognuno scriva dove è arrivato "
+               "(percentuale, cosa manca, come riprendere) e passi in idle con --idle finché non viene taggato.")},
+}
+
+
+# the "less talk" command also lengthens the status timer a little (x1.5, at most 3600 s)
+TIMER_FACTOR = {'menoparole': 1.5}
+TIMER_NOTE = {'en': ' The status timer goes from {old} to {new} s.', 'it': ' Il timer degli status passa da {old} a {new} s.'}
+
+
+def command_list(lang):
+    """the quick commands in the room language: [{key, name, icon, label, text}]"""
+    lang = lang if lang in ('en', 'it') else 'en'
+    return [dict(zip(('name', 'icon', 'label', 'text'), c[lang]), key=key) for key, c in COMMANDS.items()]
+
+
+def find_command(word, lang):
+    word = word.lstrip('/').strip().lower()
+    for c in command_list(lang) + command_list('en' if lang == 'it' else 'it'):
+        if word in (c['key'], c['name']):
+            return c
+    return None
+
+
+def run_command(room, word, author):
+    """post a quick command as `author`, applying its effect; (n, text), or ValueError for an unknown command"""
+    config = room.config()
+    lang = config.get('lang', 'en')
+    c = find_command(word, lang)
+    if not c:
+        raise ValueError(f'unknown command {word!r}: ' + ', '.join('/' + x['name'] for x in command_list(lang)))
+    c = next(x for x in command_list(lang) if x['key'] == c['key'])      # always in the room language
+    text = c['text']
+    factor = TIMER_FACTOR.get(c['key'])
+    if factor:
+        old = room.heartbeat()
+        new = min(3600, int(round(old * factor)))
+        room.update_config({'heartbeat': new})
+        text += TIMER_NOTE['it' if lang == 'it' else 'en'].format(old=old, new=new)
+    return room.append(author, text), text
+
+
+def print_alert(room, author, n, text, images=()):
+    """the SendMessage ping the author must send: everyone not idle, plus the idle ones this message wakes"""
+    items = room.messages()
+    users = room.user_names()
+    others = {k: v for k, v in room.roster().items() if k != author}
+    first = ' '.join(text.split())[:140] + (f' [+{len(images)} image(s)]' if images else '')
+    if not others:
+        print('ALERT: the roster is not written yet; the others will see your message at their next read.')
+        return
+    wakes_all = author in users or tags_everyone(text) or BROADCAST.search(text) is not None
+    ping, asleep = {}, {}
+    for k, v in others.items():
+        idle = room.idle_entry(k, items)
+        if idle and not (wakes_all or tags(text, k)):
+            asleep[k] = idle
+        else:
+            ping[k] = v
+    if ping:
+        targets = '; '.join(f'{k} = {v}' for k, v in ping.items())
+        print(f"ALERT: now send with SendMessage, to each of ({targets}), the text: "
+              f"CHAT #{n} from {author}: {first} ... -> read the chat and answer if it concerns you")
+    else:
+        print('ALERT: nobody to ping, every other participant is idle and your message does not tag them.')
+    if asleep:
+        names = ', '.join(f'{k} (idle since #{m["n"]})' for k, m in asleep.items())
+        print(f'IDLE, do NOT ping: {names}. They wake up only when tagged: to call one, post a message with @NAME. '
+              f'When you deliver what an idle participant is waiting for, tag it.')
 
 
 def clean_look(key, value):
@@ -80,6 +238,15 @@ def clean_profile(profile):
     if 'role' in profile:
         out['role'] = str(profile['role']).strip()[:120]
     return out
+
+
+def tags(text, name):
+    """True if the text tags @name as a whole word, in any case"""
+    return re.search(r'(?<![\w@])@' + re.escape(name) + r'(?![\w-])', text or '', re.IGNORECASE) is not None
+
+
+def tags_everyone(text):
+    return any(tags(text, word) for word in EVERYONE)
 
 
 def parse_profile(text):
@@ -164,11 +331,15 @@ class Room:
             os.rmdir(self.lock)
 
     def append(self, name, text, status=False, images=None):
+        """status: False for a message, True (or 'status') for a status, 'idle' for an idle status"""
         def write():
-            n = len(self.messages()) + 1
+            items = self.messages()
+            if status == IDLE and self.idle_entry(name, items):
+                return None                   # already idle: checked under the lock, so two idles cannot race
+            n = len(items) + 1
             entry = {'n': n, 'time': time.strftime('%H:%M:%S'), 'ts': time.time(), 'from': name, 'text': text}
             if status:
-                entry['kind'] = 'status'
+                entry['kind'] = IDLE if status == IDLE else 'status'
             if images:
                 entry['images'] = list(images)
             with self.chat.open('a', encoding='utf-8') as f:
@@ -219,10 +390,26 @@ class Room:
         own = [m['ts'] for m in (items if items is not None else self.messages()) if m['from'] == name and 'ts' in m]
         return time.time() - own[-1] if own else None
 
+    def idle_entry(self, name, items=None):
+        """the idle status of `name` if its latest message is one, else None: posting anything else ends the idle"""
+        own = [m for m in (items if items is not None else self.messages()) if m.get('from') == name]
+        return own[-1] if own and own[-1].get('kind') == IDLE else None
+
+    def wakes(self, m, name, users=None):
+        """True if message m wakes the idle participant `name`: a tag to it or to everyone, the user (or the lead)
+        writing, or a plan, a vote or a closing, which concern everyone"""
+        if m.get('from') == name:
+            return False
+        users = self.user_names() if users is None else users
+        text = m.get('text', '')
+        return (m.get('from') in users or tags(text, name) or tags_everyone(text)
+                or (m.get('kind') not in (IDLE, *STATUS_KINDS) and BROADCAST.search(text) is not None))
+
     def show(self, items):
         users = self.user_names()
         for m in items:
-            tag = ' [STATUS]' if m.get('kind') in ('status', 'stato') else ''
+            kind = m.get('kind')
+            tag = ' [IDLE]' if kind == IDLE else ' [STATUS]' if kind in STATUS_KINDS else ''
             if m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
             print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}", flush=True)
@@ -231,16 +418,23 @@ class Room:
                 print(f"[{len(m['images'])} IMAGE(S) attached - look at them with the Read tool: {paths}]", flush=True)
             print(flush=True)
 
-    def timer_warning(self, name):
-        limit, age = self.heartbeat(), self.silence(name)
+    def timer_warning(self, name, items=None):
+        items = self.messages() if items is None else items
+        if self.idle_entry(name, items):
+            return                            # the timer does not apply to an idle participant
+        limit, age = self.heartbeat(), self.silence(name, items)
         if age is None or age > limit:
             since = 'you have not written yet' if age is None else f'your last message was {int(age)} s ago'
-            print(f"*** TIMER @{name}: {since} (limit {limit} s). Post a STATUS now with --status: what you are doing, "
-                  f"or your conclusions in a few arrows and technical terms. ***\n", flush=True)
+            print(f"*** TIMER @{name}: {since} (limit {limit} s). Post a STATUS now with --status, with the "
+                  f"PERCENTAGE of your part that is done (for example \"60%\" or \"written 70% / verified 50%\"): "
+                  f"what you are doing, or your conclusions in a few arrows and technical terms. If you have nothing "
+                  f"to do until someone else acts, post ONE --idle instead (what you wait for and from whom, with "
+                  f"your percentage) and wait to be tagged. ***\n", flush=True)
 
     def read(self, name):
-        self.timer_warning(name)
-        items = [m for m in self.messages() if m['n'] > self.cursor(name)]
+        items = self.messages()
+        self.timer_warning(name, items)
+        items = [m for m in items if m['n'] > self.cursor(name)]
         if items:
             self.set_cursor(name, items[-1]['n'])
             self.show(items)
@@ -248,16 +442,40 @@ class Room:
             print('(no new messages)')
 
     def wait(self, name, timeout):
-        start, limit = time.time(), self.heartbeat()
-        while time.time() - start < timeout:
-            items = self.messages()
-            if any(m['from'] != name and m['n'] > self.cursor(name) for m in items):
-                return self.read(name)
-            age = self.silence(name, items)
-            if age is None or age > limit:
-                return self.read(name)        # the timer interrupts the wait
+        items = self.messages()
+        idle = self.idle_entry(name, items)
+        timeout = max(1, min(timeout, IDLE_WAIT_MAX if idle else WAIT_MAX))
+        start, limit, users = time.time(), self.heartbeat(), self.user_names()
+        while True:
+            cursor = self.cursor(name)
+            new = [m for m in items if m['n'] > cursor and m['from'] != name]
+            idle = self.idle_entry(name, items)
+            if idle:
+                wake = next((m for m in new if self.wakes(m, name, users)), None)
+                if wake:
+                    print(f"*** WAKE-UP @{name}: #{wake['n']} from {wake['from']} is for you. You stay idle until you "
+                          f"post anything: answer it, or call wait again if it needs nothing from you. If you start working on "
+                          f"it, post a --status (with your percentage) first: it ends your idle and restarts the "
+                          f"timer. ***\n",
+                          flush=True)
+                    return self.read(name)
+            else:
+                if new:
+                    return self.read(name)
+                age = self.silence(name, items)
+                if age is None or age > limit:
+                    return self.read(name)    # the timer interrupts the wait
+            if time.time() - start >= timeout:
+                break
             time.sleep(2)
-        print(f'(no new messages in {timeout} s)')
+            items = self.messages()
+        if idle:
+            unread = len([m for m in items if m['n'] > self.cursor(name) and m['from'] != name])
+            print(f'(you are idle since #{idle["n"]}: nobody tagged you in {timeout} s'
+                  + (f'; {unread} new message(s) not addressed to you stay unread' if unread else '')
+                  + f'. This is not an empty wait (rule 8): call wait again with --timeout {IDLE_WAIT_MAX}.)')
+        else:
+            print(f'(no new messages in {timeout} s)')
 
 
 # ---------------------------------------------------------------------- commands
@@ -307,24 +525,107 @@ def cmd_roster(room, a):
 
 def cmd_post(room, a):
     text = '' if sys.stdin.isatty() else sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
+    if a.status and a.idle:
+        sys.exit('error: use --status or --idle, not both. Nothing was posted.')
+    kind = IDLE if a.idle else 'status' if a.status else None
+    if kind and not text:
+        sys.exit('error: a status needs a text with the percentage of your part that is done, for example "60%". '
+                 'Nothing was posted.')
+    if kind and not PERCENT.search(text):
+        label = 'an IDLE status' if kind == IDLE else 'a STATUS'
+        sys.exit(f'error: {label} must say the PERCENTAGE of your part that is done, as a number followed by % '
+                 f'(for example "60%" or "written 70% / verified 50%"). Nothing was posted: write it again with '
+                 f'the percentage and post it again.')
+    was_idle = room.idle_entry(a.name)
+    if kind == IDLE and was_idle:
+        sys.exit(f'error: you already said you are idle (#{was_idle["n"]}): do not post another idle, wait to be '
+                 f'tagged (wait --as {a.name} --timeout {IDLE_WAIT_MAX}). Nothing was posted. Your idle ends when '
+                 f'you post a message or a --status.')
+    if kind == IDLE:
+        unread = [m['n'] for m in room.messages() if m['n'] > room.cursor(a.name) and m['from'] != a.name]
+        if unread:
+            sys.exit(f'error: read first: {len(unread)} unread message(s) (#{unread[0]}-#{unread[-1]}) may already '
+                     f'hold what you are waiting for. Nothing was posted: read --as {a.name}, then decide.')
+    if not text and not a.image:
+        sys.exit('empty message')
     try:
         images = [room.store_image_file(p, i) for i, p in enumerate(a.image or [])]
     except ValueError as exc:
         sys.exit(f'error: {exc}')
-    if not text and not images:
-        sys.exit('empty message')
-    n = room.append(a.name, text, a.status, images)
+    n = room.append(a.name, text, kind or False, images)
+    if n is None:
+        for rel in images:                    # nothing was posted: do not leave the copied pictures behind
+            try:
+                room.image_path(rel).unlink()
+            except OSError:
+                pass
+        sys.exit(f'error: you already said you are idle: do not post another idle, wait to be tagged '
+                 f'(wait --as {a.name} --timeout {IDLE_WAIT_MAX}). Nothing was posted.')
     print(f'posted #{n}' + (f' with {len(images)} image(s)' if images else ''))
-    if a.status:
+    if kind == IDLE:
+        print(f'You are now IDLE: the timer no longer applies to you. Loop on wait --as {a.name} --timeout '
+              f'{IDLE_WAIT_MAX} (Bash tool timeout 600000 ms): it returns only when someone tags @{a.name} or '
+              f'@all/@tutti/@everyone, when the user (or the lead) writes, or on a PLAN, a VOTE or a CLOSED. '
+              f'Do not post another idle.')
         return
-    others = {k: v for k, v in room.roster().items() if k != a.name}
-    first = ' '.join(text.split())[:140] + (f' [+{len(images)} image(s)]' if images else '')
-    if others:
-        targets = '; '.join(f'{k} = {v}' for k, v in others.items())
-        print(f"ALERT: now send with SendMessage, to each of ({targets}), the text: "
-              f"CHAT #{n} from {a.name}: {first} ... -> read the chat and answer if it concerns you")
-    else:
-        print('ALERT: the roster is not written yet; the others will see your message at their next read.')
+    if was_idle:
+        print('You are no longer idle: the timer applies to you again.')
+    if kind:
+        return
+    print_alert(room, a.name, n, text, images)
+
+
+def cmd_command(room, a):
+    """chat.py command NAME [--as AUTHOR]: post a quick command (default author: the user)"""
+    if not a.pairs:
+        lang = room.config().get('lang', 'en')
+        for c in command_list(lang):
+            print(f"/{c['name']:<11} {c['icon']} {c['label']}")
+        return
+    author = a.name or room.config().get('user_name', 'USER')
+    try:
+        n, text = run_command(room, a.pairs[0], author)
+    except ValueError as exc:
+        sys.exit(f'error: {exc}')
+    print(f'posted #{n}')
+    print_alert(room, author, n, text)
+
+
+def alert_lines(room, items, users):
+    """one line per new message of the user: who to ping now (the tagged ones, or everyone not idle)"""
+    roster = room.roster()
+    out = []
+    for m in items:
+        if m.get('from') not in users or m.get('from') in room.config().get('self_names', []):
+            continue                          # only the user's messages: the lead pings its own
+        text = m.get('text', '')
+        named = [k for k in roster if tags(text, k)]
+        if named and not tags_everyone(text):
+            targets = named
+        else:
+            targets = [k for k in roster if not room.idle_entry(k, items) or tags_everyone(text)
+                       or m.get('from') in users]
+        first = ' '.join(text.split())[:140]
+        pairs = '; '.join(f'{k} = {roster[k]}' for k in targets)
+        out.append(f"ALERT #{m['n']} from {m['from']}"
+                   + (f" tags {', '.join(named)}" if named else '') + f": send with SendMessage to ({pairs}) the text: "
+                   f"CHAT #{m['n']} from {m['from']}: {first} ... -> read the chat and answer, the user wrote it")
+    return out
+
+
+def cmd_alerts(room, a):
+    """the lead's relay: print a ping line for each new message of the user (--follow keeps watching)"""
+    name = '_alerts'
+    while True:
+        items = room.messages()
+        new = [m for m in items if m['n'] > room.cursor(name)]
+        if new:
+            for line in alert_lines(room, [*new], room.user_names()):
+                print(line, flush=True)
+            room.set_cursor(name, new[-1]['n'])
+        if not a.follow:
+            return
+        time.sleep(1)
 
 
 def cmd_status(room, a):
@@ -333,7 +634,17 @@ def cmd_status(room, a):
     for m in items:
         counts[m['from']] = counts.get(m['from'], 0) + 1
     silent = {k: (int(room.silence(k, items)) if room.silence(k, items) is not None else None) for k in counts}
-    print(json.dumps({'total': len(items), 'per_participant': counts, 'seconds_silent': silent}, ensure_ascii=False))
+    users = room.user_names()
+    idle = {}
+    for k in dict.fromkeys([*room.config().get('participants', []), *counts]):
+        if k in users:
+            continue
+        m = room.idle_entry(k, items)
+        idle[k] = {'since': m.get('time'), 'message': m['n'],
+                   'seconds': int(time.time() - m['ts']) if 'ts' in m else None,
+                   'waits_for': (m.get('text') or '').split('\n')[0][:160]} if m else False
+    print(json.dumps({'total': len(items), 'per_participant': counts, 'seconds_silent': silent, 'idle': idle},
+                     ensure_ascii=False))
 
 
 def cmd_transcript(room, a):
@@ -342,7 +653,7 @@ def cmd_transcript(room, a):
     if c.get('subtitle'):
         lines += [c['subtitle'], '']
     for m in room.messages():
-        kind = ' (status)' if m.get('kind') in ('status', 'stato') else ''
+        kind = ' (idle)' if m.get('kind') == IDLE else ' (status)' if m.get('kind') in STATUS_KINDS else ''
         lines += [f"**#{m['n']} · {m['time']} · {m['from']}{kind}**", '', m['text'], '']
         for i, rel in enumerate(m.get('images') or []):
             lines += [f"![#{m['n']} image {i + 1}]({rel})", '']
@@ -389,6 +700,9 @@ def cmd_serve(room, a):
                 return self.send(200, target.read_bytes(), ctype)
             if path == '/config.json':
                 return self.send(200, json.dumps(room.config(), ensure_ascii=False), 'application/json; charset=utf-8')
+            if path == '/commands.json':
+                body = json.dumps(command_list(room.config().get('lang', 'en')), ensure_ascii=False)
+                return self.send(200, body, 'application/json; charset=utf-8')
             self.send(404, 'not found', 'text/plain')
 
         def do_POST(self):
@@ -412,6 +726,12 @@ def cmd_serve(room, a):
                     return self.send(400, 'empty message', 'text/plain')
                 n = room.append(room.config().get('user_name', 'USER'), text[:4000], images=images)
                 return self.send(200, json.dumps({'n': n}), 'application/json')
+            if path == '/command':
+                try:
+                    n, _ = run_command(room, str(body.get('name', '')), room.config().get('user_name', 'USER'))
+                except ValueError as exc:
+                    return self.send(400, str(exc), 'text/plain')
+                return self.send(200, json.dumps({'n': n}), 'application/json')
             if path == '/config':
                 settings = {k: v for k, v in body.items() if k in LOOK_KEYS and k not in ('user_name', 'topic')}
                 profiles = body.get('profiles') if isinstance(body.get('profiles'), dict) else {}
@@ -429,13 +749,20 @@ def cmd_serve(room, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript', 'serve'])
+    p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
+                                        'serve', 'command', 'alerts'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=agentId pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
     p.add_argument('--all', action='store_true')
-    p.add_argument('--status', action='store_true', help='a short status: no alert is printed')
-    p.add_argument('--timeout', type=int, default=100)
+    p.add_argument('--status', action='store_true',
+                   help='a short status with the percentage of your part that is done: no alert is printed')
+    p.add_argument('--idle', action='store_true',
+                   help='an idle status, once: what you wait for and from whom, with your percentage; afterwards '
+                        'only a tag wakes you')
+    p.add_argument('--follow', action='store_true', help='alerts: keep watching and print each new ping line')
+    p.add_argument('--timeout', type=int, default=100,
+                   help=f'wait: at most {WAIT_MAX} s, or {IDLE_WAIT_MAX} s while you are idle')
     p.add_argument('--topic')
     p.add_argument('--participants')
     p.add_argument('--title')
@@ -462,7 +789,7 @@ def main():
         if not room.dir.exists():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
-                    'serve': cmd_serve}
+                    'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:
@@ -475,7 +802,7 @@ def main():
         return cmd_post(room, a)
     if a.command == 'read':
         return room.read(a.name)
-    return room.wait(a.name, min(a.timeout, 110))
+    return room.wait(a.name, a.timeout)         # wait caps the timeout: 110 s, or 540 s while idle
 
 
 if __name__ == '__main__':

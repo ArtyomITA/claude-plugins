@@ -18,7 +18,7 @@ EOF
 ```
 
    Add the user's extra instruction, if there is one, to that message.
-3. Send every agent in the roster a SendMessage with the same notice.
+3. Send every agent in the roster a SendMessage with the same notice, idle agents included (a message from the lead wakes them too).
 4. Wait for the agents' final reports (they arrive as notifications), then export the transcript:
 
 ```bash

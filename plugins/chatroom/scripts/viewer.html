@@ -51,6 +51,8 @@
   .chip b { font-weight: 600; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #aebac1; }
   .dot.on { background: #25d366; } .dot.late { background: #f5a623; }
+  .dot.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  .chip.idle { opacity: .72; }
   .strip .count { margin-left: auto; }
 
   /* feed */
@@ -85,12 +87,17 @@
           font-size: 12.5px; padding: 5px 12px; border-radius: 8px; box-shadow: 0 1px .5px var(--shadow); text-align: center; }
   .pill b { font-weight: 600; }
   .pill.closed { background: #25a55f; color: #fff; font-weight: 600; font-size: 13.5px; padding: 8px 16px; }
+  .pill.idle { opacity: .85; font-style: italic; background: transparent; box-shadow: none;
+               border: 1px dashed var(--border); }
+  .pill.idle .tag { font-style: normal; font-weight: 600; }
   .hidden { display: none !important; }
   code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; background: rgba(127,127,127,.16);
          padding: 0 3px; border-radius: 3px; }
   mark { background: #ffe066; color: #111; border-radius: 2px; }
   .mention { font-weight: 600; }
+  a.mention { text-decoration: none; cursor: pointer; }
   a.ref { color: var(--link); text-decoration: none; cursor: pointer; }
+  a.ref:hover, a.mention:hover { text-decoration: underline; }
   table { border-collapse: collapse; margin: 5px 0; font-size: 12.5px; display: block; overflow-x: auto; }
   td, th { border: 1px solid var(--border); padding: 3px 7px; text-align: left; vertical-align: top; }
   th { font-weight: 600; background: rgba(127,127,127,.08); }
@@ -106,7 +113,7 @@
               cursor: zoom-out; padding: 18px; }
   #lightbox.open { display: grid; }
   #lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
-  #attach { background: transparent; border: 0; font-size: 20px; cursor: pointer; padding: 0 6px; color: var(--muted); }
+  #attach, #cmdBtn { background: transparent; border: 0; font-size: 20px; cursor: pointer; padding: 0 6px; color: var(--muted); height: 42px; }
   #pending { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 8px; }
   #pending:empty { display: none; }
   #pending .chip { position: relative; }
@@ -123,6 +130,21 @@
           font-size: 18px; cursor: pointer; flex: none; }
   #send:disabled { opacity: .5; cursor: default; }
   #hint { color: var(--muted); font-size: 11.5px; padding: 4px 4px 2px; }
+  footer { position: relative; }
+  #cmdBtn, #attach { flex: none; }
+  /* the @ and / menu above the box */
+  #suggest { position: absolute; bottom: 100%; left: 12px; right: 12px; max-height: 280px; overflow-y: auto; display: none;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 10px; z-index: 6;
+             box-shadow: 0 -4px 16px rgba(0,0,0,.2); padding: 4px 0; }
+  #suggest.open { display: block; }
+  #suggest .head { color: var(--muted); font-size: 11.5px; padding: 4px 12px 2px; }
+  .sug { display: flex; gap: 10px; align-items: center; padding: 7px 12px; cursor: pointer; }
+  .sug.on, .sug:hover { background: rgba(127,127,127,.16); }
+  .sug .av { width: 26px; height: 26px; font-size: 13px; }
+  .sug .ic { width: 26px; text-align: center; font-size: 17px; flex: none; }
+  .sug .main { font-weight: 600; }
+  .sug .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sug .txt { min-width: 0; display: flex; flex-direction: column; }
 
   /* settings panel */
   #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 9; }
@@ -153,7 +175,9 @@
   .btn.ghost { background: rgba(127,127,127,.15); }
   .check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text); margin: 6px 0; cursor: pointer; }
   #saved { color: var(--accent); font-size: 12.5px; min-height: 16px; }
-  @media (max-width: 640px) { #feed { padding: 10px 8px 18px; } .bubble { max-width: 92%; } #search.open { width: 120px; } }
+  @media (max-width: 640px) { .live { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+                                      -webkit-box-orient: vertical; }
+                                #feed { padding: 10px 8px 18px; } .bubble { max-width: 92%; } #search.open { width: 120px; } }
 </style>
 </head>
 <body data-wall="dots">
@@ -173,8 +197,10 @@
 <button id="newer"></button>
 <div id="lightbox"><img alt=""></div>
 <footer>
+  <div id="suggest" role="listbox"></div>
   <div id="pending"></div>
   <div class="compose">
+    <button id="cmdBtn" title="">⚡</button>
     <button id="attach" title="Allega foto · Attach pictures (anche incolla / trascina · paste or drop)">📎</button>
     <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
     <textarea id="box" rows="1"></textarea>
@@ -214,7 +240,10 @@
 <script>
 const T = {
   en: { empty: 'No messages yet.', newer: n => `↓ ${n} new`, placeholder: u => `Write to everyone as ${u}… (Enter sends, Shift+Enter new line)`,
-        hint: 'Your message reaches the agents at their next read of the chat, within their timer.',
+        hint: 'Type @ to tag a participant (it wakes up and gets the alert), / or ⚡ for the quick commands.',
+        cmds: 'Quick commands: they post a ready message to everyone', tagsHead: 'Tag: the participant wakes up and gets the alert',
+        everyone: 'everyone',
+        idle: 'idle', idleSince: (time, n) => `idle since ${time} (#${n}), wakes up on a tag`,
         messages: n => `${n} messages`, members: n => `${n} participants`, notYet: 'has not written yet',
         ago: s => s < 60 ? `${Math.round(s)} s ago` : `${Math.round(s / 60)} min ago`, lastMsg: 'last message',
         doing: 'is on:', quiet: 'waiting for the next message', search: 'Search', sound: 'Sound on new messages',
@@ -224,7 +253,10 @@ const T = {
         themes: ['Automatic', 'Light', 'Dark'], walls: ['Dots', 'Grid', 'Plain'], role: 'role', notSent: 'Not sent: ',
         unreachable: 'the viewer server is not reachable.', closed: 'Chat closed' },
   it: { empty: 'Ancora nessun messaggio.', newer: n => `↓ ${n} nuovi`, placeholder: u => `Scrivi a tutti come ${u}… (Invio manda, Maiusc+Invio a capo)`,
-        hint: 'Il tuo messaggio arriva agli agenti alla loro prossima lettura della chat, entro il loro timer.',
+        hint: 'Scrivi @ per taggare un partecipante (si sveglia e riceve l\'alert), / o ⚡ per i comandi rapidi.',
+        cmds: 'Comandi rapidi: mandano a tutti un messaggio pronto', tagsHead: 'Tag: il partecipante si sveglia e riceve l\'alert',
+        everyone: 'tutti',
+        idle: 'in attesa', idleSince: (time, n) => `in attesa dalle ${time} (#${n}), si sveglia con un tag`,
         messages: n => `${n} messaggi`, members: n => `${n} partecipanti`, notYet: 'non ha ancora scritto',
         ago: s => s < 60 ? `${Math.round(s)} s fa` : `${Math.round(s / 60)} min fa`, lastMsg: 'ultimo messaggio',
         doing: 'sta su:', quiet: 'in attesa del prossimo messaggio', search: 'Cerca', sound: 'Suono ai nuovi messaggi',
@@ -260,11 +292,23 @@ function avatar(name, cls = '') {
   return `<div class="av ${cls}" style="background:${p.color}" title="${esc(name)}">${esc(p.emoji)}</div>`;
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+const EVERYONE = ['all', 'tutti', 'everyone'];
+// the participant a tag points to, in any case (@nativo is NATIVO); null when nobody has that name
+function canon(n) {
+  const low = n.toLowerCase();
+  const names = [...(config.participants || []), ...Object.keys(config.profiles || {}), ...all.map(m => m.from)];
+  return names.find(x => x.toLowerCase() === low) || null;
+}
 function inline(s) {
   s = esc(s);
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
   s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  s = s.replace(/@([A-Za-z][\w-]{2,})/g, (m, n) => `<span class="mention" style="color:${profile(n).color}">@${n}</span>`);
+  s = s.replace(/(^|[^\w@])@([A-Za-z][\w-]*)/g, (m, pre, n) => {
+    if (EVERYONE.includes(n.toLowerCase())) return `${pre}<span class="mention">@${n}</span>`;
+    const who = canon(n);
+    if (!who) return m;
+    return `${pre}<a class="mention" data-who="${esc(who)}" style="color:${profile(who).color}">@${n}</a>`;
+  });
   s = s.replace(/(^|[^\w&])#(\d{1,4})\b/g, (m, pre, n) => `${pre}<a class="ref" data-ref="${n}">#${n}</a>`);
   return s;
 }
@@ -285,6 +329,12 @@ function render(text) {
   return out.join('').replace(/(<br>)+$/, '');
 }
 const isStatus = m => m.kind === 'status' || m.kind === 'stato';
+const isIdle = m => m.kind === 'idle';
+// the idle status of a participant whose latest message is one (posting anything else ends the idle)
+function idleOf(name) {
+  for (let i = all.length - 1; i >= 0; i--) if (all[i].from === name) return isIdle(all[i]) ? all[i] : null;
+  return null;
+}
 const isClosed = text => /^(CLOSED|CHIUSO)\s*v?\d*/i.test(text);
 function badge(text) {
   const plan = text.match(/^(PLAN|PIANO)\s*v\d+/i);
@@ -304,11 +354,13 @@ function pics(m) {
 }
 function build(m) {
   let el;
-  if (isStatus(m)) {
-    const p = profile(m.from);
+  if (isStatus(m) || isIdle(m)) {
+    const p = profile(m.from), idle = isIdle(m);
     el = document.createElement('div');
-    el.className = 'pill status';
-    el.innerHTML = `${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b> · ${inline(m.text)} <span class="num">#${m.n} ${m.time}</span>` + pics(m);
+    el.className = 'pill status' + (idle ? ' idle' : '');
+    el.innerHTML = (idle ? '💤 ' : '') + `${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b> · ` +
+      (idle ? `<span class="tag">${esc(t().idle)}</span> · ` : '') +
+      `${inline(m.text)} <span class="num">#${m.n} ${m.time}</span>` + pics(m);
     if (!$('optStatus').checked) el.classList.add('hidden');
     lastFrom = null;
   } else if (isClosed(m.text)) {
@@ -355,25 +407,30 @@ function stamp(m) {
 function header() {
   const names = [...new Set([...(config.participants || []), ...all.map(m => m.from)])];
   const now = Date.now(), hb = config.heartbeat || 120;
-  $('strip').innerHTML = names.map(n => {
+  const idle = new Map(names.map(n => [n, idleOf(n)]).filter(([, m]) => m));
+  setHTML($('strip'), names.map(n => {
     const mine = all.filter(m => m.from === n), last = mine[mine.length - 1];
-    const age = last ? (now - stamp(last)) / 1000 : null, p = profile(n);
-    const cls = SELF.has(n) || age === null ? '' : age <= hb ? 'on' : 'late';
-    const title = (p.role ? p.role + ' · ' : '') + (age === null ? t().notYet : `${t().lastMsg} ${t().ago(age)}`);
-    return `<span class="chip" title="${esc(title)}">${avatar(n)}<b style="color:${p.color}">${esc(n)}</b> ${mine.length}<span class="dot ${cls}"></span></span>`;
-  }).join('') + `<span class="count">${esc(t().messages(all.length))}</span>`;
-  // the "typing…" line: the freshest status of an agent still inside its timer
-  const fresh = all.filter(m => isStatus(m) && !SELF.has(m.from) && (now - stamp(m)) / 1000 <= hb);
+    const age = last ? (now - stamp(last)) / 1000 : null, p = profile(n), sleeping = idle.get(n);
+    const cls = SELF.has(n) || age === null ? '' : sleeping ? 'idle' : age <= hb ? 'on' : 'late';
+    const title = (p.role ? p.role + ' · ' : '') + (sleeping ? t().idleSince(sleeping.time, sleeping.n)
+      : age === null ? t().notYet : `${t().lastMsg} ${t().ago(age)}`);
+    return `<span class="chip${sleeping ? ' idle' : ''}" title="${esc(title)}">${avatar(n)}<b style="color:${p.color}">${esc(n)}</b> ${mine.length}<span class="dot ${cls}"></span></span>`;
+  }).join('') + `<span class="count">${esc(t().messages(all.length))}</span>`);
+  // the "typing…" line: the freshest status of an agent still inside its timer and not idle
+  const fresh = all.filter(m => isStatus(m) && !SELF.has(m.from) && !idle.has(m.from) && (now - stamp(m)) / 1000 <= hb);
   const live = $('live');
   if (fresh.length) {
     const m = fresh[fresh.length - 1], p = profile(m.from);
     live.className = 'live active';
-    live.innerHTML = `${esc(p.emoji)} <span class="who">${esc(m.from)}</span> ${esc(t().doing)} ${esc(m.text.split('\n')[0])}`;
+    setHTML(live, `${esc(p.emoji)} <span class="who">${esc(m.from)}</span> ${esc(t().doing)} ${inline(m.text.split('\n')[0])}`);
   } else {
     live.className = 'live';
-    live.textContent = config.subtitle || t().members(names.length);
+    setHTML(live, esc(config.subtitle || t().members(names.length)));
   }
 }
+// replace an element's HTML only when it changed: header() runs every few seconds, and rebuilding the line under
+// the pointer between mousedown and mouseup would swallow a click on one of its links
+function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
 
 function beep() {
   try {
@@ -396,6 +453,8 @@ function applyLook() {
   const L = t();
   $('box').placeholder = L.placeholder(config.user_name || 'USER');
   $('hint').textContent = L.hint;
+  $('cmdBtn').title = L.cmds;
+  if (COMMANDS.length && COMMANDS._lang !== config.lang) loadCommands().then(() => { COMMANDS._lang = config.lang; });
   $('search').placeholder = L.search;
   $('searchBtn').title = L.search; $('soundBtn').title = L.sound; $('gear').title = L.settings;
   $('pTitle').textContent = L.settings; $('pSave').textContent = L.save; $('pCancel').textContent = L.cancel;
@@ -404,13 +463,18 @@ function applyLook() {
   [...$('fWall').options].forEach((o, i) => o.textContent = L.walls[i]);
   const e = $('empty'); if (e) e.textContent = L.empty;
 }
+let configText = '';
 async function loadConfig(force) {
   try {
     const r = await fetch('config.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) {
-      const next = await r.json();
-      const changed = JSON.stringify(next) !== JSON.stringify(config);
-      config = Object.assign({}, config, next);
+      // compare the server's text, not the merged object: its keys come in another order, so the old comparison
+      // saw a change every 5 s and rebuilt the whole feed, cutting the flash of a #n jump and hiding again a
+      // status just opened by a click
+      const text = await r.text();
+      const changed = text !== configText;
+      configText = text;
+      config = Object.assign({}, config, JSON.parse(text));
       if (changed || force) { applyLook(); rerender(); }
     }
   } catch (e) {}
@@ -474,17 +538,112 @@ feed.addEventListener('click', e => { const img = e.target.closest('.pics img');
   $('lightbox').querySelector('img').src = img.src; $('lightbox').classList.add('open'); });
 $('lightbox').addEventListener('click', () => $('lightbox').classList.remove('open'));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').classList.remove('open'); });
-box.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+/* @ tags and / quick commands: a menu above the box, filtered as you type, in any case */
+let COMMANDS = [], sug = {mode: null, items: [], on: 0, from: 0};
+async function loadCommands() {
+  try { const r = await fetch('commands.json?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) COMMANDS = await r.json(); }
+  catch (e) {}
+}
+function taggable() {
+  const names = [...(config.participants || []), ...Object.keys(config.profiles || {})].filter(n => !SELF.has(n));
+  return [...new Set(names)];
+}
+function closeSuggest() { sug.mode = null; $('suggest').classList.remove('open'); }
+function showSuggest(mode, query, from) {
+  const q = query.toLowerCase();
+  let items;
+  if (mode === 'tag') {
+    const every = config.lang === 'it' ? 'tutti' : 'all';
+    items = [...taggable().map(n => ({kind: 'tag', name: n})), {kind: 'tag', name: every, all: true}]
+      .filter(x => x.name.toLowerCase().includes(q))
+      .sort((a, b) => a.name.toLowerCase().startsWith(q) === b.name.toLowerCase().startsWith(q) ? 0
+                      : a.name.toLowerCase().startsWith(q) ? -1 : 1);
+  } else {
+    items = COMMANDS.filter(c => (c.name + ' ' + c.key + ' ' + c.label).toLowerCase().includes(q))
+      .map(c => Object.assign({kind: 'cmd'}, c));
+  }
+  if (!items.length) return closeSuggest();
+  sug = {mode, items, on: 0, from};
+  renderSuggest();
+}
+function renderSuggest() {
+  const L = t();
+  $('suggest').innerHTML = `<div class="head">${esc(sug.mode === 'tag' ? L.tagsHead : L.cmds)}</div>` +
+    sug.items.map((x, i) => {
+      const cls = 'sug' + (i === sug.on ? ' on' : '');
+      if (x.kind === 'cmd')
+        return `<div class="${cls}" data-i="${i}"><span class="ic">${esc(x.icon)}</span><span class="txt">` +
+               `<span class="main">/${esc(x.name)}</span><span class="sub">${esc(x.label)}</span></span></div>`;
+      const p = profile(x.name);
+      return `<div class="${cls}" data-i="${i}">` + (x.all ? '<span class="ic">📣</span>' : avatar(x.name)) +
+             `<span class="txt"><span class="main">@${esc(x.name)}</span><span class="sub">` +
+             `${esc(x.all ? L.everyone : p.role)}</span></span></div>`;
+    }).join('');
+  $('suggest').classList.add('open');
+  const on = $('suggest').querySelector('.sug.on'); if (on) on.scrollIntoView({block: 'nearest'});
+}
+function updateSuggest() {
+  const before = box.value.slice(0, box.selectionStart);
+  if (/^\/[\w-]*$/.test(before)) return showSuggest('cmd', before.slice(1), 0);
+  const m = before.match(/(^|[^\w@])@([\w-]*)$/);
+  if (m) return showSuggest('tag', m[2], before.length - m[2].length - 1);
+  closeSuggest();
+}
+async function runCommand(c) {
+  closeSuggest();
+  try {
+    const r = await fetch('command', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                      body: JSON.stringify({name: c.key})});
+    if (r.ok) { if (/^\/[\w-]*$/.test(box.value.trim())) box.value = ''; feed.scrollTop = feed.scrollHeight; poll(); }
+    else alert(t().notSent + await r.text());
+  } catch (e) { alert(t().notSent + t().unreachable); }
+  box.focus();
+}
+function pick(i) {
+  const x = sug.items[i]; if (!x) return;
+  if (x.kind === 'cmd') return runCommand(x);
+  const end = box.selectionStart, insert = '@' + x.name + ' ';
+  box.value = box.value.slice(0, sug.from) + insert + box.value.slice(end);
+  const caret = sug.from + insert.length;
+  box.setSelectionRange(caret, caret);
+  closeSuggest(); box.focus();
+}
+$('suggest').addEventListener('mousedown', e => { const el = e.target.closest('.sug'); if (!el) return;
+  e.preventDefault(); pick(+el.dataset.i); });
+$('cmdBtn').addEventListener('click', () => { if (sug.mode === 'cmd') return closeSuggest();
+  showSuggest('cmd', '', 0); box.focus(); });
+box.addEventListener('input', updateSuggest);
+box.addEventListener('click', updateSuggest);
+box.addEventListener('blur', e => { if (e.relatedTarget && e.relatedTarget.id === 'cmdBtn') return;
+  setTimeout(() => { if (document.activeElement !== box) closeSuggest(); }, 150); });
+box.addEventListener('keydown', e => {
+  if (sug.mode) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); sug.on = (sug.on + (e.key === 'ArrowDown' ? 1 : -1) + sug.items.length) % sug.items.length;
+      return renderSuggest();
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(sug.on); }
+    if (e.key === 'Escape') { e.preventDefault(); return closeSuggest(); }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
 box.addEventListener('input', () => { box.style.height = ''; box.style.height = Math.min(box.scrollHeight, 150) + 'px'; });
 
-/* feed interactions */
-feed.addEventListener('click', e => {
-  const a = e.target.closest('a.ref'); if (!a) return;
-  const target = $('m' + a.dataset.ref); if (!target) return;
+/* feed interactions: #n jumps to message n, @NAME to that participant's latest message, wherever the link is
+   (bubbles, status pills, the live line in the header) */
+function jumpTo(n) {
+  const target = $('m' + n); if (!target) return;
   target.classList.remove('hidden');
   const flash = target.querySelector('.bubble') || target;
   target.scrollIntoView({behavior: 'smooth', block: 'center'});
   flash.classList.remove('flash'); void flash.offsetWidth; flash.classList.add('flash');
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.ref, a.mention'); if (!a) return;
+  e.preventDefault();
+  if (a.dataset.ref) return jumpTo(a.dataset.ref);
+  const who = (a.dataset.who || '').toLowerCase();
+  for (let i = all.length - 1; i >= 0; i--) if (all[i].from.toLowerCase() === who) return jumpTo(all[i].n);
 });
 feed.addEventListener('scroll', () => { if (nearBottom()) { unseen = 0; $('newer').style.display = 'none'; } });
 $('newer').addEventListener('click', () => { feed.scrollTop = feed.scrollHeight; });
@@ -541,6 +700,7 @@ $('optCompact').checked = pref('compact', false);
 if ($('optCompact').checked) document.body.style.fontSize = '13px';
 setSound(pref('sound', false));
 applyLook();
+loadCommands().then(() => { COMMANDS._lang = config.lang; });
 loadConfig(true).then(() => { poll(); setInterval(poll, 1500); setInterval(() => loadConfig(false), 5000); setInterval(header, 5000); });
 </script>
 </body>
