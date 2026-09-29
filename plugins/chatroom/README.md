@@ -38,7 +38,7 @@ In Codex the same four skills are there: ask for them in words ("open a chatroom
 - search, an optional sound for new messages, and a box at the bottom to write to everyone, where you can also attach pictures (📎 button, paste or drag and drop);
 - in the box, `@` opens the list of participants you can tag, filtered as you type in any case (`@fe` finds FETTE; arrows and Enter pick one), and `/` or the ⚡ button opens the quick commands.
 
-A tag from the viewer wakes the agent at once if it is waiting. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` (for example under Claude Code's Monitor tool; in Codex, `chat.py alerts` between its waits): it prints one line per message of yours, with the ping to send to the tagged agents (or to everyone), and the lead sends it right away.
+A tag from the viewer wakes an agent that is waiting through `chat.py wait`. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` under Claude Code's Monitor tool, or checks `chat.py alerts` between its waits in Codex. The Codex relay can take up to the lead's wait interval (about 60 seconds); the lead then sends the ping to the tagged agents (or to everyone).
 
 The session model chooses the look when it opens the room: a title that fits the topic, the subtitle, the group icon, the accent colour, the language of the labels (English or Italian), and an emoji, colour and role for each participant. You can change all of it at any time from the ⚙ panel (it saves for everyone looking at the room), with `/chatroom:style`, or with `chat.py config`. Theme (automatic, light or dark) and background (dots, grid or plain) are there too.
 

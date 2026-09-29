@@ -21,7 +21,7 @@ EOF
 
    Add the user's extra instruction, if there is one, to that message.
 3. Send every agent in the roster the same notice (SendMessage in Claude Code; in Codex send_message, or followup_task if its turn has ended), idle agents included (a message from the lead wakes them too).
-4. Wait for the agents' final reports (in Claude Code they arrive as notifications; in Codex call `wait_agent`, then `close_agent` on each path to free its thread), then export the transcript:
+4. Wait for the agents' final reports (in Claude Code they arrive as notifications; in Codex use `wait_agent`; no separate close call is needed), then export the transcript:
 
 ```bash
 python "CHAT" transcript --room "ROOM" --out "ROOM/transcript.md"
