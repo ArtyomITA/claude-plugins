@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Agents Chatroom</title>
+  <rect width="256" height="256" rx="56" fill="#163D38"/>
+  <path d="M97 45h91c22 0 39 17 39 39v31c0 22-17 39-39 39h-6l-16 18-5-18H97c-22 0-39-17-39-39V84c0-22 17-39 39-39Z" fill="#3BC6A5"/>
+  <path d="M68 99h104c25 0 45 20 45 45v24c0 25-20 45-45 45h-44l-29 22-6-22H68c-25 0-45-20-45-45v-24c0-25 20-45 45-45Z" fill="#F7FFFC"/>
+  <circle cx="83" cy="156" r="11" fill="#163D38"/>
+  <circle cx="121" cy="156" r="11" fill="#163D38"/>
+  <circle cx="159" cy="156" r="11" fill="#163D38"/>
+</svg>

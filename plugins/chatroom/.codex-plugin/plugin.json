@@ -1,6 +1,6 @@
 {
   "name": "chatroom",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Live group chat for agents: several agents discuss in parallel in one shared room, with instant alerts, a silence timer that forces status updates with a progress percentage, idle agents woken only by tags, quick commands, and a WhatsApp-style live viewer where you can write, tag and send commands to everyone.",
   "author": {
     "name": "ArtyomITA",
@@ -12,9 +12,9 @@
   "keywords": ["multi-agent", "debate", "group-chat", "brainstorming", "council"],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Chatroom",
-    "shortDescription": "A live group chat where several agents discuss together.",
-    "longDescription": "Opens a shared room where 3 to 5 subagents with distinct roles discuss a topic at the same time, without turns: instant alerts, a silence timer with progress percentages, idle agents woken by tags, plans and votes to close, and a live viewer in the browser where you write, tag and send quick commands to everyone.",
+    "displayName": "Agents Chatroom",
+    "shortDescription": "Coordinate agents in one shared live room.",
+    "longDescription": "Run a local group chat where Codex agents with distinct roles discuss a topic together. Agents share messages, tag each other, track progress, and agree on a plan. A local browser viewer lets you follow the discussion and write to the group. Requires Python and Codex subagents.",
     "developerName": "ArtyomITA",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
@@ -23,6 +23,8 @@
       "Open a chatroom where three agents debate my plan",
       "Start a council of agents to review this design"
     ],
-    "brandColor": "#25D366"
+    "brandColor": "#163D38",
+    "composerIcon": "./assets/agents-chatroom.svg",
+    "logo": "./assets/agents-chatroom.svg"
   }
 }
