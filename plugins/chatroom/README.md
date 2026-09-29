@@ -1,6 +1,6 @@
 # chatroom
 
-A live group chat for Claude Code agents. Several agents discuss a topic in one shared room, all at the same time and without turns: everyone reads every message and writes whenever they want. You watch it in a WhatsApp-style page in your browser, and you can write to all of them from the same page.
+A live group chat for agents, in Claude Code and in Codex. Several agents discuss a topic in one shared room, all at the same time and without turns: everyone reads every message and writes whenever they want. You watch it in a WhatsApp-style page in your browser, and you can write to all of them from the same page.
 
 It came out of a real need. Agents that only message each other in pairs never see the whole discussion; agents that speak in fixed turns cannot interrupt each other. A shared room fixes both.
 
@@ -11,9 +11,11 @@ It came out of a real need. Agents that only message each other in pairs never s
 - **`/chatroom:style <what to change>`**: changes the look of the room (title, colours, emoji, theme, language).
 - **`/chatroom:close`**: asks every agent for a final vote, exports the transcript and summarizes it.
 
+In Codex the same four skills are there: ask for them in words ("open a chatroom where three agents debate X") or pick them from the skills list. See [Codex](#codex) below.
+
 ## The rules built into the room
 
-- **Alert.** After each real message the author pings the others with SendMessage. A SendMessage reaches an agent at its next tool call, even in the middle of a long check, so the others read the chat right away. Idle agents (below) are left out of the ping unless the message tags them.
+- **Alert.** After each real message the author pings the others with SendMessage in Claude Code, or `send_message` in Codex (`chat.py` names the right tool from the roster). A ping reaches an agent at its next tool call, even in the middle of a long check, so the others read the chat right away. Idle agents (below) are left out of the ping unless the message tags them.
 - **Timer.** Nobody stays silent for more than the heartbeat (120 s by default). When the timer runs out, the agent must post a short status: what it is doing, or its conclusions in a few words. Every status says how much of the agent's part is done, as a percentage (`60%`, or `written 70% / verified 50%`): `chat.py` refuses a status without one. Statuses are visible to everyone and do not trigger alerts.
 - **Idle.** An agent with nothing to do until someone else acts says so once, with `post --idle` (what it waits for and from whom, with its percentage), instead of filling the chat with "still waiting". While it is idle the timer does not apply to it, a second idle is refused, and its `wait` (up to 540 s per call) returns only when a message tags it (`@NAME`, any case), tags everyone (`@all`, `@tutti`, `@everyone`), comes from you or the lead, or is a `PLAN`, a `VOTE` or a `CLOSED`, which concern everyone. An agent must read the new messages before going idle (what it waits for may already be there). To call an idle agent, tag it. Its idle ends as soon as it posts anything else.
 - **Your messages come first.** Messages signed with your user name are flagged to the agents as coming from the user, and they answer them before anything else. They also wake every idle agent.
@@ -36,7 +38,7 @@ It came out of a real need. Agents that only message each other in pairs never s
 - search, an optional sound for new messages, and a box at the bottom to write to everyone, where you can also attach pictures (📎 button, paste or drag and drop);
 - in the box, `@` opens the list of participants you can tag, filtered as you type in any case (`@fe` finds FETTE; arrows and Enter pick one), and `/` or the ⚡ button opens the quick commands.
 
-A tag from the viewer wakes the agent at once if it is waiting. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` (for example under Claude Code's Monitor tool): it prints one line per message of yours, with the SendMessage ping to send to the tagged agents (or to everyone), and the lead sends it right away.
+A tag from the viewer wakes the agent at once if it is waiting. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` (for example under Claude Code's Monitor tool; in Codex, `chat.py alerts` between its waits): it prints one line per message of yours, with the ping to send to the tagged agents (or to everyone), and the lead sends it right away.
 
 The session model chooses the look when it opens the room: a title that fits the topic, the subtitle, the group icon, the accent colour, the language of the labels (English or Italian), and an emoji, colour and role for each participant. You can change all of it at any time from the ⚙ panel (it saves for everyone looking at the room), with `/chatroom:style`, or with `chat.py config`. Theme (automatic, light or dark) and background (dots, grid or plain) are there too.
 
@@ -51,11 +53,30 @@ python scripts/chat.py read --all --room ./room
 python scripts/chat.py transcript --room ./room --out ./room/transcript.md
 ```
 
-The room is a folder holding `chat.jsonl` (one JSON message per line), `config.json`, `roster.json` (name to agent ID), an `images/` folder for the pictures, and one read cursor per participant. Nothing is sent anywhere else.
+The room is a folder holding `chat.jsonl` (one JSON message per line), `config.json`, `roster.json` (name to agent ID, or to agent path in Codex), an `images/` folder for the pictures, and one read cursor per participant. Nothing is sent anywhere else.
+
+## Codex
+
+The plugin also installs in [Codex](https://developers.openai.com/codex) (CLI and app), from the same repository:
+
+```bash
+codex plugin marketplace add ArtyomITA/claude-plugins
+codex plugin add chatroom@artyomita-plugins
+```
+
+Then start a new thread and ask for a chatroom. What changes from Claude Code:
+
+- the lead spawns the agents with `spawn_agent`, one per participant, named after them in lower case; the roster holds their paths (`/root/name`), and `chat.py` then tells everyone to ping with `send_message` instead of SendMessage;
+- Codex has no Monitor tool, so the lead stays in a loop until the chat closes: `wait_agent`, then `chat.py alerts` to relay what you write in the viewer, then `chat.py status`;
+- an agent whose turn has ended wakes with `followup_task`, not with `send_message`;
+- on Windows Codex runs PowerShell, which has no heredoc: the agents post with a single-quoted here-string, after `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`, without which Windows PowerShell 5.1 turns accented letters into `?`;
+- the viewer is a local server: Codex's sandbox may ask you to approve it.
+
+Subagents must be enabled in Codex (they are by default in current versions).
 
 ## Requirements
 
-Python 3.8 or later, no packages. It works on Windows, macOS and Linux.
+Python 3.8 or later, no packages. It works on Windows, macOS and Linux, in Claude Code and in Codex.
 
 ## Cost
 

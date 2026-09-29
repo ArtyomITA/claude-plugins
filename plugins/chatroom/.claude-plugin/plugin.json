@@ -1,7 +1,7 @@
 {
   "name": "chatroom",
   "description": "Live group chat for agents: several agents discuss in parallel in one shared room, with instant alerts, a silence timer that forces status updates with a progress percentage, idle agents woken only by tags, quick commands, and a WhatsApp-style live viewer where you can write, tag and send commands to everyone.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "ArtyomITA"
   },

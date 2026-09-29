@@ -1,4 +1,4 @@
-"""A group chat on a shared file, for Claude Code agents that run at the same time.
+"""A group chat on a shared file, for agents that run at the same time (Claude Code or Codex).
 
 Every message is one JSON line in <room>/chat.jsonl and everyone sees every message: there are no turns, each
 participant reads and writes whenever it wants. Three rules are built in, because agents left alone go quiet for long
@@ -13,16 +13,18 @@ stretches while they verify things, or keep writing "still waiting" when they ha
   to it, a second --idle is refused, and `wait` returns only for a message that tags it (@NAME, any case), a tag to
   everyone (@all, @tutti, @everyone) or a message from the user (or the lead); the other messages stay unread until
   then. The idle state ends as soon as it posts anything else;
-- the ALERT: after a real message, `post` prints the SendMessage ping the author must send to the others. A message
-  sent with SendMessage reaches an agent at its next tool call, even in the middle of a long verification, so the
-  others read the chat right away instead of at their next `wait`. Idle participants are left out of the ping unless
+- the ALERT: after a real message, `post` prints the ping the author must send to the others with its messaging tool
+  (SendMessage in Claude Code, send_message in Codex, chosen from the roster: Codex agents are paths like /root/name).
+  A ping reaches an agent at its next tool call, even in the middle of a long verification, so the others read the
+  chat right away instead of at their next `wait`. Idle participants are left out of the ping unless
   the message tags them (or everyone), or comes from the user (or the lead).
 
 Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
 
   chat.py init --room DIR --topic "..." --participants A,B,C [look options, see below]
   chat.py config --room DIR key=value ... [--profile ...]   (change the look or the settings of an existing room)
-  chat.py roster --room DIR A=<agentId> B=<agentId> ...     (the lead writes it right after spawning the agents)
+  chat.py roster --room DIR A=<agent> B=<agent> ...         (the lead writes it right after spawning the agents:
+                                                            Claude Code agent IDs, or Codex paths like /root/a)
   chat.py post --as NAME [--status|--idle] [--image PATH ...]
                                                             (text on stdin: use a quoted heredoc <<'EOF' ... EOF;
                                                             --image attaches a picture, once per picture)
@@ -35,7 +37,7 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
                                                             participant)
   chat.py transcript [--out FILE]                           (the whole chat as Markdown)
   chat.py command [NAME] [--as AUTHOR]                      (a quick command, see COMMANDS; no NAME lists them)
-  chat.py alerts [--follow]                                 (the lead's relay: a SendMessage line per user message)
+  chat.py alerts [--follow]                                 (the lead's relay: a ping line per user message)
   chat.py serve [--port 8765]                               (the live viewer, with a box to write as the user)
 
 Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --accent (#rrggbb), --theme
@@ -182,8 +184,13 @@ def run_command(room, word, author):
     return room.append(author, text), text
 
 
+def ping_tool(roster):
+    """Codex addresses agents by path (/root/name), Claude Code by agent ID"""
+    return 'send_message' if any(str(v).startswith('/') for v in roster.values()) else 'SendMessage'
+
+
 def print_alert(room, author, n, text, images=()):
-    """the SendMessage ping the author must send: everyone not idle, plus the idle ones this message wakes"""
+    """the ping the author must send: everyone not idle, plus the idle ones this message wakes"""
     items = room.messages()
     users = room.user_names()
     others = {k: v for k, v in room.roster().items() if k != author}
@@ -201,7 +208,7 @@ def print_alert(room, author, n, text, images=()):
             ping[k] = v
     if ping:
         targets = '; '.join(f'{k} = {v}' for k, v in ping.items())
-        print(f"ALERT: now send with SendMessage, to each of ({targets}), the text: "
+        print(f"ALERT: now send with {ping_tool(others)}, to each of ({targets}), the text: "
               f"CHAT #{n} from {author}: {first} ... -> read the chat and answer if it concerns you")
     else:
         print('ALERT: nobody to ping, every other participant is idle and your message does not tag them.')
@@ -517,8 +524,11 @@ def cmd_roster(room, a):
     for pair in a.pairs:
         name, _, agent = pair.partition('=')
         if not agent:
-            sys.exit(f'expected NAME=agentId, got {pair!r}')
-        roster[name.strip()] = agent.strip()
+            sys.exit(f'expected NAME=<agent ID or path>, got {pair!r}')
+        agent = agent.strip()
+        if '/root/' in agent:                 # Git Bash on Windows turns /root/a into C:/.../root/a
+            agent = agent[agent.index('/root/'):]
+        roster[name.strip()] = agent
     (room.dir / 'roster.json').write_text(json.dumps(roster, indent=2), encoding='utf-8')
     print(json.dumps(roster))
 
@@ -608,7 +618,7 @@ def alert_lines(room, items, users):
         first = ' '.join(text.split())[:140]
         pairs = '; '.join(f'{k} = {roster[k]}' for k in targets)
         out.append(f"ALERT #{m['n']} from {m['from']}"
-                   + (f" tags {', '.join(named)}" if named else '') + f": send with SendMessage to ({pairs}) the text: "
+                   + (f" tags {', '.join(named)}" if named else '') + f": send with {ping_tool(roster)} to ({pairs}) the text: "
                    f"CHAT #{m['n']} from {m['from']}: {first} ... -> read the chat and answer, the user wrote it")
     return out
 
@@ -751,7 +761,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
                                         'serve', 'command', 'alerts'])
-    p.add_argument('pairs', nargs='*', help='roster: NAME=agentId pairs; config: key=value pairs')
+    p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
     p.add_argument('--all', action='store_true')
