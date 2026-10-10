@@ -608,6 +608,8 @@ const ui = createUI(root, {
   onNext: dir => { const list = D.names; if (!list.length) return; const i = list.indexOf(selected); select(list[(i + dir + list.length) % list.length]); },
 });
 document.addEventListener('keydown', e => { if (mode !== 'chat') ui.onKey(e); });
+// the chat header's 🏢 button: from the chat alone back to the split view, otherwise to the chat alone
+window.officeMode = m => { mode = m || (mode === 'chat' ? 'split' : 'chat'); setPref('mode', mode); applyMode(); };
 function applyMode() {
   document.body.classList.remove('mode-split', 'mode-office', 'mode-chat');
   document.body.classList.add('mode-' + mode);
