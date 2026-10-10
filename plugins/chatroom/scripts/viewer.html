@@ -439,7 +439,7 @@ function stamp(m) {
   const [h, mi, s] = m.time.split(':').map(Number), d = new Date(); d.setHours(h, mi, s, 0); return d.getTime();
 }
 function header() {
-  const names = [...new Set([...(config.participants || []), ...all.map(m => m.from)])];
+  const names = [...new Set([...(config.participants || []), ...all.map(m => m.from)])].filter(n => !(config.left || []).includes(n));
   const now = Date.now(), hb = config.heartbeat || 120;
   const idle = new Map(names.map(n => [n, idleOf(n)]).filter(([, m]) => m));
   setHTML($('strip'), names.map(n => {

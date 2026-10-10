@@ -748,6 +748,7 @@ def cmd_add(room, a):
     for n in names:
         if n not in config.setdefault('participants', []):
             config['participants'].append(n)
+    config['left'] = [n for n in config.get('left', []) if n not in names]
     for text in a.profile or []:
         name, profile = parse_profile(text)
         config.setdefault('profiles', {}).setdefault(name, {}).update(profile)
@@ -755,6 +756,25 @@ def cmd_add(room, a):
         config['self_names'].append(a.name)
     room.save_config(config)
     print(f"room {room.dir}: participants now {', '.join(config['participants'])}" + (f'; {a.name} posts as a lead' if a.name else ''))
+
+
+def cmd_remove(room, a):
+    """chat.py remove --room ROOM --participants A,B: agents leave the room. They are no longer in the office or in the
+    pings (their roster addresses are kept in roster.left.json); their messages stay in the chat. `add` brings them back."""
+    names = [n.strip() for n in (a.participants or '').split(',') if n.strip()]
+    if not names:
+        sys.exit('remove: give --participants A,B')
+    config, roster = room.config(), room.roster()
+    config['participants'] = [n for n in config.get('participants', []) if n not in names]
+    config['left'] = sorted(set(config.get('left', [])) | set(names))
+    gone = {n: roster.pop(n) for n in names if n in roster}
+    if gone:
+        kept = room.dir / 'roster.left.json'
+        old = json.loads(kept.read_text(encoding='utf-8')) if kept.exists() else {}
+        kept.write_text(json.dumps({**old, **gone}, ensure_ascii=False, indent=2), encoding='utf-8')
+        (room.dir / 'roster.json').write_text(json.dumps(roster, ensure_ascii=False, indent=2), encoding='utf-8')
+    room.save_config(config)
+    print(f"room {room.dir}: {', '.join(names)} left; participants now {', '.join(config['participants']) or 'none'}")
 
 
 def cmd_command(room, a):
@@ -1311,7 +1331,7 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -1357,7 +1377,7 @@ def main():
         if not room.dir.exists():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
-                    'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add}
+                    'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

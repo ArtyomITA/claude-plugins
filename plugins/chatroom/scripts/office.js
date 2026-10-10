@@ -594,7 +594,7 @@ function derive() {
   const user = c.user_name || 'USER', selfNames = new Set([user, ...(c.self_names || [])]);
   const leadNames = (c.self_names || []).filter(n => all.some(m => m.from === n));
   const lead = leadNames[leadNames.length - 1] || (c.self_names || [])[0] || 'LEAD';
-  const names = [...new Set([...(c.participants || []), ...all.map(m => m.from).filter(n => !selfNames.has(n))])];
+  const names = [...new Set([...(c.participants || []), ...all.map(m => m.from).filter(n => !selfNames.has(n))])].filter(n => !(c.left || []).includes(n));
   let plan = null, closed = null;
   for (const m of all) {
     if (m.kind) continue;
@@ -1080,11 +1080,13 @@ function syncRemote() {
   const s = commonState;
   if (!s || !boss) return;
   const joined = !!(s.bridge && s.bridge.joined);
+  const here = 'visit:' + (visit ? visit.host : s.me), person = p => p.host || p.name === p.guest;
   // from the other side: as host, the guests and their agents; as guest, everyone but me and my own agents
   const list = (s.people || []).filter(p => (joined ? p.guest !== s.me : !!p.guest)
                                             && !(visit && (DATA.config.participants || []).includes(p.name)) && !(visit && p.name === visit.host)
                                             && !(visit && p.guest === visit.host)
-                                            && !(p.emoji === '🤝' && (DATA.config.participants || []).includes(p.name)));   // a lent helper already has a desk here
+                                            && !(p.emoji === '🤝' && (DATA.config.participants || []).includes(p.name))   // a lent helper already has a desk here
+                                            && (!person(p) || (p.pos && p.pos.where === here)));   // a friend shows only while really in this office
   const names = new Set(list.map(p => p.name));
   for (const [n, p] of remote) if (!names.has(n)) { emit(20, p.head(), {color: ['#80deea', '#ffffff']}); p.dispose(); remote.delete(n); }
   const used = new Set([...people.values()].map(p => p.spot)), free = [...COMMON.filter(s => !used.has(s) && s !== boss.spot).reverse(),
@@ -1092,7 +1094,8 @@ function syncRemote() {
   let k = 0;
   for (const p of list) {
     if (!remote.has(p.name)) {
-      const seat = free[k % Math.max(1, free.length)] || BOSS_SEAT;
+      const seat = person(p) && p.pos ? {pos: new THREE.Vector3(p.pos.x, p.pos.y || 0, p.pos.z), rot: p.pos.rot, pose: p.pos.pose === 'walk' ? 'stand' : p.pos.pose}
+        : free[k % Math.max(1, free.length)] || BOSS_SEAT;
       const r = new Person(p.name, 'guest', seat, true, p.color || '#888888'); r.remoteEmoji = p.emoji; r.act = 'idle'; r.home = seat;
       remote.set(p.name, r);
     }
@@ -1111,12 +1114,15 @@ function syncRemote() {
 }
 // where your figure is goes to the other side while the room is shared or joined, or while you visit
 const linked = () => VISIT || !!(commonState?.share?.sharing || commonState?.bridge?.joined);
-let presenceSent = '', presence = null;
+let presenceSent = '', presence = null, oldServerSaid = false;
 setInterval(() => {
   if (!boss || !linked()) return;
   const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home'};
   const key = JSON.stringify(pos, (k, v) => typeof v === 'number' ? Math.round(v * 20) / 20 : v);
-  if (key !== presenceSent) { presenceSent = key; post('presence', pos); }
+  if (key !== presenceSent) {
+    presenceSent = key;
+    post('presence', pos).then(r => { if (r && r.status === 404 && !oldServerSaid) { oldServerSaid = true; ui.roomTip(ui.t().oldServer, 20, 120); } });
+  }
 }, 400);
 setInterval(async () => {
   if (!linked()) return;
@@ -1127,6 +1133,7 @@ function placeOthers() {
   for (const p of presence.people || []) {
     if (p.name === meName) continue;
     const owner = visit && p.name === visit.host, fig = owner ? hostFigure : remote.get(p.name);
+    if (owner && hostFigure) hostFigure.root.visible = !!(p.pos && p.pos.where === 'home');
     if (fig) walkWhere(fig, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos : null);
   }
 }
@@ -1222,7 +1229,7 @@ function placeTags() {
   const all = [...people.values(), ...remote.values(), boss, assistant, hostFigure, otherLead].filter(Boolean);
   for (const p of all) {
     _v.copy(p.head()); _v.y += 0.25; const dist = camera.position.distanceTo(_v); _v.project(camera);
-    const vis = _v.z < 1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2 && !(p === boss && !boss.parts.head.visible);
+    const vis = _v.z < 1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2 && !(p === boss && !boss.parts.head.visible) && p.root.visible;
     ui.place(p.name, (_v.x * 0.5 + 0.5) * w, (-_v.y * 0.5 + 0.5) * h, vis, Math.max(0.72, Math.min(1.12, 14 / dist)));
     const pr = DATA.profile(p.name), d = D.per[p.name], bubble = p.bubble && p.bubble.until > now ? p.bubble : null;
     const flags = [];
