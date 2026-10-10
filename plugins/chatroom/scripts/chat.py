@@ -1055,7 +1055,7 @@ def cmd_serve(room, a):
         config=lambda: {k: room.config().get(k) for k in ('title', 'subtitle', 'icon', 'accent', 'lang', 'participants', 'profiles', 'self_names', 'user_name')},
         post=friend_post)
     host = sharing.Share(common, room.config().get('title') or room.config().get('topic', ''), me()['name'], people=here_people,
-                         office=office_for_visit, room=friends_room, search=tv_search)
+                         office=office_for_visit, room=friends_room, search=tv_search, state=common.dir / 'share.json')
     lend_log = common.dir / 'lend.jsonl'
 
     def prepare_helper(rid, helper, who, text, model, effort, minutes):
@@ -1149,9 +1149,21 @@ def cmd_serve(room, a):
     host.on_ask, host.on_line = auto_lend, host_from_helpers
     threading.Thread(target=pump, daemon=True).start()
     install = {'busy': False, 'error': None}
-    (common.dir / 'link.json').unlink(missing_ok=True)           # a link left by a server that died
-    if room.config().get('common', {}).get('shared'):
-        room.update_config(common={**room.config()['common'], 'shared': False})
+    # a restart of the viewer keeps the sharing: the tunnel, the PIN and the guests (as host), or the pass into a friend's room (as guest)
+    resumed = host.resume()
+    link = sharing.guest_link(common.dir)
+    if not resumed and link and link.get('token') and link.get('url'):
+        try:
+            b = sharing.Bridge(common.dir, link['url'], '', me(), people=here_people, office=office_for_visit, outgoing=to_helpers, arrived=from_helpers)
+            b.on_asks = auto_answer
+            b.start(token=link['token'], title=link.get('title', ''), host=link.get('host', ''))
+            guest['bridge'], resumed = b, True
+        except (ValueError, OSError):
+            pass
+    if not resumed:
+        (common.dir / 'link.json').unlink(missing_ok=True)       # a link left by a server that died
+        if room.config().get('common', {}).get('shared'):
+            room.update_config(common={**room.config()['common'], 'shared': False})
 
     def set_shared(on):
         room.update_config(common={**room.config().get('common', {}), 'shared': on})

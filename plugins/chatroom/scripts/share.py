@@ -173,11 +173,12 @@ def doc_path(common_dir, doc):
 
 # ------------------------------------------------------------------ the host
 class Share:
-    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}, room=None, search=None):
+    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}, room=None, search=None, state=None):
         """common: the Room of the common room; host: the host's user name; people(): the host's agents in the room;
         office(): the host's plan and everyone's coarse presence, for visits"""
         self.common, self.title, self.host, self.people_fn, self.office_fn = common, title, host, people, office
         self.search = search                                 # the TV's YouTube search, lent to guests that cannot search
+        self.state = state                                   # share.json: port, PIN, tunnel, guests, kept across restarts
         self.room = room                                     # the room's own chat for friends: allowed(), read(since), config(), post(name, text)
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
         self.asks = []                                       # help the host asks a guest for: {id, to, text, ts, status, helper, ...}
@@ -185,7 +186,7 @@ class Share:
         self.me_pos = None                                   # where the host's own figure is, from the viewer
         self.lock = threading.Lock()
         self.fails = deque()
-        self.server = self.proc = None
+        self.server, self.tunnel_pid, self.port = None, None, None
         self._clear()
 
     def _clear(self):
@@ -204,17 +205,63 @@ class Share:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.pin, self.via = f'{secrets.randbelow(1_000_000):06d}', via
         self.fails.clear()                                    # a new PIN: old wrong guesses mean nothing now
+        self.port = port
         if via == 'lan':
             self.url = f'http://{lan_ip()}:{port}'
         elif via == 'local':
             self.url = f'http://127.0.0.1:{port}'
         else:
-            self.proc = start_tunnel(via, port, self)
+            start_tunnel(via, port, self, (self.state.parent if self.state else Path.home() / '.claude' / 'chatroom') / 'tunnel.log')
+        self.save()
+
+    def save(self):
+        """keep the sharing for a restart of the viewer (only 'stop' forgets it)"""
+        if not self.state or not self.pin:
+            return
+        with self.lock:
+            data = {'via': self.via, 'port': self.port, 'pin': self.pin, 'url': self.url, 'pid': self.tunnel_pid,
+                    'guests': [{'token': t, **{k: g[k] for k in ('name', 'emoji', 'color')}} for t, g in self.guests.items()]}
+        tmp = self.state.with_suffix('.tmp')
+        tmp.write_text(json.dumps(data), encoding='utf-8')
+        os.replace(tmp, self.state)
+
+    def resume(self):
+        """after a restart of the viewer: the same port, PIN, tunnel and guests, as long as the tunnel still runs"""
+        try:
+            s = json.loads(self.state.read_text(encoding='utf-8')) if self.state and self.state.exists() else None
+        except (OSError, ValueError):
+            s = None
+        if not s or s.get('via') not in VIAS or not s.get('pin') or not s.get('port'):
+            return False
+        tunnel = s['via'] in TUNNEL_URL
+        if tunnel and not alive(s.get('pid')):
+            self.state.unlink(missing_ok=True)
+            return False
+        try:
+            self.server = ThreadingHTTPServer(('0.0.0.0' if s['via'] == 'lan' else '127.0.0.1', int(s['port'])), make_handler(self))
+        except OSError:
+            end(s.get('pid'))
+            self.state.unlink(missing_ok=True)
+            return False
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        now = time.time()
+        self.pin, self.via, self.url, self.port = str(s['pin']), s['via'], s.get('url'), int(s['port'])
+        for x in s.get('guests', []):
+            try:
+                self.guests[str(x['token'])[:100]] = {**person(x), 'agents': [], 'seen': now, 'posts': deque(), 'cids': deque(maxlen=400), 'me': None, 'office': None}
+            except (KeyError, TypeError, ValueError):
+                pass
+        if tunnel:
+            self.tunnel_pid = s['pid']
+            watch_tunnel(self, self.tunnel_pid, self.state.parent / 'tunnel.log', TUNNEL_URL[self.via])
+        return True
 
     def stop(self):
-        if self.proc:
-            self.proc.terminate()
-            self.proc = None
+        """stop sharing: the tunnel ends and the kept sharing is forgotten"""
+        end(self.tunnel_pid)
+        self.tunnel_pid = None
+        if self.state:
+            self.state.unlink(missing_ok=True)
         if self.server:
             self.server.shutdown()
             self.server.server_close()
@@ -238,7 +285,8 @@ class Share:
                 raise ValueError('that name is taken in this room')
             token = secrets.token_hex(24)
             self.guests[token] = {**g, 'agents': [], 'seen': now, 'posts': deque(), 'cids': deque(maxlen=400), 'me': None, 'office': None}
-            return token
+        self.save()                                          # a restart of the viewer keeps this guest in
+        return token
 
     def guest(self, token):
         with self.lock:
@@ -252,6 +300,7 @@ class Share:
             for t, g in list(self.guests.items()):
                 if g['name'] == name:
                     del self.guests[t]
+        self.save()
 
     def post(self, g, author, text, game=None, cid=None):
         """a line from a guest's side, as GUEST or GUEST·AGENT; at most 20 a minute per guest. A line sent again
@@ -571,33 +620,99 @@ def install_cloudflared():
     return str(target)
 
 
-def start_tunnel(via, port, share):
-    """start the tunnel process; its public address is read from its output into share.url"""
+def alive(pid):
+    """is this process still running (a tunnel kept from before a restart of the viewer)"""
+    if not pid:
+        return False
+    if os.name == 'nt':
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, int(pid))                 # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259                    # STILL_ACTIVE
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def end(pid):
+    """stop a tunnel process"""
+    if not alive(pid):
+        return
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(int(pid)), '/T', '/F'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        try:
+            os.kill(int(pid), 15)
+        except OSError:
+            pass
+
+
+def watch_tunnel(share, pid, log, pattern):
+    """read the tunnel's public address from its log, and notice when it ends"""
+    def run():
+        while share.tunnel_pid == pid:
+            if not share.url:
+                for f in (log, log.with_name(log.name + '.out')):
+                    try:
+                        m = re.search(pattern, f.read_text(encoding='utf-8', errors='replace'))
+                    except OSError:
+                        m = None
+                    if m:
+                        share.url, share.error = m.group(0), None
+                        share.save()
+                        break
+            if not alive(pid):
+                if share.tunnel_pid == pid:
+                    share.error, share.url = 'the tunnel closed', None
+                return
+            time.sleep(0.5)
+    threading.Thread(target=run, daemon=True).start()
+
+
+TUNNEL_URL = {'cloudflared': r'https://[a-z0-9-]+\.trycloudflare\.com', 'pinggy': r'https://[a-z0-9.-]+\.pinggy\.(?:link|online)'}
+
+
+def start_tunnel(via, port, share, log):
+    """start the tunnel as a process of its own, so it outlives a restart of the viewer; returns its process id"""
     if via == 'cloudflared':
         exe = cloudflared_path()
         if not exe:
             raise ValueError('cloudflared is not installed')
-        cmd, pattern = [exe, 'tunnel', '--no-autoupdate', '--url', f'http://127.0.0.1:{port}'], r'https://[a-z0-9-]+\.trycloudflare\.com'
+        cmd = [exe, 'tunnel', '--no-autoupdate', '--url', f'http://127.0.0.1:{port}']
     else:
         ssh = shutil.which('ssh')
         if not ssh:
             raise ValueError('ssh is not available on this computer')
         cmd = [ssh, '-T', '-p', '443', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ServerAliveInterval=30',
                '-o', 'ExitOnForwardFailure=yes', f'-R0:127.0.0.1:{port}', 'free.pinggy.io']
-        pattern = r'https://[a-z0-9.-]+\.pinggy\.(?:link|online)'
-    flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            text=True, encoding='utf-8', errors='replace', creationflags=flags)
-
-    def read():
-        for line in proc.stdout:
-            m = re.search(pattern, line)
-            if m and not share.url:
-                share.url, share.error = m.group(0), None
-        if share.proc is proc:
-            share.error, share.url = 'the tunnel closed', None
-    threading.Thread(target=read, daemon=True).start()
-    return proc
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text('', encoding='utf-8')
+    if os.name == 'nt':                       # through Start-Process: its parent ends at once, so closing the viewer leaves it running
+        q = lambda s: "'" + str(s).replace("'", "''") + "'"
+        pidfile = log.with_name(log.name + '.pid')
+        pidfile.unlink(missing_ok=True)
+        ps = (f"(Start-Process -FilePath {q(cmd[0])} -ArgumentList {','.join(q(a) for a in cmd[1:])} -WindowStyle Hidden "
+              f"-RedirectStandardError {q(log)} -RedirectStandardOutput {q(str(log) + '.out')} -PassThru).Id | Set-Content -Path {q(pidfile)}")
+        # no pipes to PowerShell: the tunnel would inherit them, and this call would wait for the tunnel to end
+        subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            pid = int(pidfile.read_text(encoding='utf-8-sig').strip())
+        except (OSError, ValueError):
+            raise ValueError('the tunnel did not start')
+    else:
+        with open(log, 'w') as out:
+            pid = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True).pid
+    share.tunnel_pid = pid
+    watch_tunnel(share, pid, log, TUNNEL_URL[via])
+    return pid
 
 
 # ------------------------------------------------------------------ the guest
@@ -720,13 +835,21 @@ class Bridge:
         self.asks, self.on_asks, self.asks_seen = [], None, set()         # the host's asks for help; on_asks(new pending ones)
         self.dir.mkdir(parents=True, exist_ok=True)
 
-    def start(self):
+    def start(self, token=None, title='', host=''):
         if not re.match(r'^https?://[\w.-]+(:\d+)?/?$', self.url):
             raise ValueError('the address looks like https://something.trycloudflare.com')
-        r = call(self.url, '/share/join', body={**self.me, 'pin': self.pin})
-        self.token, self.title, self.host = str(r['token'])[:100], str(r.get('title') or '')[:120], clean_name(r.get('host'))
-        (self.dir / 'chat.jsonl').write_text('', encoding='utf-8')       # the mirror starts fresh
-        (self.dir / 'link.json').write_text(json.dumps({'role': 'guest', 'url': self.url, 'host': self.host}), encoding='utf-8')
+        if token:                                                    # back after a restart of the viewer: the same pass, no PIN
+            self.token, self.title, self.host = str(token)[:100], str(title)[:120], clean_name(host)
+            try:
+                self.n = max([0] + [int(json.loads(x).get('n', 0)) for x in (self.dir / 'chat.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()])
+            except (OSError, ValueError):
+                self.n = 0
+        else:
+            r = call(self.url, '/share/join', body={**self.me, 'pin': self.pin})
+            self.token, self.title, self.host = str(r['token'])[:100], str(r.get('title') or '')[:120], clean_name(r.get('host'))
+            (self.dir / 'chat.jsonl').write_text('', encoding='utf-8')   # the mirror starts fresh
+        (self.dir / 'link.json').write_text(json.dumps({'role': 'guest', 'url': self.url, 'host': self.host, 'title': self.title, 'token': self.token}),
+                                           encoding='utf-8')
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):

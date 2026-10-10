@@ -1438,7 +1438,12 @@ let lastTvN = null;
 /** a friend chose a video to watch together: our TV plays it from the same second */
 function tvFromFriends() {
   const lines = (commonState?.games || []).filter(m => m.game?.type === 'tv'), top = lines.length ? lines[lines.length - 1].n : 0;
-  if (lastTvN === null) { lastTvN = top; return; }
+  if (lastTvN === null) {
+    lastTvN = top;
+    const last = lines[lines.length - 1];
+    if (last && Date.now() / 1000 - (last.game.t || 0) < 6 * 3600) loungeTv.together(last.game, last.from);
+    return;
+  }
   for (const m of lines) if (m.n > lastTvN && m.from !== commonState.me) loungeTv.together(m.game, m.from);
   lastTvN = Math.max(lastTvN, top);
 }
