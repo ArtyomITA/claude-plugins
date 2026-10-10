@@ -583,11 +583,12 @@ function deriveVisit() {
     if (plan.closed) DATA.all.push({n: 2e6, from: plan.author, text: `CLOSED v${plan.v}`, ts: now});
   }
   DATA.state = {agents: Object.fromEntries(ppl.filter(p => p.waiting).map(p => [p.name, {id: '', tool: null, target: '', since: null, waiting: now, error_at: null, done_at: null, text_at: null, seen: now, ctx: 0, window: null, model: '', subagents: 0, recent: [], pulse: []}]))};
+  DATA.live = visit.live || [];                       // the owner's last lines, for the TV wall (only if they share the room chat)
   DATA.loaded = true;
   derive();
 }
 if (VISIT && visit) setInterval(async () => {
-  try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { const j = await r.json(); visit = {...visit, people: j.people, plan: j.plan}; deriveVisit(); } } catch (e) {}
+  try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { const j = await r.json(); visit = {...visit, people: j.people, plan: j.plan, live: j.live}; deriveVisit(); } } catch (e) {}
 }, 4000);
 let viewScope = window.chatroomScope ? window.chatroomScope() : 'self', nLastN = -1;
 window.addEventListener('chatroom:scope', e => { viewScope = e.detail.scope; });
@@ -938,7 +939,8 @@ function drawBoards() {
   {
     const {g, canvas: k} = tv; g.fillStyle = '#0d1018'; g.fillRect(0, 0, k.lw, k.lh);
     g.fillStyle = '#4fc3f7'; g.font = '700 22px sans-serif'; g.fillText('● LIVE', 14, 30);
-    const msgs = D.all.filter(m => !m.kind).slice(-4); let y = 62;
+    const visiting = VISIT && visit, msgs = (visiting ? DATA.live || [] : D.all.filter(m => !m.kind)).slice(-4); let y = 62;
+    if (visiting && !msgs.length) { g.fillStyle = '#6b7280'; g.font = '16px sans-serif'; g.fillText(c.lang === 'en' ? 'the chat is not shared' : 'chat non condivisa', 14, 62); }
     g.font = '17px sans-serif';
     for (const m of msgs) {
       g.fillStyle = m.from === D.user ? '#ff80ab' : DATA.profile(m.from).color; g.font = '700 17px sans-serif'; g.fillText(`#${m.n} ${m.from}`, 14, y);

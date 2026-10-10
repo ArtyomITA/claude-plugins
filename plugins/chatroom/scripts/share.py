@@ -558,7 +558,7 @@ def make_handler(share):
                         o = body['office']
                         g['office'] = {'items': o.get('items') if isinstance(o.get('items'), list) else None,
                                        'people': [p for p in (o.get('people') or [])[:40] if isinstance(p, dict)], 'title': str(o.get('title') or '')[:120],
-                                       'common': clean_common(o.get('common')), 'plan': clean_plan(o.get('plan'))}
+                                       'common': clean_common(o.get('common')), 'plan': clean_plan(o.get('plan')), 'live': clean_live(o.get('live'))}
                     return self.send(200, {})
                 if path == '/share/doc':              # a guest shares a document
                     try:
@@ -839,6 +839,18 @@ def clean_plan(p):
     except (TypeError, ValueError, OverflowError):
         return None
     return {'v': v, 'author': clean_name(p.get('author')), 'closed': p.get('closed') is True} if 0 <= v < 100000 else None
+
+
+def clean_live(lines):
+    """the TV wall's last lines from the other side: at most 4, each a number, an author and a bounded text"""
+    out = []
+    for m in (lines if isinstance(lines, list) else [])[-4:]:
+        try:
+            if isinstance(m, dict):
+                out.append({'n': int(m.get('n') or 0), 'from': clean_name(m.get('from')), 'text': str(m.get('text') or '')[:300]})
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return out
 
 
 def clean_person(p):

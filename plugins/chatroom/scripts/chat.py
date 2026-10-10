@@ -1006,7 +1006,9 @@ def cmd_serve(room, a):
         people = [{'name': n, 'emoji': c.get('profiles', {}).get(n, {}).get('emoji', ''), 'color': c.get('profiles', {}).get(n, {}).get('color', '#888888'),
                    'state': 'break' if room.idle_entry(n, items) else 'work', 'waiting': n in asked, 'vote': board['votes'].get(n)} for n in c.get('participants', [])]
         cc = c.get('common', {})
-        return {'items': plan, 'people': people, 'plan': board['plan'], 'title': c.get('title') or c.get('topic', ''),
+        # the TV wall's last lines: only when the owner shares the room chat with friends (the switch), else the wall stays dark
+        live = [{'n': m['n'], 'from': m['from'], 'text': str(m.get('text', ''))[:300]} for m in items if not m.get('kind')][-4:] if c.get('friends_chat') else []
+        return {'items': plan, 'people': people, 'plan': board['plan'], 'live': live, 'title': c.get('title') or c.get('topic', ''),
                 'common': {'all': bool(cc.get('all')), 'who': list(cc.get('who', []))[:40]}}
     tag_seen = {'n': None}
 
@@ -1355,7 +1357,7 @@ def cmd_serve(room, a):
                     people = [sharing.clean_person(p) for p in (v.get('people') or [])[:40] if isinstance(p, dict)]
                     present = [sharing.clean_person(p) for p in (v.get('present') or [])[:60] if isinstance(p, dict)]
                     body = {'items': plan, 'people': people, 'host': sharing.clean_name(v.get('host')), 'title': str(v.get('title', ''))[:120],
-                            'present': present, 'common': sharing.clean_common(v.get('common')), 'plan': sharing.clean_plan(v.get('plan'))}
+                            'present': present, 'common': sharing.clean_common(v.get('common')), 'plan': sharing.clean_plan(v.get('plan')), 'live': sharing.clean_live(v.get('live'))}
                     return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
                 except (ValueError, TypeError, KeyError, PermissionError, OSError) as exc:
                     return self.send(502, str(exc), 'text/plain')
