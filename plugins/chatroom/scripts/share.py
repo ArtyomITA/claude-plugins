@@ -558,7 +558,7 @@ def make_handler(share):
                         o = body['office']
                         g['office'] = {'items': o.get('items') if isinstance(o.get('items'), list) else None,
                                        'people': [p for p in (o.get('people') or [])[:40] if isinstance(p, dict)], 'title': str(o.get('title') or '')[:120],
-                                       'common': clean_common(o.get('common'))}
+                                       'common': clean_common(o.get('common')), 'plan': clean_plan(o.get('plan'))}
                     return self.send(200, {})
                 if path == '/share/doc':              # a guest shares a document
                     try:
@@ -801,6 +801,46 @@ def clean_room_config(c):
             'profiles': profiles}
 
 
+PLAN_RE, CLOSED_RE = re.compile(r'^\s*(PLAN|PIANO)\s*v(\d+)', re.I), re.compile(r'^\s*(CLOSED|CHIUSO)\s*v?(\d+)?', re.I)
+VOTE_RE = re.compile(r'(VOTE|VOTO)\s*v?(\d+)\s*:\s*(yes|no|sì|si)', re.I)
+
+
+def board_of(items):
+    """what the whiteboard shows of a chat: the plan (version, author, closed or not) and each agent's vote on it (the same
+    reading as office.js derive())"""
+    plan = closed = None
+    for m in items:
+        if m.get('kind'):
+            continue
+        text = str(m.get('text', ''))
+        p = PLAN_RE.match(text)
+        if p:
+            plan = {'v': int(p.group(2)), 'author': m.get('from', ''), 'n': m.get('n', 0)}
+        c = CLOSED_RE.match(text)
+        if c and plan and (not c.group(2) or int(c.group(2)) >= plan['v']):
+            closed = {'v': int(c.group(2)) if c.group(2) else plan['v'], 'n': m.get('n', 0)}
+    if closed and plan and plan['n'] > closed['n']:
+        closed = None
+    votes = {}
+    if plan:
+        for m in items:
+            v = VOTE_RE.search(str(m.get('text', '')))
+            if v and int(v.group(2)) == plan['v'] and m.get('n', 0) > plan['n']:
+                votes[m.get('from', '')] = 'no' if re.search('no', v.group(3), re.I) else 'yes'
+    return {'plan': {'v': plan['v'], 'author': plan['author'], 'closed': bool(closed)} if plan else None, 'votes': votes}
+
+
+def clean_plan(p):
+    """the whiteboard's plan from the other side: a version, an author, closed or not"""
+    if not isinstance(p, dict):
+        return None
+    try:
+        v = int(p.get('v'))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return {'v': v, 'author': clean_name(p.get('author')), 'closed': p.get('closed') is True} if 0 <= v < 100000 else None
+
+
 def clean_person(p):
     """a presence entry from the other side, for drawing: bounded strings, a real colour, nothing else"""
     out = {'name': clean_name(p.get('name')), 'emoji': str(p.get('emoji', ''))[:8], 'state': 'work' if p.get('state') == 'work' else 'break',
@@ -809,6 +849,10 @@ def clean_person(p):
         out['host'] = True
     if p.get('pos'):
         out['pos'] = clean_pos(p['pos'])
+    if p.get('waiting') is True:
+        out['waiting'] = True
+    if p.get('vote') in ('yes', 'no'):
+        out['vote'] = p['vote']
     return out
 
 
@@ -1071,6 +1115,9 @@ def _prova():
             raise AssertionError('a wrong answer to an ask got in')
         host.ask_answer(g, 1, True, 'AIUTO1', 'haiku', 20)
         assert any(p['name'] == 'BOB·AIUTO1' and p['guest'] == 'BOB' for p in host.people())
+        board = board_of([{'n': 1, 'from': 'L', 'text': 'PLAN v3 x'}, {'n': 2, 'from': 'A', 'text': 'VOTE v3: yes'}, {'n': 3, 'from': 'B', 'text': 'VOTE v3: no'}])
+        assert board == {'plan': {'v': 3, 'author': 'L', 'closed': False}, 'votes': {'A': 'yes', 'B': 'no'}}, board
+        assert clean_plan({'v': 'x'}) is None and clean_person({'name': 'A', 'vote': 'maybe'}).get('vote') is None
         host.kick('BOB')
         for _ in range(40):
             time.sleep(0.15)

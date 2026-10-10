@@ -1000,10 +1000,14 @@ def cmd_serve(room, a):
         """what a visiting friend sees: the user's own plan (or the default) and every agent's coarse presence"""
         c, items = room.config(), room.messages()
         plan = json.loads(OFFICE_FILE.read_text(encoding='utf-8')).get('items') if OFFICE_FILE.is_file() else None
+        with lock:
+            asked = {n for n, a in activity.state()['agents'].items() if a.get('waiting')}      # who waits for a permission
+        board = sharing.board_of(items)                                                      # the whiteboard: the plan and the votes
         people = [{'name': n, 'emoji': c.get('profiles', {}).get(n, {}).get('emoji', ''), 'color': c.get('profiles', {}).get(n, {}).get('color', '#888888'),
-                   'state': 'break' if room.idle_entry(n, items) else 'work'} for n in c.get('participants', [])]
+                   'state': 'break' if room.idle_entry(n, items) else 'work', 'waiting': n in asked, 'vote': board['votes'].get(n)} for n in c.get('participants', [])]
         cc = c.get('common', {})
-        return {'items': plan, 'people': people, 'title': c.get('title') or c.get('topic', ''), 'common': {'all': bool(cc.get('all')), 'who': list(cc.get('who', []))[:40]}}
+        return {'items': plan, 'people': people, 'plan': board['plan'], 'title': c.get('title') or c.get('topic', ''),
+                'common': {'all': bool(cc.get('all')), 'who': list(cc.get('who', []))[:40]}}
     tag_seen = {'n': None}
 
     def lent_helpers():
@@ -1351,7 +1355,7 @@ def cmd_serve(room, a):
                     people = [sharing.clean_person(p) for p in (v.get('people') or [])[:40] if isinstance(p, dict)]
                     present = [sharing.clean_person(p) for p in (v.get('present') or [])[:60] if isinstance(p, dict)]
                     body = {'items': plan, 'people': people, 'host': sharing.clean_name(v.get('host')), 'title': str(v.get('title', ''))[:120],
-                            'present': present, 'common': sharing.clean_common(v.get('common'))}
+                            'present': present, 'common': sharing.clean_common(v.get('common')), 'plan': sharing.clean_plan(v.get('plan'))}
                     return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
                 except (ValueError, TypeError, KeyError, PermissionError, OSError) as exc:
                     return self.send(502, str(exc), 'text/plain')

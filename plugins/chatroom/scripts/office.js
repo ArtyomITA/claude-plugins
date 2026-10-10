@@ -572,13 +572,22 @@ function deriveVisit() {
   const now = Date.now() / 1000, ppl = visit.people || [];
   DATA.config = {...DATA.config, participants: ppl.map(p => p.name), profiles: Object.fromEntries(ppl.map(p => [p.name, {emoji: p.emoji, color: p.color}])),
                  user_name: localUser, self_names: [], title: visit.title, heartbeat: 3600,
+                 left: visit.plan && !ppl.some(p => p.name === visit.plan.author) ? [visit.plan.author] : [],      // the plan's author (the owner's lead) is not an agent of the board
                  common: {...DATA.config.common, all: !!visit.common?.all, who: visit.common?.who || []}};   // the owner's rule for the common room, not ours
   DATA.all = ppl.filter(p => p.state === 'break').map((p, i) => ({n: i + 1, from: p.name, kind: 'idle', text: '', ts: now}));
-  DATA.state = {agents: {}}; DATA.loaded = true;
+  // the owner's whiteboard: who waits for a permission, the plan and the votes, rebuilt as the chat lines that say them
+  let n = 1e6; const plan = visit.plan;              // fixed numbers: a closing is news only when it first shows, not at every refresh
+  if (plan) {
+    DATA.all.push({n: n++, from: plan.author, text: `PLAN v${plan.v}`, ts: now});
+    for (const p of ppl) if (p.vote) DATA.all.push({n: n++, from: p.name, text: `VOTE v${plan.v}: ${p.vote}`, ts: now});
+    if (plan.closed) DATA.all.push({n: 2e6, from: plan.author, text: `CLOSED v${plan.v}`, ts: now});
+  }
+  DATA.state = {agents: Object.fromEntries(ppl.filter(p => p.waiting).map(p => [p.name, {id: '', tool: null, target: '', since: null, waiting: now, error_at: null, done_at: null, text_at: null, seen: now, ctx: 0, window: null, model: '', subagents: 0, recent: [], pulse: []}]))};
+  DATA.loaded = true;
   derive();
 }
 if (VISIT && visit) setInterval(async () => {
-  try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { visit = {...visit, people: (await r.json()).people}; deriveVisit(); } } catch (e) {}
+  try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { const j = await r.json(); visit = {...visit, people: j.people, plan: j.plan}; deriveVisit(); } } catch (e) {}
 }, 4000);
 let viewScope = window.chatroomScope ? window.chatroomScope() : 'self', nLastN = -1;
 window.addEventListener('chatroom:scope', e => { viewScope = e.detail.scope; });
