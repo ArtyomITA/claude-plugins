@@ -131,8 +131,9 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-palette small { opacity: .75; }
 #office .o-hint { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); pointer-events: none; padding: 6px 14px; border-radius: 3px;
   background: #f5b400; color: #222; font-weight: 800; font-size: 14px; box-shadow: 2px 2px 0 #0008; display: none; }
-#office .o-help { position: absolute; left: 12px; bottom: 14px; max-width: calc(100% - 640px); font-size: 11px; opacity: .8; pointer-events: none; text-shadow: 0 1px 2px #000c; }
-@container (max-width: 760px) { #office .o-help { display: none; } }
+#office .o-help { position: absolute; left: 12px; bottom: 60px; max-width: min(400px, 46%); padding: 7px 11px; border-radius: 9px; background: #14151de6; box-shadow: 0 6px 16px #0004;
+  font-size: 11.5px; line-height: 1.45; pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; z-index: 2; }
+#office .o-help.o-show { opacity: 1; transform: none; }
 @keyframes o-in { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes blink { 50% { opacity: .55; } }
@@ -162,8 +163,8 @@ export const L = {
        games: 'Games', tris: 'Tic-tac-toe', morra: 'Rock paper scissors', dice: 'Dice', rolls: 'rolls the dice', opens: g => `opens a game of ${g}`,
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
-       quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first',
-       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
+       quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first', helpBtn: 'Help',
+       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
        pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
@@ -205,8 +206,8 @@ export const L = {
        games: 'Giochi', tris: 'Tris', morra: 'Morra cinese', dice: 'Dadi', rolls: 'tira i dadi', opens: g => `apre una partita a ${g}`,
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
-       quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita',
-       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
+       quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita', helpBtn: 'Aiuto',
+       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
        pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
@@ -248,8 +249,9 @@ export function replayGames(lines) {
     const busy = p => [...games.values()].some(y => !y.done && y.players.includes(p));   // one open game at a time
     if (g.op === 'new') {
       if (x) continue;
-      // a game of mine that nobody joined gives way to the new one (it would block every new game for ever)
-      for (const y of games.values()) if (!y.done && y.players.length === 1 && y.players[0] === who) y.done = {quit: who, winner: null};
+      // a game of mine that nobody joined, or where nobody has played a move yet, gives way to the new one (it would block every new game for ever)
+      const untouched = y => y.type === 'pool' ? !y.shots.length : y.type === 'tris' ? y.board.every(c => !c) : !Object.keys(y.commits).length;
+      for (const y of games.values()) if (!y.done && y.players.includes(who) && (y.players.length === 1 || untouched(y))) y.done = {quit: who, winner: null};
       if (busy(who)) continue;
       // someone else of the same kind is already waiting alone: both clicked "play with a friend" together, so this is the answer
       const waiting = [...games.values()].find(y => !y.done && y.type === g.type && y.players.length === 1 && y.players[0] !== who);
@@ -301,7 +303,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     <div class="o-btns"><div class="o-grp o-seg"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button></div>
       <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button><button data-b="look"></button></div>
       <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button><button data-b="follow"></button><button data-b="reset"></button></div>
-      <div class="o-grp"><button data-b="quality"></button><button data-b="notify"></button></div></div>
+      <div class="o-grp"><button data-b="quality"></button><button data-b="notify"></button><button data-b="help"></button></div></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
   const cp = root.querySelector('.o-common');
@@ -314,6 +316,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
     else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
+    else if (k === 'help') showHelp(10000);
   });
   /** a bar button: an icon and a label (the label folds away on a narrow office), a tip, and whether it is switched on; touches the DOM only when it changed */
   const setBtn = (k, icon, text, tip = '', on = null) => {
@@ -325,6 +328,11 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     b.classList.toggle('o-on', !!on);
     if (on !== null) b.setAttribute('aria-pressed', String(!!on)); else b.removeAttribute('aria-pressed');
   };
+  // the help line: shown for a few seconds at the start, gone at the first click in the office, back with the Help button; never a fixture over the panels
+  const helpEl = root.querySelector('.o-help'); let helpTimer = 0;
+  const showHelp = ms => { helpEl.classList.add('o-show'); clearTimeout(helpTimer); helpTimer = setTimeout(() => helpEl.classList.remove('o-show'), ms); };
+  root.addEventListener('pointerdown', e => { if (!e.target.closest('.o-btns')) { clearTimeout(helpTimer); helpEl.classList.remove('o-show'); } }, true);
+  setTimeout(() => showHelp(14000), 1500);
   const labels = new Map(), itemLabels = new Map();
 
   function label(name) {
@@ -374,8 +382,8 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       setBtn('edit', '🛠', L.edit, '', !!d.edit); setBtn('common', '🛋', L.common, '', cp.classList.contains('o-open')); setBtn('look', '👤', L.look);
       setBtn('pov', '👁', 'POV', '', !!d.pov); setBtn('run', '🏃', 'x2', L.run + ' (Shift)', !!d.run);
       setBtn('follow', '🎯', L.follow, '', !!d.follow); setBtn('reset', '🎥', L.reset);
-      setBtn('quality', '✨', L.quality(d.quality)); setBtn('notify', '🔔', L.notify, '', notifyOn());
-      root.querySelector('.o-help').textContent = d.pov ? t().povHelp : t().help;
+      setBtn('quality', '✨', L.quality(d.quality)); setBtn('notify', '🔔', L.notify, '', notifyOn()); setBtn('help', '❓', L.helpBtn);
+      const ht = d.pov ? t().povHelp : t().help; if (helpEl.textContent !== ht) helpEl.textContent = ht;
     },
     inspect(d) {
       if (!d) { insp.classList.remove('o-open'); return; }
@@ -561,7 +569,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         if (x.type === 'pool') {
           const myTurn = !x.done && x.players.length === 2 && x.players[x.turn] === me;
           const turn = !x.done && x.players.length === 2 ? (myTurn ? L.yourTurn : L.theirTurn(x.players[x.turn])) : '';
-          const open = !x.done && mine && x.players.length === 2 ? `<button data-gm="openpool">🎱 ${esc(L.openTable)}</button> ` : '';
+          const open = !x.done && mine ? `<button data-gm="openpool">${x.players.length === 2 ? '🎱' : '⏳'} ${esc(L.openTable)}</button> ` : '';
           return `<div class="o-game"><b>🎱 ${esc(L.pool)}</b> <span class="o-meta">${vs}</span><div class="o-meta">${esc(status || turn)}</div>${open}${join}</div>`;
         }
         const chosen = !!x.commits[me], picks = x.done ? x.players.map(p => `${esc(p)} ${PICK[x.reveals[p]] || '?'}`).join(' · ') : '';

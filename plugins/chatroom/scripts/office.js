@@ -1095,9 +1095,14 @@ const ui = createUI(root, {
   onShare: async (action, extra) => { await post('share', {action, ...extra}); pollCommon(); },
   onJoin: async (url, pin) => { const r = await post('join', url === null ? {leave: true} : {url, pin}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
   onCommonWrite: async text => { await post('common/post', {text}); pollCommon(); },
-  onGame: async (game, text) => { const r = await post('common/post', {text, game}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onGame: async (game, text) => {
+    const r = await post('common/post', {text, game});
+    if (r && !r.ok) { ui.roomTip(await r.text(), 20, 120); return pollCommon(); }
+    if (game.type === 'pool' && (game.op === 'new' || game.op === 'join')) return openMyPool();            // the panel's pool button opens the table too
+    pollCommon();
+  },
   onAnswer: async (id, ok, extra) => { const r = await post('join/answer', {id: +id, ok, ...extra}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
-  onOpenPool: () => { const g = myPool(); if (g?.players.length === 2) games.openPool(g); },
+  onOpenPool: () => { const g = myPool(); if (g) openPoolTable(g); },
   onCommonDoc: async (name, data, error) => {
     if (error) return ui.roomTip(error, 20, 120);
     const r = await post('common/doc', {name, data}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon();
@@ -1523,7 +1528,17 @@ const myPool = () => replayGames(commonState?.games || []).games.find(x => x.typ
 const friendName = () => commonState?.bridge?.joined ? commonState.bridge.host : commonState?.share?.guests?.[0]?.name || null;
 /** a table with a friend: open with both players, or waiting for the friend (one player); it turns into the game by itself when the friend comes in */
 function openPoolTable(g) {
-  games.openPool(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolCancel}`, game: {type: 'pool', op: 'quit', id: g.id}}).then(() => pollCommon())});
+  games.openPool(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎱 ${myName()} ${ui.t().quits}`, game: {type: 'pool', op: 'quit', id: g.id}}).then(() => pollCommon())});
+}
+/** my pool game as soon as its line is back: from a guest it goes out and returns through the host, a few seconds at most */
+async function openMyPool() {
+  for (let i = 0; i < 16; i++) {
+    await pollCommon();
+    const g = myPool();
+    if (g) return openPoolTable(g);
+    await new Promise(done => setTimeout(done, 400));
+  }
+  ui.roomTip(ui.t().poolLate, 20, 120);
 }
 function openGame(type) {
   if (type === 'pingPong') return games.pingPong();
@@ -1535,16 +1550,11 @@ function openGame(type) {
     if (op === 'open') return openPoolTable(mine);
     const r = await post('common/post', {text: `🎱 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: 'pool', op, id: op === 'join' ? join.id : Math.random().toString(16).slice(2, 10)}});
     if (r && !r.ok) return ui.roomTip(await r.text(), 20, 120);
-    for (let i = 0; i < 16; i++) {                       // from a guest the line goes out and comes back through the host: wait for it, a few seconds at most
-      await pollCommon();
-      const g = myPool();
-      if (g) return openPoolTable(g);
-      await new Promise(done => setTimeout(done, 400));
-    }
-    ui.roomTip(ui.t().poolLate, 20, 120);
+    return openMyPool();
   };
-  games.poolMenu({friends: linked() && !busyOther, open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null, waiting: mine?.players.length === 1,
-                  friend: friendName(), join: join?.players[0] || null, start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open')});
+  games.poolMenu({friends: linked() && !busyOther, open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null, waiting: mine?.players.length === 1, restart: mine?.players.length === 2 && !mine.shots.length,
+                  friend: friendName(), join: join ? join.players[0] : null,           // join is false (not undefined) when I already have a game: join?.players[0] threw and the table did nothing
+                  start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open')});
 }
 let poolSeen = 0;
 /** a friend shot at an open pool table: it plays the shot out (only the shots the replay accepted); a table that waited for the friend becomes the game */
