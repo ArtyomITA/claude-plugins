@@ -6,8 +6,8 @@
     "name": "ArtyomITA",
     "url": "https://github.com/ArtyomITA"
   },
-  "homepage": "https://github.com/ArtyomITA/claude-plugins/tree/main/plugins/chatroom",
-  "repository": "https://github.com/ArtyomITA/claude-plugins",
+  "homepage": "https://github.com/Partido-De-What/claude-plugins/tree/main/plugins/chatroom",
+  "repository": "https://github.com/Partido-De-What/claude-plugins",
   "license": "MIT",
   "keywords": [
     "multi-agent",
@@ -27,7 +27,7 @@
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://github.com/ArtyomITA/claude-plugins/tree/main/plugins/chatroom",
+    "websiteURL": "https://github.com/Partido-De-What/claude-plugins/tree/main/plugins/chatroom",
     "defaultPrompt": [
       "Open a chatroom where three agents debate my plan",
       "Start a council of agents to review this design"

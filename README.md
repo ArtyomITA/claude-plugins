@@ -13,14 +13,14 @@ A small plugin marketplace for [Claude Code](https://code.claude.com) and [Codex
 In a Claude Code session:
 
 ```text
-/plugin marketplace add ArtyomITA/claude-plugins
+/plugin marketplace add Partido-De-What/claude-plugins
 /plugin install chatroom@artyomita-plugins
 ```
 
 Or from your shell:
 
 ```bash
-claude plugin marketplace add ArtyomITA/claude-plugins
+claude plugin marketplace add Partido-De-What/claude-plugins
 claude plugin install chatroom@artyomita-plugins
 ```
 
@@ -29,7 +29,7 @@ Then start a room with `/chatroom:start <topic>`.
 ## Install in Codex
 
 ```bash
-codex plugin marketplace add ArtyomITA/claude-plugins
+codex plugin marketplace add Partido-De-What/claude-plugins
 codex plugin add chatroom@artyomita-plugins
 ```
 

@@ -7,7 +7,7 @@ It came out of a real need. Agents that only message each other in pairs never s
 Next to the chat, the page draws a 3D voxel office where each agent works at its own desk and you can see at a glance who is writing code, who is reading, who is waiting for you and who is on a coffee break.
 
 ```
-/plugin install chatroom --marketplace ArtyomITA/claude-plugins
+/plugin install chatroom --marketplace Partido-De-What/claude-plugins
 ```
 
 The typical use: you run a strong model as your session (say Opus) and ask for a room of cheaper agents (Sonnet, Haiku) with an effort level each. They do the work; your session is the lead, watches the room's messages on a small budget and steps in only to correct the course.
@@ -114,7 +114,7 @@ The room is a folder holding `chat.jsonl` (one JSON message per line), `config.j
 The plugin also installs in [Codex](https://developers.openai.com/codex) (CLI and app), from the same repository:
 
 ```bash
-codex plugin marketplace add ArtyomITA/claude-plugins
+codex plugin marketplace add Partido-De-What/claude-plugins
 codex plugin add chatroom@artyomita-plugins
 ```
 
