@@ -58,6 +58,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+TV_DIR = Path.home() / '.claude' / 'chatroom' / 'tv'                    # the lounge TV: <channel>/*.mp4|webm, youtube.json
+TV_YOUTUBE = {'YouTube · Minecraft parkour': ['0c4KWfPhgWA'], 'YouTube · Subway Surfers': ['L_fcrOyoWZ8']}
 SETTINGS_FILE = Path.home() / '.claude' / 'chatroom' / 'settings.json'   # the user's lasting choices, for every room
 OFFICE_FILE = Path.home() / '.claude' / 'chatroom' / 'office.json'   # the user's own office layout, never in a repo
 sys.stdout.reconfigure(encoding='utf-8')
@@ -706,6 +708,23 @@ def live_rooms():
     return {k: v for k, v in rooms.items() if time.time() - float(v.get('ts', 0)) < 60}
 
 
+def tv_channels():
+    """the TV's channels: one per folder of videos, then the YouTube lists (video ids only)"""
+    local = []
+    if TV_DIR.is_dir():
+        for d in sorted(TV_DIR.iterdir()):
+            files = sorted(f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() in ('.mp4', '.webm')) if d.is_dir() and not d.name.startswith('_') else []
+            if files and re.fullmatch(r'[\w.-]{1,60}', d.name):
+                local.append({'name': d.name, 'files': [f for f in files if re.fullmatch(r'[\w.-]{1,120}', f)]})
+    try:
+        yt = json.loads((TV_DIR / 'youtube.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        yt = TV_YOUTUBE
+    youtube = [{'name': str(name)[:60], 'youtube': [i for i in ids if isinstance(i, str) and re.fullmatch(r'[\w-]{11}', i)][:50]}
+               for name, ids in (yt.items() if isinstance(yt, dict) else [])]
+    return local + [c for c in youtube if c['youtube']]
+
+
 def settings():
     """lend_mode: 'full' (a lent helper works for real inside its own folder: commands, a venv, tests) or 'safe' (it only
     talks and writes drafts); full by default"""
@@ -1040,6 +1059,30 @@ def cmd_serve(room, a):
                 return self.send(200, viewer.read_bytes(), 'text/html; charset=utf-8')
             if re.fullmatch(r'/office(-[a-z]+)?\.js', path):
                 return self.send(200, (HERE / path[1:]).read_bytes(), 'text/javascript; charset=utf-8')
+            if path == '/tv.json':                    # the lounge TV's channels
+                return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')
+            m = re.fullmatch(r'/tv/([\w.-]{1,60})/([\w.-]{1,120}\.(?:mp4|webm))', path)
+            if m:                                      # a local video, by ranges (seeking, looping)
+                f = (TV_DIR / m[1] / m[2]).resolve()
+                if not f.is_file() or TV_DIR.resolve() not in f.parents:
+                    return self.send(404, 'no such video', 'text/plain')
+                size = f.stat().st_size
+                r = re.fullmatch(r'bytes=(\d*)-(\d*)', self.headers.get('Range') or '')
+                start = int(r[1]) if r and r[1] else 0
+                end = min(size - 1, int(r[2]) if r and r[2] else start + 4 * 1024 * 1024 - 1)
+                if start >= size:
+                    return self.send(416, 'out of range', 'text/plain')
+                with f.open('rb') as fh:
+                    fh.seek(start)
+                    data = fh.read(end - start + 1)
+                self.send_response(206 if r else 200)
+                self.send_header('Content-Type', 'video/webm' if f.suffix.lower() == '.webm' else 'video/mp4')
+                self.send_header('Accept-Ranges', 'bytes')
+                if r:
+                    self.send_header('Content-Range', f'bytes {start}-{start + len(data) - 1}/{size}')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             if path.startswith('/vendor/'):
                 target = (vendor / path[len('/vendor/'):]).resolve()
                 kinds = {'.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8'}

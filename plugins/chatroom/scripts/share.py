@@ -584,7 +584,7 @@ class Bridge:
                 break
             except (ValueError, OSError) as exc:
                 self.error = str(exc)
-            self.stopped.wait(0.8)                             # often enough for the figures to walk smoothly
+            self.stopped.wait(0.3)                             # often enough for the figures to walk smoothly
         (self.dir / 'link.json').unlink(missing_ok=True)
 
     def push(self):

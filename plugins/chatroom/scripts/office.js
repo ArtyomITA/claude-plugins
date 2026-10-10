@@ -12,6 +12,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
+import {createTV} from './office-tv.js';
 import {createUI, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
 
 const pref = (k, d) => { try { const v = localStorage.getItem('chatroom.office.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -42,8 +43,8 @@ const HOME = {pos: new THREE.Vector3(...DEFAULT_LAYOUT.camera.pos), target: new 
 camera.position.copy(HOME.pos);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.copy(HOME.target);
-Object.assign(controls, {enableDamping: true, dampingFactor: 0.08, minDistance: 6, maxDistance: 75, minPolarAngle: 0.3,
-                         maxPolarAngle: 1.3, minAzimuthAngle: -1.3, maxAzimuthAngle: 1.3, screenSpacePanning: true});
+Object.assign(controls, {enableDamping: true, dampingFactor: 0.08, minDistance: 6, maxDistance: 75, minPolarAngle: 0.02,
+                         maxPolarAngle: 1.55, minAzimuthAngle: -Infinity, maxAzimuthAngle: Infinity, screenSpacePanning: true});
 
 const hemi = new THREE.HemisphereLight('#fff3df', '#5b4632', 0.9);
 const sun = new THREE.DirectionalLight('#ffe8c4', 2.1);
@@ -696,6 +697,7 @@ function nearby() {
   if (assistant && d(assistant.pos) < 1.9 && facing(assistant.pos) > 0.3) opts.push({kind: 'talk', name: D.lead, k: d(assistant.pos)});
   if (d(BREW.pos) < 1.3) opts.push({kind: 'coffee', k: d(BREW.pos)});
   for (const s of sitSpots()) { const k = Math.min(d(s.pos), d(outOf(s))); if (k < 1.3) opts.push({kind: 'sit', seat: s, k: k + 0.2}); }
+  if (loungeTv.near(boss.pos) < 1.4) opts.push({kind: 'zap', k: loungeTv.near(boss.pos)});
   for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
   return opts.sort((a, b) => a.k - b.k)[0] || null;
 }
@@ -706,6 +708,7 @@ function interact() {
   if (t.kind === 'coffee') return walkTo(BREW.pos, BREW, brew);
   if (t.kind === 'sit') return walkTo(outOf(t.seat), t.seat);
   if (t.kind === 'talk') return talkTo(t.name);
+  if (t.kind === 'zap') return loungeTv.next();
   watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
 }
 let watching = null;
@@ -1018,7 +1021,7 @@ document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftHeld = fal
 renderer.domElement.addEventListener('pointermove', e => {                    // first person: drag to look around
   if (!pov || !(e.buttons & 1)) return;
   watching = null;
-  me.yaw = Math.max(-2.4, Math.min(2.4, me.yaw - e.movementX * 0.005));
+  me.yaw = (me.yaw - e.movementX * 0.005 + Math.PI * 3) % (Math.PI * 2) - Math.PI;
   me.pitch = Math.max(-1.1, Math.min(0.7, me.pitch - e.movementY * 0.004));
 });
 const ui = createUI(root, {
@@ -1123,11 +1126,11 @@ setInterval(() => {
     presenceSent = key;
     post('presence', pos).then(r => { if (r && r.status === 404 && !oldServerSaid) { oldServerSaid = true; ui.roomTip(ui.t().oldServer, 20, 120); } });
   }
-}, 400);
+}, 200);
 setInterval(async () => {
   if (!linked()) return;
   try { const r = await fetch('presence.json', {cache: 'no-store'}); if (r.ok) { presence = await r.json(); placeOthers(); } } catch (e) {}
-}, 700);
+}, 300);
 function placeOthers() {
   const meName = presence.me, here = 'visit:' + (visit ? visit.host : meName);
   for (const p of presence.people || []) {
@@ -1206,6 +1209,7 @@ renderer.domElement.addEventListener('click', e => {
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
+  if (hit?.object.userData.remote) return loungeTv.next();                       // the TV's remote: next channel
   const name = hit?.object.userData.person;
   if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
   select(null);
@@ -1302,7 +1306,7 @@ function frame(now) {
     if (hintAcc > 0.2) { hintAcc = 0; const n = pov && povLocked ? nearby() : atMyDesk() ? {kind: 'desk'} : null; ui.hint(n ? hintText(n) : ''); }
     boss.act = boss.bubble && boss.bubble.until > Date.now() / 1000 ? 'speak' : t < (me.waveUntil || 0) ? 'wave' : me.act;
     boss.speed = running || shiftHeld ? 2 : 1;
-    boss.update(dt, t); tendMe(dt, t); checkDoor();
+    boss.update(dt, t); tendMe(dt, t); checkDoor(); tendCup(t);
   }
   if (assistant) { assistant.act = assistant.bubble && assistant.bubble.until > Date.now() / 1000 ? 'speak' : 'read'; assistant.update(dt, t); }
   screenAcc += dt;
@@ -1313,7 +1317,7 @@ function frame(now) {
   for (const at of STEAM) if (Math.random() < dt * 3) emit(1, at, {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9});
   if (printJob > 0 && Math.random() < dt * 2) { printJob -= 1; emit(1, PAPER, {color: '#ffffff', speed: 0.2, up: 1.5, life: 2, size: 0.18, gravity: -1.5, glow: 1}); }
   stepParticles(dt); stepPlanes(dt);
-  cutWalls();
+  cutWalls(); loungeTv.update(t);
   if (pov || flyHome) flyCamera(dt);
   else {
     if (tween) {
@@ -1341,6 +1345,14 @@ function cutWalls() {
 
 // first person: the camera sits in front of the figure's face and looks where the figure faces (plus where the mouse
 // turned the head); it flies there first, then stays locked to the eyes. The figure's own head hides once inside it.
+const fpCup = V.mug('#f5f5f5');                                            // the cup as you see it in first person
+fpCup.position.set(0.2, -0.24, -0.5); fpCup.visible = false; camera.add(fpCup); scene.add(camera);
+function tendCup(t) {
+  fpCup.visible = !!(pov && povLocked && me.cup?.visible);
+  if (!fpCup.visible) return;
+  const sip = Math.max(0, Math.sin(((t % 7) / 7) * Math.PI * 2 - 1.2)) ** 3;   // every 7 s, up to the lips
+  fpCup.position.set(0.2 - sip * 0.12, -0.24 + sip * 0.16, -0.5 + sip * 0.18); fpCup.rotation.set(sip * 0.9, 0, -sip * 0.2);
+}
 function flyCamera(dt) {
   let pos = HOME.pos, look = HOME.target, fov = 30;
   if (pov && boss) {
@@ -1375,6 +1387,11 @@ if (FORCE) Object.assign(window, {                                        // tes
 ui.setLang(DATA.config.lang);
 if (visit) ui.visitBanner(ui.t().visiting(visit.host), () => leaveBy(''));
 window.addEventListener('chatroom:data', () => ui.setLang(DATA.config.lang));
+// the lounge TV: the first TV on a stand, its remote on the low table nearest to it
+const itemOf = m => (LAYOUT.items || [])[m.userData.src];
+const tvMesh = ITEM_MESHES.find(m => itemOf(m)?.type === 'tvStand');
+const tvTable = tvMesh && ITEM_MESHES.filter(m => itemOf(m)?.type === 'lowTable').sort((a, b) => a.position.distanceTo(tvMesh.position) - b.position.distanceTo(tvMesh.position))[0];
+const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: tvTable, raycastables, say: t => ui.placeName(t)});
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();
 pollState();

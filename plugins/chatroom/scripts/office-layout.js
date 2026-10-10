@@ -19,7 +19,7 @@ export const CATALOG = {
   confTable: {model: 'confTable', foot: [2.8, 1.2]},
   meetChair: {model: 'meetChair', foot: [0.45, 0.45], seats: [{x: 0, z: 0, y: 0.1, rot: PI, tag: 'meet'}]},
   kitchen: {model: 'kitchen', args: ['len'], foot: [2.8, 0.7], off: [0, 0.05],
-            fx: {machine: [0.25, 1.55, 0], led: [0.2, 1.05, 0.22], brew: {x: 0.25, z: 0.65, rot: PI}}},
+            fx: {machine: [0.25, 1.55, 0], led: [0.2, 1.05, 0.22], brew: {x: 0.25, z: 0.9, rot: PI}}},
   upperCabinets: {model: 'upperCabinets', args: ['len'], y: 1.55},
   fridge: {model: 'fridge', foot: [0.8, 0.8]},
   waterCooler: {model: 'waterCooler', foot: [0.45, 0.45]},
