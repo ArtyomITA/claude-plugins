@@ -14,6 +14,7 @@ import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office
 import {createEditor} from './office-edit.js';
 import {createTV} from './office-tv.js';
 import {createGames} from './office-games.js';
+import {mergeStatic} from './office-merge.js';
 import {createUI, replayGames, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
 
 const pref = (k, d) => { try { const v = localStorage.getItem('chatroom.office.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -71,8 +72,11 @@ function applyQuality() {
   const dpr = window.devicePixelRatio || 1;
   renderer.setPixelRatio(quality === 'alta' ? Math.min(2, Math.max(1.5, dpr)) : quality === 'media' ? Math.min(dpr, 1.25) : 1);
   renderer.shadowMap.enabled = quality !== 'bassa';
+  bloom.enabled = quality === 'alta';                                          // the glow costs about 14 ms a frame and barely shows: high quality only
+  renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;   // redrawn on a schedule (see frame)
   sun.shadow.mapSize.setScalar(quality === 'alta' ? 4096 : 2048);
   sun.shadow.map?.dispose(); sun.shadow.map = null;
+  for (const rt of [composer.renderTarget1, composer.renderTarget2]) { const ms = quality === 'alta' ? 4 : 2; if (rt.samples !== ms) { rt.samples = ms; rt.dispose(); } }
   resize();
 }
 
@@ -412,6 +416,7 @@ function buildDesk(d, i) {
   if (i % 2) put(V.deskLamp(), -0.62, 0.71, -0.2); else put(V.plant(i + 2, false), -0.62, 0.71, -0.22);
   if (i % 4 === 1) put(V.packModel('Misc/Electronics/Office_Misc_Phone', {scale: 0.03}), -0.35, 0.71, 0.05, -0.3);
   put(V.packModel('Misc/Trashcans/Office_Misc_Trashcan_Small_0' + (1 + i % 3), {scale: 0.04}), 0.66, 0, 0.12);
+  g.userData.kit = new Set(g.children);                                       // what never moves: baked into big meshes (office-merge.js); the chair, screen and beacon stay apart
   const chair = put(chairFor(null), 0, 0, 0.8, Math.PI);
   const scr = board(0.82, 0.5, 192); scr.mesh.position.set(0, 1.2, -0.21); g.add(scr.mesh);
   { const {g: c, canvas: k} = scr; c.fillStyle = '#0b0e15'; c.fillRect(0, 0, k.lw, k.lh); c.fillStyle = '#1b2230'; c.fillRect(k.lw / 2 - 6, k.lh / 2 - 6, 12, 12); scr.tex.needsUpdate = true; }
@@ -455,6 +460,8 @@ function deskLayout(names) {
   }
 }
 
+const _cupAt = new THREE.Vector3();
+let frameT = 0;                                                            // the clock of the frame being drawn (seconds)
 class Person {
   constructor(name, kind, spot, spawn, shirt = null, look = null) {
     const p = DATA.profile(name);
@@ -490,6 +497,7 @@ class Person {
     this.root.position.copy(this.pos); this.root.rotation.y = this.rot;
     // pose targets
     const T = {legL: 0, legR: 0, armL: 0, armR: 0, armLz: 0, armRz: 0, torso: 0, headX: 0, headY: 0, headZ: 0, bob: 0};
+    this.sip = 0;
     const walking = this.pose === 'walk', seated = this.pose === 'sit' || this.pose === 'sofa';
     if (walking) { const w = Math.sin(t * 11); T.legL = w * 0.7; T.legR = -w * 0.7; T.armL = -w * 0.55; T.armR = w * 0.55; T.bob = Math.abs(Math.cos(t * 11)) * 0.05; }
     else {
@@ -505,8 +513,14 @@ class Person {
       else if (a === 'celebrate') { T.armL = T.armR = -2.9; T.armLz = -0.3; T.armRz = 0.3; T.bob = Math.abs(Math.sin(t * 7)) * 0.32; }
       else if (a === 'play') { T.armL = T.armR = -1.25 + Math.sin(t * 9) * 0.18; T.armLz = -0.2; T.armRz = 0.2; T.headX = 0.3; T.torso = 0.06; }
       else if (a === 'wave') { T.armR = -2.8; T.armRz = 0.35 + Math.sin(t * 11) * 0.4; T.headZ = 0.08; }
-      else if (a === 'brew') { T.armL = T.armR = -1.25 + Math.sin(t * 3) * 0.05; T.armLz = -0.15; T.armRz = 0.15; T.headX = 0.25; }
-      else if (a === 'coffee') { T.armR = -1.3 - (Math.sin(t * 0.7) > 0.85 ? 0.6 : 0); T.headX = Math.sin(t * 0.7) > 0.85 ? -0.2 : 0.05; }
+      else if (a === 'brew') {                                             // the user at the machine: a press of the button, then watching the cup fill
+        const el = frameT - (me.brewStart || 0), tap = el > 0.3 && el < 0.9 ? Math.abs(Math.sin((el - 0.3) * 10)) : 0;
+        T.armR = -1.3 + tap * 0.25; T.armL = el > 3 ? -1.45 : -0.35; T.armRz = 0.1; T.headX = 0.25;
+      }
+      else if (a === 'coffee') {
+        const ph = (t % 9) / 9; this.sip = ph > 0.72 && ph < 0.94 ? Math.sin((ph - 0.72) / 0.22 * Math.PI) : 0;
+        T.armR = lerp(-1.25, -2.4, this.sip); T.armRz = 0.35 * this.sip; T.headX = 0.05 - 0.3 * this.sip; T.armL = -0.15;
+      }
       else if (a === 'speak') { T.armR = -1.5 + Math.sin(t * 6) * 0.25; T.armRz = 0.3; T.headX = -0.1; }
       else if (a === 'meet') { T.armL = T.armR = -0.9; T.headY = Math.sin(t * 0.9) * 0.25; }
       else { T.headX = Math.sin(t * 0.6) * 0.05; T.torso = seated ? -0.05 : 0; T.bob = Math.sin(t * 2) * 0.01; }
@@ -523,6 +537,16 @@ class Person {
     P_.head.rotation.x = lerp(P_.head.rotation.x, T.headX, k); P_.head.rotation.y = lerp(P_.head.rotation.y, T.headY, k * 0.8);
     P_.head.rotation.z = lerp(P_.head.rotation.z, T.headZ, k);
     this.body.position.y = lerp(this.body.position.y, T.bob, Math.min(1, dt * 14));
+    // the mug in the hand of whoever is on a coffee break (the user's own mug is set by tendMe), with a little steam
+    if (this !== boss) {
+      const hold = !walking && this.act === 'coffee';
+      if (hold && !this.cup) { this.cup = V.mug('#f5f5f5'); this.cup.position.set(0, -0.5, 0.12); P_.armR.add(this.cup); }
+      if (this.cup) this.cup.visible = hold;
+    }
+    if (this.cup?.visible) {
+      this.cup.rotation.x = -P_.armR.rotation.x + 0.8 * this.sip;
+      if (Math.random() < dt * 1.5) { this.cup.getWorldPosition(_cupAt); _cupAt.y += 0.12; emit(1, _cupAt, {color: '#ffffff', speed: 0.04, up: 0.3, life: 1, size: 0.03, gravity: 0.1, glow: 0.9}); }
+    }
   }
   dispose() { scene.remove(this.root); this.root.traverse(o => { const i = raycastables.indexOf(o); if (i >= 0) raycastables.splice(i, 1); }); }
 }
@@ -686,7 +710,10 @@ function standUp() {
   boss.path = [out.clone()]; boss.spot = {pos: out.clone(), rot: boss.rot, pose: 'stand'}; boss.pose = 'walk';
   me.rising = true; me.then = null;
 }
-function brew() { me.act = 'brew'; me.brewUntil = performance.now() / 1000 + 3; }
+function brew() { me.act = 'brew'; me.brewStart = frameT; me.brewUntil = me.brewStart + 3.8; }
+const brewMug = V.mug('#f5f5f5'), _front = new THREE.Vector3(BREW.pos.x - MACHINE.x, 0, BREW.pos.z - MACHINE.z).normalize(), SPOUT = new THREE.Vector3();
+SPOUT.set(MACHINE.x + _front.x * 0.2, MACHINE.y - 0.25, MACHINE.z + _front.z * 0.2);
+brewMug.position.set(SPOUT.x, MACHINE.y - 0.55, SPOUT.z); brewMug.visible = false; scene.add(brewMug);
 /** what E would do now, the nearest thing first: stand up, talk to an agent in front of you, make a coffee, sit on a
  *  free seat, look at the TV or the whiteboard you face */
 const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
@@ -787,12 +814,18 @@ function tendMe(dt, t) {
   if (me.rising && !boss.path.length) me.rising = false;
   if (me.then && !boss.path.length) { const fn = me.then; me.then = null; fn(); }
   if (me.act === 'brew') {
-    if (boss.spot !== BREW || boss.path.length) me.act = 'idle';
-    else if (t > me.brewUntil) { me.act = 'coffee'; me.cup.visible = true; me.cupUntil = t + 120; emit(8, MACHINE, {color: '#ffffff', speed: 0.3, up: 0.8, life: 1.2, size: 0.06, gravity: 0.3, glow: 0.9}); }
-    else if (Math.random() < dt * 14) emit(1, MACHINE, {color: '#ffffff', speed: 0.15, up: 0.7, life: 1.4, size: 0.06, gravity: 0.25, glow: 0.9});
+    const el = t - me.brewStart;
+    if (boss.spot !== BREW || boss.path.length) { me.act = 'idle'; brewMug.visible = false; }
+    else if (t > me.brewUntil) { me.act = 'coffee'; me.cupUntil = t + 120; me.cup.visible = true; }
+    else {
+      brewMug.visible = el > 0.9 && el < 3.2;                                   // the cup goes under the spout after the button, and into the hand at the end
+      if (el > 1.2 && el < 3.2 && Math.random() < dt * 40) emit(1, SPOUT, {color: '#4a2a12', speed: 0.01, up: -0.05, life: 0.3, size: 0.025, gravity: -3, glow: 0.2});
+      if (el > 1.6 && Math.random() < dt * 6) emit(1, MACHINE, {color: '#ffffff', speed: 0.15, up: 0.7, life: 1.4, size: 0.06, gravity: 0.25, glow: 0.9});
+      if (el > 3.2) me.cup.visible = true;
+    }
   }
   if (me.cup.visible && t > me.cupUntil) { me.cup.visible = false; if (me.act === 'coffee') me.act = 'idle'; }
-  me.cup.rotation.x = -boss.parts.armR.rotation.x;                             // the cup stays upright in the hand
+  me.cup.rotation.x = -boss.parts.armR.rotation.x + 0.8 * (boss.sip || 0);     // the cup stays upright in the hand, and tips at a sip
 }
 // a break place for an idle agent, the same for everyone who looks at this office (you, a friend visiting): chosen by a hash
 // of the agent's name and of the clock, not at random. It keeps the place 40 to 130 s, each agent on its own beat, then
@@ -1320,16 +1353,21 @@ function placeTags() {
 
 // ------------------------------------------------------------------ loop
 const FORCE = /[?&]force\b/.test(location.search);              // keep drawing in a hidden tab (screenshots, tests)
-let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0;
+let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0, lastInput = 0, shadowAt = 0, speed = 'idle';
+for (const ev of ['pointerdown', 'pointermove', 'wheel']) root.addEventListener(ev, () => { lastInput = performance.now(); }, {passive: true, capture: true});
+const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sp = new THREE.Vector3();
 function frame(now) {
   requestAnimationFrame(frame);
   if (mode === 'chat' || (document.hidden && !FORCE)) { last = now; return; }
-  const busy = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || tween || flyHome
-               || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
-  const fps = quality === 'bassa' ? 24 : busy ? (quality === 'alta' ? 45 : 30) : 15;
+  // how fast to draw: full speed while you use the office (mouse, keys, your figure walking), calmer while agents work, slow when all is idle
+  if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); }
+  const using = now - lastInput < 4000 || tween || flyHome || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
+  const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || pov;
+  speed = using ? 'use' : working ? 'work' : 'idle';
+  const fps = {use: quality === 'alta' ? 45 : quality === 'media' ? 30 : 24, work: quality === 'alta' ? 24 : 20, idle: 10}[speed];
   acc += now - last; last = now;
   if (acc < 1000 / fps) return;
-  const dt = Math.min(0.1, acc / 1000); acc = 0;
+  const dt = Math.min(0.1, acc / 1000); acc = 0; frameT = now / 1000;
   const t = now / 1000, d = new Date(), hour = d.getHours() + d.getMinutes() / 60;
   if (Math.floor(hour * 4) !== hourDrawn) { hourDrawn = Math.floor(hour * 4); drawSky(hour); }
   if (d.getSeconds() !== secDrawn) { secDrawn = d.getSeconds(); drawClock(); }
@@ -1349,7 +1387,11 @@ function frame(now) {
   }
   if (assistant) { assistant.act = assistant.bubble && assistant.bubble.until > Date.now() / 1000 ? 'speak' : 'read'; assistant.update(dt, t); }
   screenAcc += dt;
-  if (screenAcc > 1 / 6) { screenAcc = 0; for (const [n, p] of people) drawScreen(n, p.act, t); }
+  if (screenAcc > (speed === 'use' ? 1 / 6 : 1 / 3)) {                       // the monitors, only the ones in view
+    screenAcc = 0;
+    camera.updateMatrixWorld(); _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); _fr.setFromProjectionMatrix(_pm);
+    for (const [n, p] of people) { const sc = SPOTS.get(n)?.scr; if (sc && _fr.containsPoint(sc.mesh.getWorldPosition(_sp))) drawScreen(n, p.act, t); }
+  }
   for (const s of SPOTS.values()) if (s.beacon.visible) { s.beacon.rotation.y += dt * 6; s.beaconLight.intensity = 1.6 + Math.sin(t * 9) * 1.2; } else s.beaconLight.intensity = 0;
   for (let i = 0; i < LED_AT.length; i++) { ledColor.set(LED_AT[i][1] ? '#ff5252' : (Math.sin(t * (2 + i % 5) + i) > 0.2 ? ['#00e676', '#40c4ff', '#ffab40'][i % 3] : '#10301c')).multiplyScalar(1.15); leds.setColorAt(i, ledColor); }
   if (leds.instanceColor) leds.instanceColor.needsUpdate = true;
@@ -1370,6 +1412,7 @@ function frame(now) {
   uiAcc += dt;
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
+  if (now - shadowAt > (speed === 'use' ? 66 : speed === 'work' ? 120 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not
   camera.updateMatrixWorld(); loungeTv.update(t);
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
 }
@@ -1419,6 +1462,9 @@ if (FORCE) Object.assign(window, {                                        // tes
   __officeMe: () => boss && {x: boss.pos.x, z: boss.pos.z, pose: boss.pose, path: boss.path.length, speed: boss.speed},
   __officeOthers: () => [...remote.values(), hostFigure].filter(Boolean).map(p => ({name: p.name, x: +p.pos.x.toFixed(2), z: +p.pos.z.toFixed(2), pose: p.pose, follow: !!p.follow})),
   __officeSeats: () => sitSpots().length,
+  __officeCam: (x, y, z, tx, ty, tz) => { tween = null; camera.position.set(x, y, z); controls.target.set(tx, ty, tz); controls.update(); },
+  __officeBrew: () => brew(),
+  __officeScene: scene, __officeRenderer: renderer, __officeMeta: () => ({quality, speed, mode, pov, people: people.size, machine: MACHINE.toArray(), brew: [BREW.pos.x, BREW.pos.z]}),   // measuring: draw calls, who owns them
   __officeFreeDesk: () => { const d = DESKS.find(d => !d.owner); return d && {x: d.seat.pos.x, z: d.seat.pos.z}; },
   __officeSync: async () => { await pollCommon(); const r = await fetch('presence.json', {cache: 'no-store'}); presence = await r.json(); placeOthers(); },
 });                 // tests: step the loop by hand in a hidden tab
@@ -1462,33 +1508,53 @@ const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(
   return {type, near};
 });
 const myPool = () => replayGames(commonState?.games || []).games.find(x => x.type === 'pool' && !x.done && x.players.includes(myName()));
+/** the friend a table waits for: the guest of our shared room, or the host whose room we joined */
+const friendName = () => commonState?.bridge?.joined ? commonState.bridge.host : commonState?.share?.guests?.[0]?.name || null;
+/** a table with a friend: open with both players, or waiting for the friend (one player); it turns into the game by itself when the friend comes in */
+function openPoolTable(g) {
+  games.openPool(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolCancel}`, game: {type: 'pool', op: 'quit', id: g.id}}).then(() => pollCommon())});
+}
 function openGame(type) {
   if (type === 'pingPong') return games.pingPong();
   if (type === 'foosball') return games.foosball();
-  const me = myName(), all = replayGames(commonState?.games || []).games, mine = myPool(), busy = all.some(x => !x.done && x.players.includes(me));
-  const join = !busy && all.find(x => x.type === 'pool' && !x.done && x.players.length === 1);
-  const act = async (op, id) => {
-    if (op === 'open') return games.openPool(mine);
-    const id2 = id || Math.random().toString(16).slice(2, 10);
-    const r = await post('common/post', {text: `🎱 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: 'pool', op, id: id2}});
-    if (r && !r.ok) ui.roomTip(await r.text(), 20, 120);
-    await pollCommon();
-    const g = myPool(); if (g?.players.length === 2) games.openPool(g);
+  const me = myName(), all = replayGames(commonState?.games || []).games, mine = myPool();
+  const busyOther = all.some(x => !x.done && x.type !== 'pool' && x.players.length === 2 && x.players.includes(me));
+  const join = !mine && !busyOther && all.find(x => x.type === 'pool' && !x.done && x.players.length === 1 && x.players[0] !== me);
+  const act = async op => {
+    if (op === 'open') return openPoolTable(mine);
+    const r = await post('common/post', {text: `🎱 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: 'pool', op, id: op === 'join' ? join.id : Math.random().toString(16).slice(2, 10)}});
+    if (r && !r.ok) return ui.roomTip(await r.text(), 20, 120);
+    for (let i = 0; i < 16; i++) {                       // from a guest the line goes out and comes back through the host: wait for it, a few seconds at most
+      await pollCommon();
+      const g = myPool();
+      if (g) return openPoolTable(g);
+      await new Promise(done => setTimeout(done, 400));
+    }
+    ui.roomTip(ui.t().poolLate, 20, 120);
   };
-  games.poolMenu({friends: linked() && (!busy || !!mine), open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null,
-                  waiting: mine?.players.length === 1, join: join?.players[0] || null,
-                  start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open', join?.id)});
+  games.poolMenu({friends: linked() && !busyOther, open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null, waiting: mine?.players.length === 1,
+                  friend: friendName(), join: join?.players[0] || null, start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open')});
 }
 let poolSeen = 0;
-/** a friend shot at an open pool table: it plays the shot out (only the shots the replay accepted) */
+/** a friend shot at an open pool table: it plays the shot out (only the shots the replay accepted); a table that waited for the friend becomes the game */
 function poolFromFriends() {
   let top = poolSeen;
-  for (const x of replayGames(commonState?.games || []).games) if (x.type === 'pool') for (const s of x.shots) {
+  const all = replayGames(commonState?.games || []).games;
+  for (const x of all) if (x.type === 'pool') for (const s of x.shots) {
     if (s.n > poolSeen && s.by !== myName()) games.shot(x.id, s);
     top = Math.max(top, s.n);
   }
   poolSeen = top;
+  const oid = games.openId(), og = oid && all.find(x => x.id === oid);
+  if (og?.done?.quit && og.done.quit !== myName()) { games.close(); ui.placeName(ui.t().quitBy(og.done.quit)); }     // the friend left the table
+  const wid = games.waitingId(), g = wid && all.find(x => x.id === wid);
+  if (g && !g.done && g.players.length === 2) { openPoolTable(g); ui.placeName(ui.t().poolStarts); }
 }
+// fewer draw calls: the furniture, the desks' fixed pieces and the city are baked into a few big meshes while you look at them
+// (the editor sees the originals and bakes again when it closes)
+const baked = mergeStatic({THREE, scene, items: ITEM_MESHES, extra: () => [...DESKS.map(d => d.g), city],
+                           skip: o => !!o.userData.person || !!(o.parent?.userData.kit && !o.parent.userData.kit.has(o))});
+let bakedEditing = false;
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();
 pollState();

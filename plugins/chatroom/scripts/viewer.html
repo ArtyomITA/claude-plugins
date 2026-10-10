@@ -550,10 +550,12 @@ function setScope(s) {
 $('scope').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (b) setScope(b.dataset.s); });
 window.chatroomScope = () => scope;
 setInterval(pollNeighbor, 3000);
+let chatTag = '';                                    // the chat's ETag: an unchanged chat is not downloaded, parsed or drawn again
 async function poll() {
   try {
-    const r = await fetch((await FRIEND) + 'chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
+    const r = await fetch((await FRIEND) + 'chat.jsonl?t=' + Date.now(), {cache: 'no-store', headers: chatTag ? {'If-None-Match': chatTag} : {}});
     if (r.ok) {
+      chatTag = r.headers.get('ETag') || '';
       const next = [];
       for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { next.push(JSON.parse(l)); } catch (e) {} } }
       all = next;

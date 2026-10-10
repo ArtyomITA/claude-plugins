@@ -597,6 +597,16 @@ def cloudflared_path():
     return exe or (str(local) if local.is_file() else None)
 
 
+_cf = [0.0, None]
+
+
+def cloudflared_cached(ttl=30):
+    """the same, for the viewer's poll every 2 s: scanning PATH takes about 40 ms on Windows"""
+    if time.time() - _cf[0] > ttl:
+        _cf[:] = [time.time(), cloudflared_path()]
+    return _cf[1]
+
+
 def install_cloudflared():
     """download the pinned cloudflared from its GitHub release into ~/.claude/chatroom/bin, checked by SHA256"""
     osname = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'darwin'}.get(platform.system())

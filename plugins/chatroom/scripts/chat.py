@@ -1275,9 +1275,18 @@ def cmd_serve(room, a):
                     if nums:
                         body['pct'][m['from']] = min(nums)
                 return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
-            if path == '/chat.jsonl':
+            if path == '/chat.jsonl':                 # the viewer asks every 1.5 s: an unchanged chat answers 304 with no body
+                try:
+                    st = room.chat.stat(); tag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+                except OSError:
+                    tag = '"0"'
+                if self.headers.get('If-None-Match') == tag:
+                    self.send_response(304); self.send_header('ETag', tag); self.send_header('Content-Length', '0'); self.end_headers()
+                    return
                 body = room.chat.read_bytes() if room.chat.exists() else b''
-                return self.send(200, body, 'application/x-ndjson; charset=utf-8')
+                self.send_response(200); self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8'); self.send_header('Cache-Control', 'no-store')
+                self.send_header('ETag', tag); self.send_header('Content-Length', str(len(body))); self.end_headers()
+                return self.wfile.write(body)
             if path.startswith('/images/'):
                 name = path[len('/images/'):]
                 target = room.images_dir / name
@@ -1352,7 +1361,7 @@ def cmd_serve(room, a):
                 body = {'messages': lines[-40:], 'games': [m for m in lines if m.get('game')][-300:], 'me': me()['name'], 'share': host.status(),
                         'codex': ping_tool(room.roster()) == 'send_message', 'friends_chat': bool(room.config().get('friends_chat')),
                         'room_chat': bool(guest['bridge'] and guest['bridge'].room_ok), 'lend_mode': settings()['lend_mode'], 'lend_auto': settings()['lend_auto'],
-                        'bridge': b.status() if b else None, 'cloudflared': bool(sharing.cloudflared_path()),
+                        'bridge': b.status() if b else None, 'cloudflared': bool(sharing.cloudflared_cached()),
                         'installing': install['busy'], 'install_error': install['error'],
                         'people': (b.people if b else host.people()) if (b or host.pin) else []}
                 return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')

@@ -4,6 +4,7 @@
 
 const W = 800, H = 440;
 const css = `
+.o-game-wait { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 0 2px; font-weight: 600; }
 .o-game-ov { position: absolute; inset: 0; background: rgba(8,10,16,.72); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .o-game-box { background: #12151c; border-radius: 10px; padding: 10px 12px 12px; box-shadow: 0 12px 40px rgba(0,0,0,.5); color: #e8eaf0;
               font: 13px/1.4 "Segoe UI", system-ui, sans-serif; max-width: 96%; }
@@ -235,17 +236,23 @@ export function createGames({root, t, me, sendShot}) {
   }
 
   // pool: aim from the cue ball toward the mouse, hold to load the shot, let go to shoot
-  function pool(game = null) {
-    const vsCpu = !game, players = vsCpu ? [me(), 'CPU'] : game.players;
+  function pool(game = null, ctx = {}) {
+    const vsCpu = !game, players = vsCpu ? [me(), 'CPU'] : game.players, waitingFor = !vsCpu && players.length < 2;
     const named = a => Object.fromEntries((a || []).map((g, i) => [players[i], g]).filter(([, g]) => g));    // [group0, group1] -> {name: group}
     const box = shell('🎱 ' + t().pool + ' · ' + (vsCpu ? t().vsCpu : players.join(' – ')), null), {c, g, pt} = canvas(box), score = box.querySelector('.o-game-score');
+    if (waitingFor) {                                                  // the table is open, the friend has not come yet: wait here, or cancel
+      const w = document.createElement('div'); w.className = 'o-game-wait';
+      w.innerHTML = `<span>⏳ ${t().poolWaiting(ctx.friend || t().poolWaitAny)}</span> <button>${t().poolCancel}</button>`;
+      w.querySelector('button').onclick = () => { close(); ctx.cancel?.(); };
+      box.appendChild(w);
+    }
     const st = vsCpu ? {balls: poolRack(), groups: {}, turn: me(), winner: null, players} : {balls: game.balls, groups: named(game.groups), turn: players[game.turn], winner: game.done?.winner || null, players};
     let mouse = [W / 2, H / 2], charge = 0, holding = false, frames = null, fi = 0, after = null, cpuAt = 0;
     c.addEventListener('pointermove', e => { mouse = pt(e); });
     c.addEventListener('pointerdown', e => { if (st.winner && vsCpu) return pool(); if (canShoot()) { holding = true; charge = 0; } });
     const release = () => { if (holding) { holding = false; shoot(Math.atan2(mouse[1] - st.balls[0][1], mouse[0] - st.balls[0][0]), Math.max(0.08, charge)); } };
     addEventListener('pointerup', release);                                            // also when the mouse is let go outside the canvas
-    const canShoot = () => !frames && !st.winner && st.turn === me();
+    const canShoot = () => !frames && !st.winner && !waitingFor && st.turn === me();
     function shoot(angle, power) {
       const shooter = st.turn;
       frames = []; fi = 0;
@@ -290,7 +297,7 @@ export function createGames({root, t, me, sendShot}) {
         if (holding) { g.fillStyle = '#ffd54f'; g.fillRect(RAIL, H - 14, (W - 2 * RAIL) * charge, 6); }
       }
       const gname = p => st.groups[p] ? ` (${t()[st.groups[p]]})` : '';
-      score.textContent = st.winner ? `🏆 ${st.winner}` : `${t().turnOf(st.turn)} · ${players.map(p => p + gname(p)).join(' · ')}`;
+      score.textContent = waitingFor ? '⏳' : st.winner ? `🏆 ${st.winner}` : `${t().turnOf(st.turn)} · ${players.map(p => p + gname(p)).join(' · ')}`;
       if (st.winner) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 28px Segoe UI'; g.textAlign = 'center'; g.fillText(`🏆 ${st.winner}` + (vsCpu ? ' · ' + t().clickAgain : ''), W / 2, H / 2 + 10); }
     });
     stop = () => { stopLoop(); removeEventListener('pointerup', release); };
@@ -298,11 +305,11 @@ export function createGames({root, t, me, sendShot}) {
   }
 
   /** the pool table's menu: against the computer, or a game with friends in the common room */
-  function poolMenu({friends, open, waiting, join, start}) {
+  function poolMenu({friends, open, waiting, join, friend, start}) {
     const box = shell('🎱 ' + t().pool);
     const m = document.createElement('div'); m.className = 'o-game-menu';
     m.innerHTML = `<button data-k="cpu">🤖 ${t().vsCpu}</button>` + (friends ? (open ? `<button data-k="open">🎱 ${t().openGame(open)}</button>` : join
-      ? `<button data-k="join">🙋 ${t().joinPool(join)}</button>` : waiting ? `<div>${t().waitingPlayer}</div>` : `<button data-k="new">👥 ${t().newPool}</button>`) : `<div>${t().poolFriends}</div>`);
+      ? `<button data-k="join">🙋 ${t().joinPool(join)}</button>` : waiting ? `<button data-k="open">⏳ ${t().poolWaiting(friend || t().poolWaitAny)}</button>` : `<button data-k="new">👥 ${t().newPool}</button>`) : `<div>${t().poolFriends}</div>`);
     m.onclick = e => { const k = e.target.dataset?.k; if (k === 'cpu') pool(); else if (k) { close(); start(k); } };
     box.appendChild(m);
   }
@@ -312,7 +319,10 @@ export function createGames({root, t, me, sendShot}) {
     close,
     pingPong, foosball, poolMenu,
     /** a pool game with a friend, its state replayed from the common room */
-    openPool(game) { current = {id: game.id, api: pool(game)}; },
+    openPool(game, ctx = {}) { current = {id: game.id, waiting: game.players.length < 2, api: pool(game, ctx)}; },
+    /** the id of the game whose table is open and still waiting for the friend (null otherwise) */
+    openId: () => (current && ov ? current.id : null),
+    waitingId: () => (current && current.waiting && ov ? current.id : null),
     /** a friend's shot arrived: the open table plays it */
     shot(id, line) { if (current && current.id === id && ov) current.api.receive(line); },
   };

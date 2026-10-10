@@ -42,16 +42,31 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-hud { position: absolute; left: 12px; top: 10px; right: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   pointer-events: none; }
 #office .o-hud > * { pointer-events: auto; }
-#office .o-chip { background: #14151dd9; padding: 5px 9px; border-radius: 3px; box-shadow: 2px 2px 0 #0008; font-weight: 600; }
+#office .o-chip { background: #14151de6; padding: 5px 10px; border-radius: 8px; box-shadow: 0 2px 0 #0007, 0 6px 16px #0004; font-weight: 600; }
 #office .o-chip.o-big { font-size: 15px; } #office .o-chip.o-warn { background: #c62828; }
-#office .o-btns { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-#office button { background: #14151dd9; border: 0; color: #f4f1ea; padding: 5px 9px; border-radius: 3px; box-shadow: 2px 2px 0 #0008;
-  cursor: pointer; font: inherit; font-weight: 600; }
-#office button.o-on { background: #f5b400; color: #222; }
-#office button:focus-visible, #office .o-name:focus-visible { outline: 2px solid #ffd54f; }
-#office .o-inspector { position: absolute; right: 12px; bottom: 52px; width: 300px; max-height: 70%; overflow: auto; background: #14151df2;
-  border-radius: 4px; box-shadow: 4px 4px 0 #0009; padding: 12px; display: none; }
-#office .o-inspector.o-open { display: block; }
+#office { container-type: inline-size; scrollbar-width: thin; }
+#office * { scrollbar-width: thin; scrollbar-color: #ffffff33 transparent; }
+#office .o-btns { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+#office .o-grp { display: flex; gap: 2px; padding: 3px; background: #14151de6; border-radius: 10px; box-shadow: 0 2px 0 #0007, 0 6px 16px #0004; }
+#office button { background: #2b2e3d; border: 1px solid #ffffff1c; color: #f4f1ea; padding: 5px 10px; border-radius: 7px; cursor: pointer; font: inherit; font-weight: 600;
+  transition: background .12s, color .12s, transform .08s; }
+#office button:hover { background: #3a3f55; }
+#office button:active { transform: translateY(1px); }
+#office button:disabled { opacity: .45; cursor: default; transform: none; }
+#office .o-tvcard, #office .o-tvcard:hover { padding: 0; background: #1a2030; border: 1px solid #263048; border-radius: 10px; font-weight: 400; }
+#office .o-tvcard:hover, #office .o-tvcard:focus-visible { border-color: #e53935; }
+#office .o-tvcard.o-on { border-color: #ffd54f; }
+#office .o-grp button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; background: transparent; border-color: transparent; color: #e9e6df; padding: 4px 9px; }
+#office .o-grp button:hover { background: #ffffff1f; color: #fff; }
+#office button.o-on { background: #f5b400; border-color: #f5b400; color: #1b1b22; box-shadow: inset 0 -2px 0 #0003; }
+#office button.o-on:hover { background: #ffc720; }
+#office button .o-ic { font-size: 15px; line-height: 1; }
+#office button:focus-visible, #office .o-name:focus-visible { outline: 2px solid #ffd54f; outline-offset: 1px; }
+#office input:focus-visible, #office select:focus-visible, #office textarea:focus-visible { outline: 2px solid #ffd54f88; border-color: #ffd54f; }
+@container (max-width: 820px) { #office .o-grp:not(.o-seg) .o-lbl { display: none; } #office .o-grp:not(.o-seg) button { padding: 4px 8px; } }
+#office .o-inspector { position: absolute; right: 12px; bottom: 56px; width: 300px; max-height: 70%; overflow: auto; background: #14151df2;
+  border: 1px solid #ffffff14; border-radius: 12px; box-shadow: 0 10px 28px #0007; padding: 12px; display: none; }
+#office .o-inspector.o-open, #office .o-common.o-open { display: block; animation: o-in .14s ease-out; }
 #office .o-inspector h3 { margin: 0 0 2px; font-size: 16px; display: flex; gap: 6px; align-items: center; }
 #office .o-inspector .o-meta { opacity: .75; font-size: 11.5px; margin-bottom: 8px; }
 #office .o-bar { height: 7px; background: #2a2c38; border-radius: 2px; overflow: hidden; margin: 3px 0 8px; }
@@ -64,8 +79,7 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-msgs div { font-size: 11.5px; padding: 4px 0; border-bottom: 1px solid #ffffff10; cursor: pointer; }
 #office .o-row { display: flex; gap: 6px; margin-top: 8px; }
 #office .o-common { position: absolute; left: 12px; bottom: 34px; width: 270px; max-height: 60%; overflow: auto; background: #14151df2;
-  border-radius: 4px; box-shadow: 4px 4px 0 #0009; padding: 12px; display: none; }
-#office .o-common.o-open { display: block; }
+  border: 1px solid #ffffff14; border-radius: 12px; box-shadow: 0 10px 28px #0007; padding: 12px; display: none; }
 #office .o-common h3 { margin: 0 0 4px; font-size: 15px; }
 #office .o-common label { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
 #office .o-common label b { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
@@ -85,12 +99,12 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-common .o-guest { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 #office .o-common .o-guest b { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 #office .o-common .o-guest button { margin-left: auto; }
-#office .o-common .o-stop { margin-top: 6px; background: #8e2424; }
+#office .o-common .o-stop { margin-top: 6px; background: #8e2424; border-color: #b23a3a; }
 #office .o-common textarea { width: 100%; box-sizing: border-box; min-height: 52px; background: #22242f; color: #f4f1ea; border: 1px solid #ffffff22;
   border-radius: 3px; padding: 5px 7px; font: inherit; resize: vertical; }
 #office .o-common .o-req { padding: 6px; margin: 4px 0; border: 1px solid #ffd54f66; border-radius: 3px; font-size: 12px; }
 #office .o-common .o-reqrow { display: flex; gap: 4px; margin: 4px 0; } #office .o-common .o-reqrow select { margin: 0; padding: 3px; }
-#office .o-common .o-lend { background: #2e7d32; } #office .o-common .o-visitbtn { width: 100%; margin: 6px 0; background: #1565c0; }
+#office .o-common .o-lend { background: #2e7d32; border-color: #43a047; } #office .o-common .o-visitbtn { width: 100%; margin: 6px 0; background: #1565c0; border-color: #1e88e5; }
 #office .o-visit { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); padding: 7px 14px; border-radius: 3px; background: #1565c0;
   color: #fff; font-weight: 700; box-shadow: 2px 2px 0 #0008; display: flex; gap: 10px; align-items: center; }
 #office .o-common .o-write { display: flex; gap: 6px; align-items: center; } #office .o-common .o-write input { flex: 1; }
@@ -117,10 +131,12 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-palette small { opacity: .75; }
 #office .o-hint { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); pointer-events: none; padding: 6px 14px; border-radius: 3px;
   background: #f5b400; color: #222; font-weight: 800; font-size: 14px; box-shadow: 2px 2px 0 #0008; display: none; }
-#office .o-help { position: absolute; left: 12px; bottom: 44px; max-width: 58%; font-size: 11px; opacity: .55; pointer-events: none; }
+#office .o-help { position: absolute; left: 12px; bottom: 14px; max-width: calc(100% - 640px); font-size: 11px; opacity: .8; pointer-events: none; text-shadow: 0 1px 2px #000c; }
+@container (max-width: 760px) { #office .o-help { display: none; } }
+@keyframes o-in { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes blink { 50% { opacity: .55; } }
-@media (prefers-reduced-motion: reduce) { #office .o-bubble, #office .o-flag.o-wait { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #office .o-bubble, #office .o-flag.o-wait, #office .o-inspector.o-open, #office .o-common.o-open { animation: none; } #office button { transition: none; } }
 @media (max-width: 900px) { body.mode-split { padding-left: 0; padding-top: 42vh; } body.mode-split #office { width: 100vw; height: 42vh; inset: 0 0 auto 0; } }
 `;
 
@@ -147,6 +163,7 @@ export const L = {
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
        quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first',
+       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
        pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
@@ -189,6 +206,7 @@ export const L = {
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
        quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita',
+       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
        pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
@@ -229,8 +247,15 @@ export function replayGames(lines) {
     let x = games.get(g.id);
     const busy = p => [...games.values()].some(y => !y.done && y.players.includes(p));   // one open game at a time
     if (g.op === 'new') {
-      if (!x && !busy(who)) games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {},
-                                            ...(g.type === 'pool' ? {balls: poolRack(), groups: [null, null], shots: []} : {})});
+      if (x) continue;
+      // a game of mine that nobody joined gives way to the new one (it would block every new game for ever)
+      for (const y of games.values()) if (!y.done && y.players.length === 1 && y.players[0] === who) y.done = {quit: who, winner: null};
+      if (busy(who)) continue;
+      // someone else of the same kind is already waiting alone: both clicked "play with a friend" together, so this is the answer
+      const waiting = [...games.values()].find(y => !y.done && y.type === g.type && y.players.length === 1 && y.players[0] !== who);
+      if (waiting) { waiting.players.push(who); waiting.n = m.n; continue; }
+      games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {},
+                       ...(g.type === 'pool' ? {balls: poolRack(), groups: [null, null], shots: []} : {})});
       continue;
     }
     if (!x || x.done) continue;
@@ -273,8 +298,10 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     <div class="o-hud"><span class="o-chip o-big" data-k="title"></span><span class="o-chip" data-k="pct"></span><span class="o-chip o-warn" data-k="wait" hidden></span>
       <span class="o-chip" data-k="work"></span><span class="o-chip" data-k="idle"></span><span class="o-chip" data-k="plan" hidden></span><span class="o-chip" data-k="src"></span>
 </div>
-    <div class="o-btns"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button>
-      <button data-b="edit"></button><button data-b="common"></button><button data-b="pov"></button><button data-b="run"></button><button data-b="look"></button><button data-b="reset"></button><button data-b="follow"></button><button data-b="quality"></button><button data-b="notify"></button></div>
+    <div class="o-btns"><div class="o-grp o-seg"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button></div>
+      <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button><button data-b="look"></button></div>
+      <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button><button data-b="follow"></button><button data-b="reset"></button></div>
+      <div class="o-grp"><button data-b="quality"></button><button data-b="notify"></button></div></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
   const cp = root.querySelector('.o-common');
@@ -288,6 +315,16 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
   });
+  /** a bar button: an icon and a label (the label folds away on a narrow office), a tip, and whether it is switched on; touches the DOM only when it changed */
+  const setBtn = (k, icon, text, tip = '', on = null) => {
+    const b = btn(k), key = `${icon}|${text}|${tip}|${on}`;
+    if (b._key === key) return;
+    b._key = key;
+    b.innerHTML = `<span class="o-ic">${icon}</span><span class="o-lbl">${esc(text)}</span>`;
+    b.title = tip || text; b.setAttribute('aria-label', text);
+    b.classList.toggle('o-on', !!on);
+    if (on !== null) b.setAttribute('aria-pressed', String(!!on)); else b.removeAttribute('aria-pressed');
+  };
   const labels = new Map(), itemLabels = new Map();
 
   function label(name) {
@@ -332,15 +369,12 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       chip('work').textContent = `⚙️ ${t().working(d.working)}`; chip('idle').textContent = `💤 ${t().idles(d.idle)}`;
       chip('plan').style.display = d.plan ? '' : 'none'; chip('plan').textContent = d.plan || '';
       chip('src').textContent = d.src;
-      for (const k of ['split', 'office', 'chat']) { btn(k).textContent = t()[k]; btn(k).classList.toggle('o-on', d.mode === k); }
-      btn('pov').textContent = '👁 POV'; btn('pov').classList.toggle('o-on', !!d.pov);
-      btn('look').textContent = '👤 ' + t().look;
-      btn('run').textContent = '🏃 x2'; btn('run').title = t().run + ' (Shift)'; btn('run').classList.toggle('o-on', !!d.run);
-      btn('edit').textContent = '🛠 ' + t().edit; btn('edit').classList.toggle('o-on', !!d.edit);
-      btn('common').textContent = '🛋 ' + t().common; btn('common').classList.toggle('o-on', cp.classList.contains('o-open'));
-      btn('reset').textContent = '🎥 ' + t().reset; btn('follow').textContent = '🎯 ' + t().follow; btn('follow').classList.toggle('o-on', !!d.follow);
-      btn('quality').textContent = t().quality(d.quality); btn('notify').textContent = '🔔 ' + t().notify;
-      btn('notify').classList.toggle('o-on', notifyOn());
+      const L = t();
+      for (const [k, icon] of [['split', '◫'], ['office', '🏢'], ['chat', '💬']]) setBtn(k, icon, L[k], '', d.mode === k);
+      setBtn('edit', '🛠', L.edit, '', !!d.edit); setBtn('common', '🛋', L.common, '', cp.classList.contains('o-open')); setBtn('look', '👤', L.look);
+      setBtn('pov', '👁', 'POV', '', !!d.pov); setBtn('run', '🏃', 'x2', L.run + ' (Shift)', !!d.run);
+      setBtn('follow', '🎯', L.follow, '', !!d.follow); setBtn('reset', '🎥', L.reset);
+      setBtn('quality', '✨', L.quality(d.quality)); setBtn('notify', '🔔', L.notify, '', notifyOn());
       root.querySelector('.o-help').textContent = d.pov ? t().povHelp : t().help;
     },
     inspect(d) {
