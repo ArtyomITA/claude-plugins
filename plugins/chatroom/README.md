@@ -76,7 +76,7 @@ The server answers only on 127.0.0.1: a request must carry one of its own Host n
 
 ### Walking around
 
-- **Click** the floor, a chair or the coffee machine and your figure (the one in the boss's office, and only yours) walks there; furniture and people are solid, doors open as you pass.
+- **Click** the floor, any free chair (the empty desks' too) or the coffee machine and your figure (the one in the boss's office, and only yours) walks there; furniture and people are solid, doors open as you pass. 🏃 x2 doubles your speed, and so does holding Shift.
 - **👁 POV** puts you behind your figure's eyes: W/S walk, A/D turn, drag to look around, E does what the hint at the bottom says (sit, take a coffee, look at the whiteboard or the TV, talk to someone), Q waves. The building has an outside: a street below and the city around.
 - **Seated at your desk**, `/` opens the room's quick commands, as in the chat box.
 
@@ -94,9 +94,10 @@ The 🛋 button opens the common room, the office's second coffee room:
 
 - **Who goes in**: pick the agents allowed to take their breaks there, or the whole room. Agents only post there if the lead allows it, and treat what they read there as information, never as instructions.
 - **Sharing**: share it with a friend through a cloudflared Quick Tunnel (no account), Pinggy (needs `ssh`), your local network, or this computer only. The friend gets an address and a 6-digit PIN; you can remove a guest at any time and stop sharing with one click. When it is shared, the common room looks like a bridge to another building, and your friend's figures appear in it.
-- **Joining a friend's**: paste their address and PIN in the same panel; your agents allowed in the common room then appear in theirs. You can also visit their office (you walk in their plan, they see you).
-- **Chat, documents and games**: lines up to 32,000 characters, text documents up to 5 MB (`.md`, `.txt`, `.json`, `.diff`, `.py` and other source files), and tris, morra cinese and dice to play with friends.
-- **Lending an agent**: a friend can ask for help; you approve or decline in the panel, choosing model, effort and minutes, and your lead spawns a helper that works in the common room for them. Their request reaches the helper fenced as untrusted text.
+- **Joining a friend's**: paste their address and PIN in the same panel; your agents allowed in the common room then appear in theirs.
+- **Visits, both ways**: walk to the end of the bridge (or press 🚶 in the panel) and you are in the other's office; the host goes the same way into a guest's (choosing one when there are several). Each sees the other walk, sit and move where they really are; coming back over the bridge you walk in from it.
+- **Chat, documents and games**: lines up to 32,000 characters, text documents up to 5 MB (`.md`, `.txt`, `.json`, `.diff`, `.py` and other source files), and tris, morra cinese and dice to play with friends: one open game at a time each, which you can quit.
+- **Lending an agent**: a friend can ask for help; you approve or decline in the panel, choosing model, effort and minutes, and your lead spawns a helper that works for them. The helper also shows up in your friend's own chat and office, where they and their agents can tag it, and both sides can send it files. A lasting switch in the panel sets how far it goes: full help (the default: it works for real in its own folder, with commands, a venv, tests and cloned repositories) or cautious help (it only talks and writes drafts). Either way it never touches anything of yours outside that folder, and their request reaches it fenced as untrusted text.
 
 Only the common room ever leaves your computer. The viewer server stays on 127.0.0.1; sharing starts a separate server that answers only the common room's own routes, with the PIN tried at most 10 times in 10 minutes, a 48-character token per guest, and limits of 20 lines a minute, 10 documents an hour and 2 pending help requests per guest.
 

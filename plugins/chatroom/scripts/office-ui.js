@@ -140,6 +140,9 @@ export const L = {
        games: 'Games', tris: 'Tic-tac-toe', morra: 'Rock paper scissors', dice: 'Dice', rolls: 'rolls the dice', opens: g => `opens a game of ${g}`,
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
+       quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first',
+       run: 'Run', lendFull: 'Full help: a lent agent works for real in its own folder (commands, a venv, tests)',
+       lendSafe: 'Cautious help: a lent agent only talks and writes drafts', lendSwitch: 'change',
        chosenWait: 'chosen: waiting for the other', pick: {sasso: 'rock', carta: 'paper', forbici: 'scissors'}, friendDoor: 'Your friend opens this door when you are their guest',
        helpTitle: 'Ask for help', askPlaceholder: 'What do you need? (some research, a plan, a change to your files)', askGo: 'Ask',
        visit: h => `Visit ${h}'s office`, requestsTitle: 'Help requests', lend: 'Lend an agent', decline: 'Decline',
@@ -170,6 +173,9 @@ export const L = {
        games: 'Giochi', tris: 'Tris', morra: 'Morra cinese', dice: 'Dadi', rolls: 'tira i dadi', opens: g => `apre una partita a ${g}`,
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
+       quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita',
+       run: 'Corri', lendFull: "Aiuto completo: l'agente prestato lavora davvero nella sua cartella (comandi, venv, test)",
+       lendSafe: "Aiuto prudente: l'agente prestato parla e scrive solo bozze", lendSwitch: 'cambia',
        chosenWait: 'scelto: aspetta l\'altro', pick: {sasso: 'sasso', carta: 'carta', forbici: 'forbici'}, friendDoor: 'Questa porta si apre quando sei tu l\'ospite del tuo amico',
        helpTitle: 'Chiedi aiuto', askPlaceholder: 'Cosa ti serve? (una ricerca, un piano, una modifica ai tuoi file)', askGo: 'Chiedi',
        visit: h => `Visita l'ufficio di ${h}`, requestsTitle: 'Richieste di aiuto', lend: 'Presta un agente', decline: 'Rifiuta',
@@ -197,10 +203,12 @@ export function replayGames(lines) {
     if (!g) continue;
     if (g.type === 'dadi') { dice.push({by: who, roll: g.roll, n: m.n}); continue; }
     let x = games.get(g.id);
-    if (g.op === 'new') { if (!x) games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {}}); continue; }
+    const busy = p => [...games.values()].some(y => !y.done && y.players.includes(p));   // one open game at a time
+    if (g.op === 'new') { if (!x && !busy(who)) games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {}}); continue; }
     if (!x || x.done) continue;
     x.n = m.n;
-    if (g.op === 'join') { if (x.players.length === 1 && x.players[0] !== who) x.players.push(who); continue; }
+    if (g.op === 'join') { if (x.players.length === 1 && x.players[0] !== who && !busy(who)) x.players.push(who); continue; }
+    if (g.op === 'quit') { if (x.players.includes(who)) x.done = {quit: who, winner: x.players.find(p => p !== who) || null}; continue; }
     if (x.players.length < 2 || !x.players.includes(who)) continue;
     if (x.type === 'tris' && g.op === 'move' && who === x.players[x.turn] && !x.board[g.cell]) {
       x.board[g.cell] = x.turn ? 'O' : 'X'; x.turn = 1 - x.turn;
@@ -225,7 +233,7 @@ async function sha256hex(text) {
 const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
 const revealed = new Set();
 
-export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
+export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
                                 onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
@@ -234,7 +242,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
       <span class="o-chip" data-k="work"></span><span class="o-chip" data-k="idle"></span><span class="o-chip" data-k="plan" hidden></span><span class="o-chip" data-k="src"></span>
 </div>
     <div class="o-btns"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button>
-      <button data-b="edit"></button><button data-b="common"></button><button data-b="pov"></button><button data-b="reset"></button><button data-b="follow"></button><button data-b="quality"></button><button data-b="notify"></button></div>
+      <button data-b="edit"></button><button data-b="common"></button><button data-b="pov"></button><button data-b="run"></button><button data-b="reset"></button><button data-b="follow"></button><button data-b="quality"></button><button data-b="notify"></button></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
   const cp = root.querySelector('.o-common');
@@ -245,7 +253,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
     const b = e.target.closest('button'); if (!b) return;
     const k = b.dataset.b;
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
-    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
+    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
   });
   const labels = new Map(), itemLabels = new Map();
@@ -294,6 +302,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
       chip('src').textContent = d.src;
       for (const k of ['split', 'office', 'chat']) { btn(k).textContent = t()[k]; btn(k).classList.toggle('o-on', d.mode === k); }
       btn('pov').textContent = '👁 POV'; btn('pov').classList.toggle('o-on', !!d.pov);
+      btn('run').textContent = '🏃 x2'; btn('run').title = t().run + ' (Shift)'; btn('run').classList.toggle('o-on', !!d.run);
       btn('edit').textContent = '🛠 ' + t().edit; btn('edit').classList.toggle('o-on', !!d.edit);
       btn('common').textContent = '🛋 ' + t().common; btn('common').classList.toggle('o-on', cp.classList.contains('o-open'));
       btn('reset').textContent = '🎥 ' + t().reset; btn('follow').textContent = '🎯 ' + t().follow; btn('follow').classList.toggle('o-on', !!d.follow);
@@ -368,6 +377,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
                                              effort: c.querySelector('[data-e]').value, minutes: +c.querySelector('[data-min]').value}); }
         else if (b.dataset.s === 'decline') onShare('decline', {id: +b.closest('.o-req').dataset.id});
         else if (b.dataset.s === 'start') onShare('start', {via: cp.querySelector('[data-s="via"]').value});
+        else if (b.dataset.s === 'lendmode') onShare('lend_mode', {mode: b.dataset.mode});
         else if (b.dataset.s) onShare(b.dataset.s, {name: b.dataset.name});
         else if (b.dataset.copy) navigator.clipboard?.writeText(b.dataset.copy);
         else if (b.dataset.g) {                                                    // a new game, or a roll of the dice
@@ -378,6 +388,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
           } else onGame({type: b.dataset.g, op: 'new', id}, `🎮 ${me} ${L.opens(b.dataset.g === 'tris' ? L.tris : L.morra)} (#${id})`);
         }
         else if (b.dataset.gm === 'join') onGame({type: b.dataset.type, op: 'join', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.joins} #${b.dataset.id}`);
+        else if (b.dataset.gm === 'quit') onGame({type: b.dataset.type, op: 'quit', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.quits} #${b.dataset.id}`);
         else if (b.dataset.gm === 'move') onGame({type: 'tris', op: 'move', id: b.dataset.id, cell: +b.dataset.cell},
                                                  `🎮 ${lastCommon?.me} ${L.puts(b.dataset.mark, +b.dataset.cell + 1)}`);
         else if (b.dataset.gm === 'pick') {
@@ -408,7 +419,7 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
         if (reqs.length) html += `<h4>🙋 ${esc(L.requestsTitle)}</h4>` + reqs.slice(-6).reverse().map(r => r.status === 'pending'
           ? `<div class="o-req" data-id="${r.id}"><b>${esc(r.guest)}</b>: ${esc(r.text)}<div class="o-reqrow">
               <select data-m>${(s.codex ? CODEX_MODELS : ['sonnet', 'haiku', 'opus']).map(m => `<option>${m}</option>`).join('')}</select>
-              <select data-e>${(s.codex ? ['medium', 'low', 'high', 'xhigh'] : ['medium', 'low', 'high']).map(e => `<option>${e}</option>`).join('')}</select>
+              <select data-e>${(s.codex ? ['medium', 'low', 'high', 'xhigh'] : ['medium', 'low', 'high', 'xhigh', 'max']).map(e => `<option>${e}</option>`).join('')}</select>
               <select data-min><option value="30">30 min</option><option value="15">15 min</option><option value="60">60 min</option></select></div>
               <button data-s="lend" class="o-lend">🤝 ${esc(L.lend)}</button> <button data-s="decline">${esc(L.decline)}</button></div>`
           : `<div class="o-meta">${esc(r.guest)}: ${esc(r.text.slice(0, 60))} · ${esc(r.status === 'approved' ? L.lent(r.helper) : L.declined)}</div>`).join('');
@@ -418,6 +429,10 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
                 <option value="lan">${esc(L.viaLan)}</option></select><button data-s="start">${esc(L.shareStart)}</button>
                 ${s.cloudflared ? '' : s.installing ? `<div class="o-meta">${esc(L.installing)}</div>` : `<div class="o-meta">${esc(L.needCloudflared)}</div><button data-s="install">${esc(L.install)}</button>`}
                 ${s.install_error ? `<div class="o-meta">${esc(s.install_error)}</div>` : ''}`;
+      }
+      if (!(br && br.joined)) {
+        const full = s.lend_mode !== 'safe';
+        html += `<div class="o-meta">🤝 ${esc(full ? L.lendFull : L.lendSafe)} <button data-s="lendmode" data-mode="${full ? 'safe' : 'full'}">${esc(L.lendSwitch)}</button></div>`;
       }
       if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
       const js = cp.querySelector('.o-c-jstat'), jhtml = br && br.joined
@@ -433,10 +448,13 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
       }
       // the games: the latest ones first, with what you can do now
       const {games, dice} = replayGames(s.games || []), me = s.me, gbox = cp.querySelector('.o-c-games');
+      const busy = games.some(x => !x.done && x.players.includes(me));
+      for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
       const ghtml = games.slice(0, 4).map(x => {
         const vs = x.players.map(esc).join(' – ') || '?', mine = x.players.includes(me), status = x.done
-          ? (x.done.draw ? L.draw : L.won(x.done.winner)) : x.players.length < 2 ? L.waitingPlayer : '';
-        const join = !x.done && x.players.length === 1 && !mine ? `<button data-gm="join" data-type="${x.type}" data-id="${esc(x.id)}">${esc(L.joinGame)}</button>` : '';
+          ? (x.done.quit ? L.quitBy(x.done.quit) : x.done.draw ? L.draw : L.won(x.done.winner)) : x.players.length < 2 ? L.waitingPlayer : '';
+        const join = (!x.done && x.players.length === 1 && !mine && !busy ? `<button data-gm="join" data-type="${x.type}" data-id="${esc(x.id)}">${esc(L.joinGame)}</button>` : '')
+          + (!x.done && mine ? ` <button data-gm="quit" data-type="${x.type}" data-id="${esc(x.id)}">🏳 ${esc(L.quitGame)}</button>` : '');
         if (x.type === 'tris') {
           const myTurn = !x.done && x.players.length === 2 && x.players[x.turn] === me, mark = x.turn ? 'O' : 'X';
           const cells = x.board.map((v, i) => `<button class="o-cell${x.done?.line?.includes(i) ? ' o-win' : ''}" ${myTurn && !v ? `data-gm="move" data-id="${esc(x.id)}" data-cell="${i}" data-mark="${mark}"` : 'disabled'}>${v || ''}</button>`).join('');

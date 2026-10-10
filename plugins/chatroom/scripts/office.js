@@ -105,8 +105,9 @@ await V.loadPack('vendor/office-pack.json');                             // pack
 let saved = null;                                                           // the user's own office, if they furnished one
 try { const r = await fetch('office.json', {cache: 'no-store'}); if (r.ok) saved = await r.json(); } catch (e) {}
 const VISIT = new URLSearchParams(location.search).has('visit');            // visiting the friend whose common room you joined
+const VISIT_URL = 'visit.json' + (new URLSearchParams(location.search).get('visit') ? '?who=' + encodeURIComponent(new URLSearchParams(location.search).get('visit')) : '');
 let visit = null;
-if (VISIT) { try { const r = await fetch('visit.json', {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
+if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
 const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: visit.items || DEFAULT_LAYOUT.items}
   : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: saved.items} : DEFAULT_LAYOUT;
 const PLACED = resolve(LAYOUT, {packSize: V.packSize}), FLOOR = floorPlan(LAYOUT, PLACED);
@@ -478,7 +479,7 @@ class Person {
     // walking
     if (this.path.length) {
       const target = this.path[0], d = target.clone().sub(this.pos); d.y = 0;
-      const dist = d.length(), step = 1.9 * dt;
+      const dist = d.length(), step = 1.9 * dt * (this.speed || 1);
       if (dist <= step) { this.pos.x = target.x; this.pos.z = target.z; this.path.shift(); if (!this.path.length) { this.pos.y = this.spot.pos.y; this.pose = this.spot.pose; } }
       else { this.pos.addScaledVector(d.normalize(), step); this.rot = angLerp(this.rot, Math.atan2(d.x, d.z), Math.min(1, dt * 10)); this.pos.y = 0; }
     } else this.rot = angLerp(this.rot, this.faceRot ?? this.spot.rot, Math.min(1, dt * 6));
@@ -548,7 +549,7 @@ function deriveVisit() {
   derive();
 }
 if (VISIT && visit) setInterval(async () => {
-  try { const r = await fetch('visit.json', {cache: 'no-store'}); if (r.ok) { visit = {...visit, people: (await r.json()).people}; deriveVisit(); } } catch (e) {}
+  try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { visit = {...visit, people: (await r.json()).people}; deriveVisit(); } } catch (e) {}
 }, 4000);
 let viewScope = window.chatroomScope ? window.chatroomScope() : 'self', nLastN = -1;
 window.addEventListener('chatroom:scope', e => { viewScope = e.detail.scope; });
@@ -629,7 +630,9 @@ function derive() {
 // ------------------------------------------------------------------ cast: build and place the figures
 let boss = null, assistant = null, otherLead = null;
 const OWNER_SEAT = seatOr('boss', 0, 0);
-const BOSS_SEAT = visit ? (LAYOUT.bridge && STANDS.find(s => s.tag === 'bridgeIn')) || STANDS.find(s => s.tag === 'entrance') || {pos: new THREE.Vector3(0, 0, SIZE_Z / 2 - 1), rot: Math.PI, pose: 'stand'} : OWNER_SEAT;
+let fromBridge = false;                                                    // back from a visit: you come in from the bridge
+try { fromBridge = sessionStorage.getItem('chatroom.fromBridge') === '1'; sessionStorage.removeItem('chatroom.fromBridge'); } catch (e) {}
+const BOSS_SEAT = visit ? (LAYOUT.bridge && STANDS.find(s => s.tag === 'bridgeIn')) || STANDS.find(s => s.tag === 'entrance') || {pos: new THREE.Vector3(0, 0, SIZE_Z / 2 - 1), rot: Math.PI, pose: 'stand'} : (fromBridge && STANDS.find(s => s.tag === 'bridgeIn')) || OWNER_SEAT;
 let hostFigure = null;                                                      // on a visit: the friend in their own chair
 const interns = new Map();
 
@@ -639,13 +642,23 @@ const interns = new Map();
 // plan (office-layout.js): what blocks, and A* around it.
 const v3 = p => new THREE.Vector3(p.x, 0, p.z);
 const blocked = (x, z) => FLOOR.blocked(x, z);
-const route = (from, to) => FLOOR.route(from, to)?.map(v3) || null;
+const onBridge = p => { const B = LAYOUT.bridge; return !!(B && bridgeOpen && Math.abs(p.x - B.x) < B.width / 2 && p.z > B.z && p.z < B.z + B.length + 0.5); };
+const mouth = () => new THREE.Vector3(LAYOUT.bridge.x, 0, LAYOUT.bridge.z - 0.5);
+function route(from, to) {
+  const a = onBridge(from), b = onBridge(to);
+  if (a && b) return [v3(to)];
+  if (b) { const pts = FLOOR.route(from, mouth()); return pts ? [...pts.map(v3), v3(to)] : null; }
+  if (a) { const pts = FLOOR.route(mouth(), to); return pts ? [mouth(), ...pts.map(v3)] : null; }
+  return FLOOR.route(from, to)?.map(v3) || null;
+}
 const nearestFree = p => { const q = FLOOR.nearest(p); return q ? v3(q) : p.clone(); };
 const BREW = STANDS.find(s => s.tag === 'brew') || {pos: MACHINE.clone().setY(0), rot: 0, pose: 'stand'};
 const USER_SEATS = SEATS.filter(s => s.tag !== 'lead');
 const me = {act: 'idle', yaw: 0, pitch: -0.08, then: null, rising: false, cup: null, cupUntil: 0, brewUntil: 0};
 const keys = new Set();
-const sitSpots = () => USER_SEATS.filter(s => ![...people.values()].some(p => p.spot === s));
+const sitSpots = () => [...USER_SEATS, ...DESKS.filter(d => !d.owner).map(d => d.seat)]
+  .filter(s => ![...people.values(), ...remote.values()].some(p => p.spot === s));
+let running = pref('run', false), shiftHeld = false;                       // x2: the button keeps it, Shift while held
 const outCache = new Map();
 const outOf = s => { if (!outCache.has(s)) outCache.set(s, nearestFree(s.pos)); return outCache.get(s).clone(); };
 const seated = p => !p.path.length && (p.pose === 'sit' || p.pose === 'sofa');
@@ -735,7 +748,7 @@ function drive(dt) {
   watching = null;
   if (f) { boss.rot += me.yaw; me.yaw = 0; }
   boss.rot += turn * dt * 2.4;
-  const step = f * dt * (f > 0 ? 2.0 : 1.2), nx = boss.pos.x + Math.sin(boss.rot) * step, nz = boss.pos.z + Math.cos(boss.rot) * step;
+  const step = f * dt * (f > 0 ? 2.0 : 1.2) * (boss.speed || 1), nx = boss.pos.x + Math.sin(boss.rot) * step, nz = boss.pos.z + Math.cos(boss.rot) * step;
   const others = [...people.values(), ...remote.values(), assistant, hostFigure].filter(p => p && p !== boss);
   const bump = (x, z) => others.some(p => {                                   // people are solid: you cannot walk into them
     const d = Math.hypot(p.pos.x - x, p.pos.z - z);
@@ -743,14 +756,22 @@ function drive(dt) {
   });
   if (!blocked(nx, boss.pos.z) && !bump(nx, boss.pos.z)) boss.pos.x = nx;
   if (!blocked(boss.pos.x, nz) && !bump(boss.pos.x, nz)) boss.pos.z = nz;
-  const B = LAYOUT.bridge;
-  if (B && bridgeOpen && boss.pos.z > B.z + B.length - 0.6 && !leaving) {   // the friend's door
-    if (visit) { leaving = true; location.search = ''; }
-    else if (commonState?.bridge?.joined) { leaving = true; location.search = '?visit'; }
-    else if (performance.now() - doorToast > 4000) { doorToast = performance.now(); ui.placeName(ui.t().friendDoor); }
-  }
   boss.pos.y = 0; boss.pose = f ? 'walk' : 'stand'; boss.faceRot = null;
   boss.spot = {pos: boss.pos.clone(), rot: boss.rot, pose: 'stand'};
+}
+/** the far end of the bridge: into the friend's office or back home; as host, into a guest's (choose if several) */
+function leaveBy(search) { leaving = true; try { sessionStorage.setItem('chatroom.fromBridge', '1'); } catch (e) {} location.search = search; }
+function checkDoor() {
+  const B = LAYOUT.bridge;
+  if (!B || !bridgeOpen || leaving || boss.pos.z < B.z + B.length - 1.0) return;
+  if (visit) return leaveBy('');
+  if (commonState?.bridge?.joined) return leaveBy('?visit');
+  const guests = commonState?.share?.sharing ? (commonState.share.guests || []).map(g => g.name) : [];
+  if (guests.length === 1) return leaveBy('?visit=' + encodeURIComponent(guests[0]));
+  if (performance.now() - doorToast < 4000) return;
+  doorToast = performance.now();
+  if (guests.length > 1) ui.palette(guests.map(n => ({icon: '🚶', name: n, label: ui.t().visit(n)})), c => { ui.palette(null); leaveBy('?visit=' + encodeURIComponent(c.name)); });
+  else ui.placeName(ui.t().friendDoor);
 }
 /** after the figure moved: arrivals, the coffee being made, the cup in hand */
 function tendMe(dt, t) {
@@ -784,7 +805,7 @@ function sync() {
   if (!assistant) { assistant = new Person(D.lead, 'lead', mySeat, false); } else assistant.goTo(mySeat);
   if (NEIGH.room && !otherLead) otherLead = new Person(NEIGH.room.lead + '@' + NEIGH.room.title.slice(0, 16), 'lead', theirSeat, true);
   if (!NEIGH.room && otherLead) { otherLead.dispose(); otherLead = null; }
-  if (visit && !hostFigure) { hostFigure = new Person(visit.host, 'boss', OWNER_SEAT, false); hostFigure.act = 'code'; }
+  if (visit && !hostFigure) { hostFigure = new Person(visit.host, 'boss', OWNER_SEAT, false); hostFigure.act = 'code'; hostFigure.home = OWNER_SEAT; }
   for (const name of D.names) if (!people.has(name) && SPOTS.has(name)) people.set(name, new Person(name, 'agent', SPOTS.get(name).seat, !firstDerive));
   firstDerive = false;
   const now = D.now;
@@ -897,7 +918,7 @@ function drawBoards() {
     g.textAlign = 'left'; nameplate.tex.needsUpdate = true;
   }
   if (LAYOUT.bridge) {
-    const shared = commonRoom().shared;
+    const shared = VISIT || commonRoom().shared;
     bridge.visible = shared; commonDoor.visible = !shared;
     if (shared !== bridgeOpen) { bridgeOpen = shared; openBridge(shared); }
     const {g, canvas: k} = friendSign;
@@ -982,14 +1003,18 @@ document.addEventListener('keydown', e => {
   }
 }, true);
 document.addEventListener('keydown', e => {
-  if (!pov || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+  if (!pov || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || (typing && typing.offsetParent !== null)) return;
+  if (typing) typing.blur();                                                // a hidden chat box must not eat the keys
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd'].includes(k)) { keys.add(k); e.preventDefault(); }
   else if (k === 'e' && !e.repeat) { interact(); e.preventDefault(); }
   else if (k === 'q' && !e.repeat) { wave(); e.preventDefault(); }
 });
 document.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
-window.addEventListener('blur', () => keys.clear());
+window.addEventListener('blur', () => { keys.clear(); shiftHeld = false; });
+document.addEventListener('keydown', e => { if (e.key === 'Shift') shiftHeld = true; });
+document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftHeld = false; });
 renderer.domElement.addEventListener('pointermove', e => {                    // first person: drag to look around
   if (!pov || !(e.buttons & 1)) return;
   watching = null;
@@ -999,6 +1024,7 @@ renderer.domElement.addEventListener('pointermove', e => {                    //
 const ui = createUI(root, {
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
   onPov: () => setPov(!pov),
+  onRun: () => { running = !running; setPref('run', running); },
   onEdit: () => { if (VISIT) return; if (pov) setPov(false); ui.commonPanel(null); select(null); editor.toggle(); },
   onCommonOpen: () => ui.commonOpen() ? ui.commonPanel(null) : openCommon(),
   onShare: async (action, extra) => { await post('share', {action, ...extra}); pollCommon(); },
@@ -1056,7 +1082,9 @@ function syncRemote() {
   const joined = !!(s.bridge && s.bridge.joined);
   // from the other side: as host, the guests and their agents; as guest, everyone but me and my own agents
   const list = (s.people || []).filter(p => (joined ? p.guest !== s.me : !!p.guest)
-                                            && !(visit && (DATA.config.participants || []).includes(p.name)) && !(visit && p.name === visit.host));
+                                            && !(visit && (DATA.config.participants || []).includes(p.name)) && !(visit && p.name === visit.host)
+                                            && !(visit && p.guest === visit.host)
+                                            && !(p.emoji === '🤝' && (DATA.config.participants || []).includes(p.name)));   // a lent helper already has a desk here
   const names = new Set(list.map(p => p.name));
   for (const [n, p] of remote) if (!names.has(n)) { emit(20, p.head(), {color: ['#80deea', '#ffffff']}); p.dispose(); remote.delete(n); }
   const used = new Set([...people.values()].map(p => p.spot)), free = [...COMMON.filter(s => !used.has(s) && s !== boss.spot).reverse(),
@@ -1065,11 +1093,12 @@ function syncRemote() {
   for (const p of list) {
     if (!remote.has(p.name)) {
       const seat = free[k % Math.max(1, free.length)] || BOSS_SEAT;
-      const r = new Person(p.name, 'guest', seat, true, p.color || '#888888'); r.remoteEmoji = p.emoji; r.act = 'idle';
+      const r = new Person(p.name, 'guest', seat, true, p.color || '#888888'); r.remoteEmoji = p.emoji; r.act = 'idle'; r.home = seat;
       remote.set(p.name, r);
     }
     k++;
-    remote.get(p.name).act = p.state === 'work' ? 'think' : 'coffee';
+    const r = remote.get(p.name);
+    r.act = r.follow ? 'idle' : p.state === 'work' ? 'think' : 'coffee';
   }
   // new lines in the common room: a bubble over whoever said it
   const msgs = s.messages || [], top = msgs.length ? msgs[msgs.length - 1].n : 0;
@@ -1079,6 +1108,38 @@ function syncRemote() {
     if (who) who.bubble = {text: m.text, until: Date.now() / 1000 + 7, kind: 'msg'};
   }
   lastCommonN = Math.max(lastCommonN, top);
+}
+// where your figure is goes to the other side while the room is shared or joined, or while you visit
+const linked = () => VISIT || !!(commonState?.share?.sharing || commonState?.bridge?.joined);
+let presenceSent = '', presence = null;
+setInterval(() => {
+  if (!boss || !linked()) return;
+  const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home'};
+  const key = JSON.stringify(pos, (k, v) => typeof v === 'number' ? Math.round(v * 20) / 20 : v);
+  if (key !== presenceSent) { presenceSent = key; post('presence', pos); }
+}, 400);
+setInterval(async () => {
+  if (!linked()) return;
+  try { const r = await fetch('presence.json', {cache: 'no-store'}); if (r.ok) { presence = await r.json(); placeOthers(); } } catch (e) {}
+}, 700);
+function placeOthers() {
+  const meName = presence.me, here = 'visit:' + (visit ? visit.host : meName);
+  for (const p of presence.people || []) {
+    if (p.name === meName) continue;
+    const owner = visit && p.name === visit.host, fig = owner ? hostFigure : remote.get(p.name);
+    if (fig) walkWhere(fig, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos : null);
+  }
+}
+/** a figure of the other side walks to where its person really is (a long way: it appears there) */
+function walkWhere(fig, pos) {
+  if (!pos) { if (fig.follow) { fig.follow = null; fig.speed = 1; fig.goTo(fig.home || OWNER_SEAT); } return; }
+  const to = new THREE.Vector3(pos.x, pos.y || 0, pos.z), spot = {pos: to, rot: pos.rot, pose: pos.pose === 'walk' ? 'stand' : pos.pose};
+  fig.follow = pos; fig.act = 'idle';
+  const far = Math.hypot(fig.pos.x - to.x, fig.pos.z - to.z);
+  if (far > 6) { fig.pos.copy(to); fig.path = []; fig.spot = spot; fig.pose = spot.pose; fig.rot = pos.rot; return; }
+  fig.spot = spot;
+  if (far < 0.05) { if (!fig.path.length) { fig.pose = spot.pose; fig.pos.y = to.y; } return; }
+  fig.path = [to.clone().setY(0)]; fig.pose = 'walk'; fig.speed = 1.4;
 }
 function openCommon() {
   const r = commonRoom();
@@ -1197,7 +1258,7 @@ function placeTags() {
   const st = DATA.state, src = st.mod && Date.now() / 1000 - st.mod < 120 ? L.mod : Object.keys(st.agents || {}).length ? L.tail : L.nodata;
   ui.hud({title: `${DATA.config.icon || '💬'} ${DATA.config.title || DATA.config.topic || 'Chat room'}`, pct: pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null,
           waiting: D.waiting.size, working: work, idle, plan: D.closed ? `✅ ${L.done} v${D.closed.v}` : D.plan ? `🗳 ${L.plan(D.plan.v)}: ${L.votes(yes, D.names.length - yes)}` : '',
-          src: '📡 ' + src, mode, follow, quality, pov, edit: editor.active()});
+          src: '📡 ' + src, mode, follow, quality, pov, run: running, edit: editor.active()});
   // labels the user gave to pieces of furniture, a little above each
   ui.itemLabels(ITEM_MESHES.filter(m => m.userData.label).map(m => {
     _v.copy(m.position); _v.y += 1.25; _v.project(camera);
@@ -1233,7 +1294,8 @@ function frame(now) {
     hintAcc += dt;
     if (hintAcc > 0.2) { hintAcc = 0; const n = pov && povLocked ? nearby() : atMyDesk() ? {kind: 'desk'} : null; ui.hint(n ? hintText(n) : ''); }
     boss.act = boss.bubble && boss.bubble.until > Date.now() / 1000 ? 'speak' : t < (me.waveUntil || 0) ? 'wave' : me.act;
-    boss.update(dt, t); tendMe(dt, t);
+    boss.speed = running || shiftHeld ? 2 : 1;
+    boss.update(dt, t); tendMe(dt, t); checkDoor();
   }
   if (assistant) { assistant.act = assistant.bubble && assistant.bubble.until > Date.now() / 1000 ? 'speak' : 'read'; assistant.update(dt, t); }
   screenAcc += dt;
@@ -1292,11 +1354,19 @@ function flyCamera(dt) {
   }
 }
 
-if (FORCE) window.__officeStep = t => frame(t ?? performance.now());                 // tests: step the loop by hand in a hidden tab
+if (FORCE) window.__officeStep = t => frame(t ?? performance.now());
+if (FORCE) Object.assign(window, {                                        // tests: walk by script, see who is where
+  __officeWalk: (x, z) => goToPoint(new THREE.Vector3(x, 0, z)),
+  __officeMe: () => boss && {x: boss.pos.x, z: boss.pos.z, pose: boss.pose, path: boss.path.length, speed: boss.speed},
+  __officeOthers: () => [...remote.values(), hostFigure].filter(Boolean).map(p => ({name: p.name, x: +p.pos.x.toFixed(2), z: +p.pos.z.toFixed(2), pose: p.pose, follow: !!p.follow})),
+  __officeSeats: () => sitSpots().length,
+  __officeFreeDesk: () => { const d = DESKS.find(d => !d.owner); return d && {x: d.seat.pos.x, z: d.seat.pos.z}; },
+  __officeSync: async () => { await pollCommon(); const r = await fetch('presence.json', {cache: 'no-store'}); presence = await r.json(); placeOthers(); },
+});                 // tests: step the loop by hand in a hidden tab
 
 // ------------------------------------------------------------------ start
 ui.setLang(DATA.config.lang);
-if (visit) ui.visitBanner(ui.t().visiting(visit.host), () => { location.search = ''; });
+if (visit) ui.visitBanner(ui.t().visiting(visit.host), () => leaveBy(''));
 window.addEventListener('chatroom:data', () => ui.setLang(DATA.config.lang));
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();

@@ -59,7 +59,7 @@ def person(d):
             'state': 'break' if d.get('state') == 'break' else 'work'}
 
 
-GAMES = {'tris': ('new', 'join', 'move'), 'morra': ('new', 'join', 'commit', 'reveal'), 'dadi': ('roll',)}
+GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',)}
 
 
 def clean_game(g):
@@ -129,6 +129,7 @@ class Share:
         office(): the host's plan and everyone's coarse presence, for visits"""
         self.common, self.title, self.host, self.people_fn, self.office_fn = common, title, host, people, office
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
+        self.me_pos = None                                   # where the host's own figure is, from the viewer
         self.lock = threading.Lock()
         self.fails = deque()
         self.server = self.proc = None
@@ -182,7 +183,7 @@ class Share:
             if any(x['name'] == g['name'] for x in self.guests.values()) or g['name'] == self.host:
                 raise ValueError('that name is taken in this room')
             token = secrets.token_hex(24)
-            self.guests[token] = {**g, 'agents': [], 'seen': now, 'posts': deque()}
+            self.guests[token] = {**g, 'agents': [], 'seen': now, 'posts': deque(), 'cids': deque(maxlen=400), 'me': None, 'office': None}
             return token
 
     def guest(self, token):
@@ -198,8 +199,12 @@ class Share:
                 if g['name'] == name:
                     del self.guests[t]
 
-    def post(self, g, author, text, game=None):
-        """a line from a guest's side, as GUEST or GUEST·AGENT; at most 20 a minute per guest"""
+    def post(self, g, author, text, game=None, cid=None):
+        """a line from a guest's side, as GUEST or GUEST·AGENT; at most 20 a minute per guest. A line sent again
+        after a timeout (same cid) is taken once."""
+        cid = re.sub(r'[^0-9a-f]', '', str(cid or ''))[:32]
+        if cid and cid in g.setdefault('cids', deque(maxlen=400)):
+            return 0
         now = time.time()
         while g['posts'] and now - g['posts'][0] > 60:
             g['posts'].popleft()
@@ -208,10 +213,16 @@ class Share:
         g['posts'].append(now)
         author = str(author or '').strip()
         name = g['name'] if not author or author == g['name'] else f"{g['name']}·{person({'name': author})['name']}"
-        return self.common.append(name, str(text).strip()[:LINE_MAX], game=clean_game(game) if game else None)
+        n = self.common.append(name, str(text).strip()[:LINE_MAX], game=clean_game(game) if game else None)
+        if cid:
+            g['cids'].append(cid)
+        return n
 
-    def doc(self, g, author, name, data):
-        """a document from a guest's side: at most 10 an hour per guest"""
+    def doc(self, g, author, name, data, cid=None):
+        """a document from a guest's side: at most 10 an hour per guest (taken once per cid)"""
+        cid = re.sub(r'[^0-9a-f]', '', str(cid or ''))[:32]
+        if cid and cid in g.setdefault('cids', deque(maxlen=400)):
+            return 0
         now = time.time()
         g.setdefault('docs', deque())
         while g['docs'] and now - g['docs'][0] > 3600:
@@ -221,7 +232,10 @@ class Share:
         g['docs'].append(now)
         author = str(author or '').strip()
         who = g['name'] if not author or author == g['name'] else f"{g['name']}·{person({'name': author})['name']}"
-        return add_doc(self.common, who, name, data)
+        n = add_doc(self.common, who, name, data)
+        if cid:
+            g['cids'].append(cid)
+        return n
 
     def ask(self, g, text):
         """a guest asks for help (research, a plan, a change to their files): the host decides, nothing runs before"""
@@ -253,12 +267,18 @@ class Share:
     def people(self):
         """everyone in the common room from the outside: the guests and their agents, the host's agents"""
         with self.lock:
-            out = [{**{k: g[k] for k in ('name', 'emoji', 'color')}, 'state': 'break', 'guest': g['name']} for g in self.guests.values()]
+            out = [{**{k: g[k] for k in ('name', 'emoji', 'color')}, 'state': 'break', 'guest': g['name'], 'pos': g.get('me')} for g in self.guests.values()]
             for g in self.guests.values():
                 out += [{**a, 'name': f"{g['name']}·{a['name']}", 'guest': g['name']} for a in g['agents']]
-        host = {'name': self.host, 'emoji': '👑', 'color': '#f5b400', 'state': 'break', 'guest': None, 'host': True}
+        host = {'name': self.host, 'emoji': '👑', 'color': '#f5b400', 'state': 'break', 'guest': None, 'host': True, 'pos': self.me_pos}
         lent = [{'name': r['helper'], 'emoji': '🤝', 'color': '#26a69a', 'state': 'work', 'guest': None, 'helper_for': r['guest']} for r in self.helpers()]
         return out + [host] + [{**p, 'guest': None} for p in self.people_fn()] + lent
+
+    def guest_office(self, name):
+        """a guest's office as they last sent it, for the host's visit (None until it arrives)"""
+        with self.lock:
+            g = next((g for g in self.guests.values() if g['name'] == name), None)
+            return g and g.get('office') and {**g['office'], 'host': g['name']}
 
     def status(self):
         with self.lock:
@@ -305,7 +325,7 @@ def make_handler(share):
                 self.send_header('X-Content-Type-Options', 'nosniff'); self.send_header('Content-Length', str(len(data))); self.end_headers()
                 return self.wfile.write(data)
             if path == '/share/office':                   # a visit: the host's plan and everyone's coarse presence
-                return self.send(200, {**share.office_fn(), 'host': share.host, 'title': share.title})
+                return self.send(200, {**share.office_fn(), 'host': share.host, 'title': share.title, 'present': share.people()})
             since = int((re.search(r'(?:^|&)since=(\d+)', query) or [0, 0])[1])
             msgs = [{k: m[k] for k in ('n', 'time', 'from', 'text', 'doc', 'game') if k in m} for m in share.common.messages() if m['n'] > since][:200]
             mine = [{k: r[k] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes') if k in r} for r in share.requests if r['guest'] == g['name']]
@@ -328,16 +348,23 @@ def make_handler(share):
                 return self.send(401, {'error': 'join first'})
             try:
                 if path == '/share/post':
-                    return self.send(200, {'n': share.post(g, body.get('from'), body.get('text', ''), body.get('game'))})
+                    return self.send(200, {'n': share.post(g, body.get('from'), body.get('text', ''), body.get('game'), body.get('cid'))})
                 if path == '/share/presence':
-                    g['agents'] = [person(a) for a in (body.get('agents') or [])[:12]]
+                    if 'agents' in body:
+                        g['agents'] = [person(a) for a in (body.get('agents') or [])[:12]]
+                    if 'me' in body:
+                        g['me'] = clean_pos(body['me'])
+                    if isinstance(body.get('office'), dict):    # the guest's plan, for a visit by the host (checked when it is drawn)
+                        o = body['office']
+                        g['office'] = {'items': o.get('items') if isinstance(o.get('items'), list) else None,
+                                       'people': [p for p in (o.get('people') or [])[:40] if isinstance(p, dict)], 'title': str(o.get('title') or '')[:120]}
                     return self.send(200, {})
                 if path == '/share/doc':              # a guest shares a document
                     try:
                         data = base64.b64decode(str(body.get('data', '')), validate=True)
                     except (ValueError, TypeError):
                         raise ValueError('the document must be base64')
-                    return self.send(200, {'n': share.doc(g, body.get('from'), body.get('name'), data)})
+                    return self.send(200, {'n': share.doc(g, body.get('from'), body.get('name'), data, body.get('cid'))})
                 if path == '/share/request':          # a guest asks the host to lend an agent
                     return self.send(200, share.ask(g, body.get('text', '')))
                 if path == '/share/leave':
@@ -437,6 +464,22 @@ def clean_line(m):
     return out
 
 
+def clean_pos(d):
+    """where a figure is: a point of the floor plan, its height (a seat), a heading, a pose, and whose office it is in
+    ('home', or 'visit:NAME' while visiting NAME); anything else is dropped"""
+    if not isinstance(d, dict):
+        return None
+    try:
+        x, y, z, rot = (max(-80.0, min(80.0, float(d.get(k) or 0))) for k in ('x', 'y', 'z', 'rot'))
+    except (TypeError, ValueError):
+        return None
+    where = str(d.get('where') or 'home')
+    if where != 'home' and not re.fullmatch(r'visit:[A-Za-z0-9_-]{1,24}', where):
+        return None
+    return {'x': round(x, 2), 'y': round(min(2.0, max(-0.5, y)), 2), 'z': round(z, 2), 'rot': round(rot, 3),
+            'pose': d.get('pose') if d.get('pose') in ('walk', 'stand', 'sit', 'sofa') else 'stand', 'where': where}
+
+
 def clean_name(name):
     return re.sub(r'[\x00-\x1f<>&"]', '', str(name or '?'))[:60] or '?'
 
@@ -447,6 +490,8 @@ def clean_person(p):
            'color': p['color'] if COLOR.match(str(p.get('color', ''))) else '#888888', 'guest': None if p.get('guest') is None else clean_name(p.get('guest'))}
     if p.get('host'):
         out['host'] = True
+    if p.get('pos'):
+        out['pos'] = clean_pos(p['pos'])
     return out
 
 
@@ -470,9 +515,12 @@ def call(url, path, token=None, body=None, timeout=10):
 
 
 class Bridge:
-    def __init__(self, common_dir, url, pin, me, people=lambda: []):
-        """common_dir: ROOM/common of the guest; me: {name, emoji, color} of the guest; people(): the guest's agents there"""
+    def __init__(self, common_dir, url, pin, me, people=lambda: [], office=None, outgoing=lambda: [], arrived=lambda lines: None):
+        """common_dir: ROOM/common of the guest; me: {name, emoji, color} of the guest; people(): the guest's agents there;
+        office(): the guest's plan and people, for a visit by the host; outgoing(): lines to add to the common room
+        (tags of a lent helper written in the guest's own chat); arrived(lines): the new common room lines"""
         self.dir, self.url, self.pin, self.me, self.people_fn = Path(common_dir), url.strip(), str(pin).strip(), me, people
+        self.office_fn, self.outgoing, self.arrived, self.me_pos = office, outgoing, arrived, None
         self.token = self.title = self.host = self.error = None
         self.n, self.people, self.requests, self.stopped = 0, [], [], threading.Event()
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -487,13 +535,28 @@ class Bridge:
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
-        last_presence = 0
+        last_presence = last_office = 0
+        sent_me = None
         while not self.stopped.is_set():
             try:
+                lines = self.outgoing()
+                if lines:
+                    with (self.dir / 'outbox.jsonl').open('a', encoding='utf-8') as f:
+                        for line in lines:
+                            f.write(json.dumps(line, ensure_ascii=False) + '\n')
                 self.push()
-                if time.time() - last_presence > 10:
-                    call(self.url, '/share/presence', self.token, {'agents': self.people_fn()})
-                    last_presence = time.time()
+                now, body = time.time(), {}
+                if self.me_pos != sent_me:                 # the figure moved: its place goes at once, the rest when due
+                    body['me'] = self.me_pos
+                if now - last_presence > 10:
+                    body['agents'] = self.people_fn()
+                    last_presence = now
+                if self.office_fn and now - last_office > 20:
+                    body['office'] = self.office_fn()
+                    last_office = now
+                if body:
+                    call(self.url, '/share/presence', self.token, body)
+                    sent_me = body.get('me', sent_me)
                 feed = call(self.url, f'/share/feed?since={self.n}', self.token)
                 lines = [clean_line(m) for m in (feed.get('messages') or [])[:200] if isinstance(m, dict)]
                 lines = [m for m in lines if m['n'] > self.n]
@@ -510,6 +573,8 @@ class Bridge:
                                 (self.dir / 'docs' / f"{m['doc']['id']}-{m['doc']['name']}").write_bytes(data)
                             except (ValueError, OSError):
                                 pass
+                if lines:
+                    self.arrived(lines)
                 self.people = [clean_person(p) for p in (feed.get('people') or [])[:60] if isinstance(p, dict)]
                 self.requests = [{k: str(r.get(k, ''))[:300] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes')}
                                  for r in (feed.get('requests') or [])[:20] if isinstance(r, dict)]
@@ -519,7 +584,7 @@ class Bridge:
                 break
             except (ValueError, OSError) as exc:
                 self.error = str(exc)
-            self.stopped.wait(2)
+            self.stopped.wait(0.8)                             # often enough for the figures to walk smoothly
         (self.dir / 'link.json').unlink(missing_ok=True)
 
     def push(self):
@@ -531,17 +596,20 @@ class Bridge:
         if not sending.exists():
             os.replace(out, sending)
         lines = [json.loads(x) for x in sending.read_text(encoding='utf-8').splitlines() if x.strip()]
+        if any('cid' not in x for x in lines):
+            lines = [{**x, 'cid': x.get('cid') or secrets.token_hex(8)} for x in lines]
+            sending.write_text(''.join(json.dumps(x, ensure_ascii=False) + '\n' for x in lines), encoding='utf-8')
         for k, line in enumerate(lines):
             try:
                 if line.get('doc_path'):                             # a document: read here, sent as base64
                     p = Path(line['doc_path'])
                     data = p.read_bytes() if p.is_file() and p.stat().st_size <= DOC_MAX else b''
                     if data:
-                        call(self.url, '/share/doc', self.token, {'from': line.get('from'), 'name': p.name,
+                        call(self.url, '/share/doc', self.token, {'from': line.get('from'), 'name': p.name, 'cid': line['cid'],
                                                                   'data': base64.b64encode(data).decode('ascii')}, timeout=60)
                     continue
                 call(self.url, '/share/post', self.token, line)
-            except ValueError:
+            except (ValueError, OSError):                       # a timeout may have delivered it: the cid keeps it single
                 rest = lines[k:]
                 sending.write_text(''.join(json.dumps(x, ensure_ascii=False) + '\n' for x in rest), encoding='utf-8')
                 raise
