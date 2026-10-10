@@ -47,6 +47,10 @@ const CSS = `
 .o-tvsearch { display: flex; gap: 8px; margin-bottom: 10px; }
 .o-tvsearch input { flex: 1; background: #0b0e15; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 7px 10px; font: inherit; }
 .o-tvtogether { display: flex; align-items: center; gap: 6px; opacity: .9; }
+.o-tvfull { position: fixed; inset: 0; background: #000; z-index: 60; display: flex; align-items: center; justify-content: center; }
+.o-tvfull iframe, .o-tvfull video { width: 100%; height: 100%; border: 0; background: #000; }
+.o-tvfull button { position: absolute; top: 12px; right: 12px; z-index: 1; background: #000a; color: #fff; border: 1px solid #fff6; border-radius: 8px;
+                   padding: 6px 12px; cursor: pointer; font: 14px "Segoe UI", system-ui, sans-serif; }
 `;
 
 export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, raycastables, say, t, linked, onTogether}) {
@@ -84,11 +88,12 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   Object.assign(frame.style, {position: 'absolute', left: '0', top: '0', width: FW + 'px', height: FH + 'px', border: '0', transformOrigin: '0 0',
                               pointerEvents: 'none', display: 'none', zIndex: '1', background: '#000'});
   root.appendChild(frame);
-  let channels = [], now = {kind: 'off'}, file = 0, seenAt = 0, hidden = true, menuEl = null;
+  let channels = [], now = {kind: 'off'}, file = 0, seenAt = 0, hidden = true, menuEl = null, playing = null, fullEl = null, sound = false;
+  try { sound = localStorage.getItem('chatroom.tv.sound') === '1'; } catch (e) {}
 
   function local(c) {
     frame.style.display = 'none'; frame.src = 'about:blank';
-    video.loop = c.files.length === 1;
+    video.loop = c.files.length === 1; video.muted = !sound;
     video.src = `tv/${encodeURIComponent(c.name)}/${encodeURIComponent(c.files[file % c.files.length])}`;
     video.play().catch(() => {});
     screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
@@ -96,7 +101,8 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   function youtube(ids, start = 0) {
     video.pause(); video.removeAttribute('src'); video.load();
     screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
-    frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=1&controls=0&loop=1&playlist=${ids.join(',')}`
+    playing = {ids, at: Date.now() / 1000 - start};
+    frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=${sound ? 0 : 1}&controls=0&loop=1&playlist=${ids.join(',')}`
               + `&playsinline=1&rel=0&modestbranding=1&vq=hd720${start > 0 ? '&start=' + Math.floor(start) : ''}`;
   }
   function channel(i) {
@@ -139,12 +145,53 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     const tg = menuEl.querySelector('.o-tvtogether'); tg.style.display = linked() ? '' : 'none'; tg.querySelector('input').checked = together;
     const input = menuEl.querySelector('.o-tvsearch input'); if (input && !query) input.focus();
   }
+  const isLocal = () => now.kind === 'channel' && channels[now.i]?.files;
+  function fullscreen() {
+    if (fullEl || now.kind === 'off') return;
+    close();
+    fullEl = document.createElement('div'); fullEl.className = 'o-tvfull';
+    const back = Object.assign(document.createElement('button'), {textContent: '✕ Esc'});
+    fullEl.appendChild(back);
+    let inner;
+    if (isLocal()) {
+      inner = Object.assign(document.createElement('video'), {src: video.src, controls: true, autoplay: true, muted: !sound, loop: video.loop});
+      inner.addEventListener('loadedmetadata', () => { inner.currentTime = video.currentTime; }, {once: true});
+      video.pause();
+    } else {
+      const at = Math.floor(Date.now() / 1000 - playing.at);
+      inner = Object.assign(document.createElement('iframe'), {allow: 'autoplay; encrypted-media; fullscreen', allowFullscreen: true,
+        src: `https://www.youtube-nocookie.com/embed/${playing.ids[0]}?autoplay=1&mute=${sound ? 0 : 1}&controls=1&loop=1&playlist=${playing.ids.join(',')}&rel=0&playsinline=1${at > 0 ? '&start=' + at : ''}`});
+      frame.src = 'about:blank';                                            // one player at a time, so the sound is not doubled
+    }
+    fullEl.appendChild(inner);
+    const leave = () => {
+      if (!fullEl) return;
+      if (inner.tagName === 'VIDEO') { video.currentTime = inner.currentTime; video.play().catch(() => {}); }
+      else if (playing) youtube(playing.ids, Date.now() / 1000 - playing.at);
+      fullEl.remove(); fullEl = null;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+    back.onclick = leave;
+    fullEl.addEventListener('keydown', e => { if (e.key === 'Escape') leave(); e.stopPropagation(); });
+    document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) leave(); }, {once: true});
+    document.body.appendChild(fullEl);
+    fullEl.requestFullscreen?.().catch(() => {});
+  }
+  /** sound on or off, remembered; a YouTube video starts again from where it is, with or without sound */
+  function setSound(on) {
+    sound = on;
+    try { localStorage.setItem('chatroom.tv.sound', on ? '1' : '0'); } catch (e) {}
+    if (isLocal()) { video.muted = !on; video.play().catch(() => {}); }
+    else if (playing) youtube(playing.ids, Date.now() / 1000 - playing.at);
+    say(on ? '🔊' : '🔇');
+  }
   function menu() {
     if (menuEl) { menuEl.remove(); menuEl = null; return; }
     const L = t();
     menuEl = document.createElement('div'); menuEl.className = 'o-tvmenu';
     menuEl.innerHTML = `<div class="o-tvbox"><div class="o-tvhead"><b>📺 ${esc(L.tvTitle)}</b>
-        <label class="o-tvtogether"><input type="checkbox"> 👥 ${esc(L.tvTogether)}</label><button data-x>✕</button></div>
+        <label class="o-tvtogether"><input type="checkbox"> 👥 ${esc(L.tvTogether)}</label>
+        <button data-full title="${esc(L.tvFull)}">⛶</button><button data-sound title="${esc(L.tvAudio)}">${sound ? '🔊' : '🔇'}</button><button data-x>✕</button></div>
       <div class="o-tvtabs"><button data-tab="channels">${esc(L.tvChannels)}</button><button data-tab="search">🔎 ${esc(L.tvYoutube)}</button></div>
       <div class="o-tvbody"></div></div>`;
     menuEl.addEventListener('pointerdown', e => { e.stopPropagation(); if (e.target === menuEl) close(); });
@@ -164,6 +211,8 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     menuEl.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.x !== undefined) return close();
+      if (b.dataset.full !== undefined) return fullscreen();
+      if (b.dataset.sound !== undefined) { setSound(!sound); b.textContent = sound ? '🔊' : '🔇'; return; }
       if (b.dataset.tab) { tab = b.dataset.tab; return drawMenu(); }
       if (b.dataset.ch) { channel(+b.dataset.ch); return close(); }
       if (b.dataset.v) { watch(b.dataset.v, b.dataset.title, Date.now() / 1000, together && linked()); return close(); }
@@ -177,6 +226,9 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   return {
     remote,
     menu,
+    fullscreen,
+    /** how far a point is from the screen (T opens the menu within a few metres) */
+    nearTv: p => Math.hypot(p.x - at.x, p.z - at.z),
     open: () => !!menuEl,
     /** how far a point is from the remote (for E in first person) */
     near: p => remote ? Math.hypot(p.x - remote.position.x, p.z - remote.position.z) : Infinity,

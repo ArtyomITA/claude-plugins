@@ -727,6 +727,34 @@ def tv_channels():
     return local + [c for c in youtube if c['youtube']]
 
 
+def tv_search(q):
+    """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded), kept only when their author lets
+    them play on other pages; raises RuntimeError with what to do when yt-dlp is missing or fails"""
+    try:
+        r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch24:{q}'],
+                           capture_output=True, text=True, encoding='utf-8', timeout=30)
+        found = json.loads(r.stdout or '{}').get('entries') or [] if r.stdout.strip() else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        found = None
+    if found is None:
+        why = (r.stderr or '').strip().splitlines()[-1][:160] if 'r' in locals() and r.stderr else ''
+        raise RuntimeError('the YouTube search needs yt-dlp, up to date: python -m pip install -U yt-dlp' + (f' ({why})' if why else ''))
+    out = [{'id': e['id'], 'title': str(e.get('title') or '')[:120], 'channel': str(e.get('channel') or e.get('uploader') or '')[:60],
+            'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
+           for e in found if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
+
+    def embeddable(vid):                                       # many authors forbid playing their videos on other pages
+        try:
+            with urllib.request.urlopen(f'https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={vid}&format=json', timeout=5) as resp:
+                return resp.status == 200
+        except (OSError, ValueError):
+            return False
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as pool:
+        playable = list(pool.map(embeddable, [e['id'] for e in out]))
+    return [e for e, good in zip(out, playable) if good][:16]
+
+
 def settings():
     """lend_mode: 'full' (a lent helper works for real inside its own folder: commands, a venv, tests) or 'safe' (it only
     talks and writes drafts); full by default"""
@@ -1027,7 +1055,7 @@ def cmd_serve(room, a):
         config=lambda: {k: room.config().get(k) for k in ('title', 'subtitle', 'icon', 'accent', 'lang', 'participants', 'profiles', 'self_names', 'user_name')},
         post=friend_post)
     host = sharing.Share(common, room.config().get('title') or room.config().get('topic', ''), me()['name'], people=here_people,
-                         office=office_for_visit, room=friends_room)
+                         office=office_for_visit, room=friends_room, search=tv_search)
     lend_log = common.dir / 'lend.jsonl'
 
     def prepare_helper(rid, helper, who, text, model, effort, minutes):
@@ -1176,14 +1204,16 @@ def cmd_serve(room, a):
                 if not q:
                     return self.send(400, 'say what to look for', 'text/plain')
                 try:
-                    r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch16:{q}'],
-                                       capture_output=True, text=True, encoding='utf-8', timeout=30)
-                    found = json.loads(r.stdout or '{}').get('entries') or []
-                except (OSError, ValueError, subprocess.TimeoutExpired):
-                    return self.send(503, 'search needs yt-dlp (pip install yt-dlp)', 'text/plain')
-                out = [{'id': e['id'], 'title': str(e.get('title') or '')[:120], 'channel': str(e.get('channel') or e.get('uploader') or '')[:60],
-                        'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
-                       for e in found if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
+                    out = tv_search(q)
+                except RuntimeError as exc:
+                    out, why = None, str(exc)
+                if out is None and guest['bridge']:     # this computer cannot search: the friend's can
+                    try:
+                        out = guest['bridge'].tv_search(q)
+                    except (ValueError, PermissionError, OSError) as exc:
+                        why += f'; through {guest["bridge"].host or "the host"}: {exc}'
+                if out is None:
+                    return self.send(503, why, 'text/plain')
                 return self.send(200, json.dumps({'results': out}, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/tv.json':                    # the lounge TV's channels
                 return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')

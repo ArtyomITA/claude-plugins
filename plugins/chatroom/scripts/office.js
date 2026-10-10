@@ -692,7 +692,7 @@ function brew() { me.act = 'brew'; me.brewUntil = performance.now() / 1000 + 3; 
 const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
 function nearby() {
   if (!boss || boss.path.length) return null;
-  if (seated(boss)) return {kind: atMyDesk() ? 'desk' : 'stand'};
+  if (seated(boss)) return loungeTv.near(boss.pos) < 3 ? {kind: 'zap'} : {kind: atMyDesk() ? 'desk' : 'stand'};
   const d = p => Math.hypot(p.x - boss.pos.x, p.z - boss.pos.z);
   _fwd.set(Math.sin(boss.rot + me.yaw), 0, Math.cos(boss.rot + me.yaw));
   const facing = p => _to.set(p.x - boss.pos.x, 0, p.z - boss.pos.z).normalize().dot(_fwd);
@@ -1028,6 +1028,12 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => { keys.clear(); shiftHeld = false; });
 document.addEventListener('keydown', e => { if (e.key === 'Shift') shiftHeld = true; });
+document.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() !== 't' || e.repeat || e.ctrlKey || e.metaKey || e.altKey || mode === 'chat' || !boss) return;
+  const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+  if (typing && typing.offsetParent !== null) return;
+  if (loungeTv.nearTv(boss.pos) < 8) { e.preventDefault(); loungeTv.menu(); }
+});
 document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftHeld = false; });
 renderer.domElement.addEventListener('pointermove', e => {                    // first person: drag to look around
   if (!pov || !(e.buttons & 1)) return;
@@ -1350,7 +1356,7 @@ function frame(now) {
   for (const at of STEAM) if (Math.random() < dt * 3) emit(1, at, {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9});
   if (printJob > 0 && Math.random() < dt * 2) { printJob -= 1; emit(1, PAPER, {color: '#ffffff', speed: 0.2, up: 1.5, life: 2, size: 0.18, gravity: -1.5, glow: 1}); }
   stepParticles(dt); stepPlanes(dt);
-  cutWalls(); loungeTv.update(t);
+  cutWalls();
   if (pov || flyHome) flyCamera(dt);
   else {
     if (tween) {
@@ -1364,6 +1370,7 @@ function frame(now) {
   uiAcc += dt;
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
+  camera.updateMatrixWorld(); loungeTv.update(t);
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
 }
 

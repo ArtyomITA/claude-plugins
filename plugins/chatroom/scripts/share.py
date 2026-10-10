@@ -25,6 +25,7 @@ import tarfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -172,10 +173,11 @@ def doc_path(common_dir, doc):
 
 # ------------------------------------------------------------------ the host
 class Share:
-    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}, room=None):
+    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}, room=None, search=None):
         """common: the Room of the common room; host: the host's user name; people(): the host's agents in the room;
         office(): the host's plan and everyone's coarse presence, for visits"""
         self.common, self.title, self.host, self.people_fn, self.office_fn = common, title, host, people, office
+        self.search = search                                 # the TV's YouTube search, lent to guests that cannot search
         self.room = room                                     # the room's own chat for friends: allowed(), read(since), config(), post(name, text)
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
         self.asks = []                                       # help the host asks a guest for: {id, to, text, ts, status, helper, ...}
@@ -432,7 +434,7 @@ def make_handler(share):
 
         def do_GET(self):
             path, _, query = self.path.partition('?')
-            if path not in ('/share/feed', '/share/office', '/share/room') and not re.fullmatch(r'/share/doc/\d{1,6}', path):
+            if path not in ('/share/feed', '/share/office', '/share/room', '/share/tvsearch') and not re.fullmatch(r'/share/doc/\d{1,6}', path):
                 return self.send(404, {'error': 'not found'})
             g = share.guest(self.headers.get('X-Chatroom-Token'))
             if not g:
@@ -447,6 +449,22 @@ def make_handler(share):
                 self.send_response(200); self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('X-Content-Type-Options', 'nosniff'); self.send_header('Content-Length', str(len(data))); self.end_headers()
                 return self.wfile.write(data)
+            if path == '/share/tvsearch':                 # a guest that cannot search YouTube searches through the host (6 a minute)
+                if not share.search:
+                    return self.send(404, {'error': 'the host cannot search'})
+                now = time.time()
+                g.setdefault('searches', deque())
+                while g['searches'] and now - g['searches'][0] > 60:
+                    g['searches'].popleft()
+                if len(g['searches']) >= 6:
+                    return self.send(429, {'error': 'slow down: 6 searches a minute'})
+                g['searches'].append(now)
+                q = re.sub(r'[\x00-\x1f]', ' ', (re.search(r'(?:^|&)q=([^&]*)', query) or [0, ''])[1])
+                try:
+                    q = urllib.parse.unquote_plus(q).strip()[:100]
+                    return self.send(200, {'results': share.search(q) if q else []})
+                except RuntimeError as exc:
+                    return self.send(503, {'error': str(exc)})
             if path == '/share/room':                     # the room's own chat, when the host shares it with friends
                 if not share.room or not share.room.allowed():
                     return self.send(403, {'error': 'the host does not share the room chat'})
@@ -813,6 +831,13 @@ class Bridge:
                 sending.write_text(''.join(json.dumps(x, ensure_ascii=False) + '\n' for x in rest), encoding='utf-8')
                 raise
         sending.unlink()
+
+    def tv_search(self, q):
+        """the host searches YouTube for us; only well formed results come back"""
+        r = call(self.url, '/share/tvsearch?q=' + urllib.parse.quote(str(q)[:100]), self.token, timeout=45)
+        return [{'id': e['id'], 'title': str(e.get('title') or '')[:120], 'channel': str(e.get('channel') or '')[:60],
+                 'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
+                for e in (r.get('results') or [])[:16] if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
 
     def room_post(self, text):
         return call(self.url, '/share/room', self.token, {'text': str(text)[:LINE_MAX], 'cid': secrets.token_hex(8)})
