@@ -322,13 +322,20 @@ def register_room(room, port, host):
         fn(rooms)
         tmp = REGISTRY.with_name(f'rooms.{os.getpid()}.tmp')
         tmp.write_text(json.dumps(rooms, indent=2, ensure_ascii=False), encoding='utf-8')
-        os.replace(tmp, REGISTRY)
+        for attempt in range(20):                     # Windows refuses the swap while another server is swapping it
+            try:
+                return os.replace(tmp, REGISTRY)
+            except PermissionError:
+                time.sleep(0.05 + 0.05 * attempt)
+        tmp.unlink(missing_ok=True)                    # ponytail: give up this stamp, the next one (5 s) tries again
+
+    started = time.time()                             # the older of two rooms keeps its desks in the shared office
 
     def add(rooms):
         c = room.config()
         rooms[key] = {'url': f'http://{host}:{port}', 'ts': time.time(), 'ids': list(Activity(room).ids().values()),
                       'participants': c.get('participants', []), 'user': c.get('user_name', 'USER'),
-                      'title': c.get('title') or c.get('topic', '')}
+                      'title': c.get('title') or c.get('topic', ''), 'since': rooms.get(key, {}).get('since', started)}
     edit(add)
     return lambda: edit(lambda rooms: rooms.pop(key, None))
 

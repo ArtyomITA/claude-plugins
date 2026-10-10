@@ -87,6 +87,11 @@
   .pill { margin: 7px auto; width: fit-content; max-width: 84%; background: var(--pill); color: var(--pill-text);
           font-size: 12.5px; padding: 5px 12px; border-radius: 8px; box-shadow: 0 1px .5px var(--shadow); text-align: center; }
   .pill b { font-weight: 600; }
+  .pill.common { border: 1px dashed var(--accent); background: transparent; box-shadow: none; }
+  .scope { display: flex; gap: 6px; padding: 6px 12px; background: var(--panel, transparent); border-bottom: 1px solid #0001; flex-wrap: wrap; }
+  .scope button { border: 1px solid #8884; background: transparent; color: inherit; border-radius: 14px; padding: 3px 11px; cursor: pointer; font: inherit; font-size: 12.5px; }
+  .scope button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .roomtag { font-size: 11px; opacity: .75; margin-left: 6px; }
   .pill.closed { background: #25a55f; color: #fff; font-weight: 600; font-size: 13.5px; padding: 8px 16px; }
   .pill.idle { opacity: .85; font-style: italic; background: transparent; box-shadow: none;
                border: 1px dashed var(--border); }
@@ -197,6 +202,7 @@
   <button class="icon-btn" id="gear" title="">⚙</button>
 </header>
 <div class="strip" id="strip"></div>
+<div class="scope" id="scope" hidden></div>
 <main id="feed"><div id="empty"></div></main>
 <button id="newer"></button>
 <div id="lightbox"><img alt=""></div>
@@ -246,7 +252,7 @@ const T = {
   en: { empty: 'No messages yet.', newer: n => `↓ ${n} new`, placeholder: u => `Write to everyone as ${u}… (Enter sends, Shift+Enter new line)`,
         hint: 'Type @ to tag a participant (it wakes up and gets the alert), / or ⚡ for the quick commands.',
         cmds: 'Quick commands: they post a ready message to everyone', tagsHead: 'Tag: the participant wakes up and gets the alert',
-        everyone: 'everyone',
+        everyone: 'everyone', both: 'Both rooms',
         idle: 'idle', idleSince: (time, n) => `idle since ${time} (#${n}), wakes up on a tag`,
         messages: n => `${n} messages`, members: n => `${n} participants`, notYet: 'has not written yet',
         ago: s => s < 60 ? `${Math.round(s)} s ago` : `${Math.round(s / 60)} min ago`, lastMsg: 'last message',
@@ -259,7 +265,8 @@ const T = {
   it: { empty: 'Ancora nessun messaggio.', newer: n => `↓ ${n} nuovi`, placeholder: u => `Scrivi a tutti come ${u}… (Invio manda, Maiusc+Invio a capo)`,
         hint: 'Scrivi @ per taggare un partecipante (si sveglia e riceve l\'alert), / o ⚡ per i comandi rapidi.',
         cmds: 'Comandi rapidi: mandano a tutti un messaggio pronto', tagsHead: 'Tag: il partecipante si sveglia e riceve l\'alert',
-        everyone: 'tutti',
+        everyone: 'tutti', both: 'Tutte e due',
+
         idle: 'in attesa', idleSince: (time, n) => `in attesa dalle ${time} (#${n}), si sveglia con un tag`,
         messages: n => `${n} messaggi`, members: n => `${n} partecipanti`, notYet: 'non ha ancora scritto',
         ago: s => s < 60 ? `${Math.round(s)} s fa` : `${Math.round(s / 60)} min fa`, lastMsg: 'ultimo messaggio',
@@ -280,8 +287,8 @@ const t = () => T[config.lang] || T.en;
 function pref(key, fallback) { try { const v = localStorage.getItem('chatroom.' + key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
 function setPref(key, value) { try { localStorage.setItem('chatroom.' + key, JSON.stringify(value)); } catch (e) {} }
 
-function profile(name) {
-  const p = (config.profiles || {})[name] || {};
+function profile(name, cfg = config) {
+  const p = (cfg.profiles || {})[name] || {};
   const i = (config.participants || []).indexOf(name);
   let color = p.color;
   if (!color) {
@@ -373,18 +380,19 @@ function build(m) {
     el.textContent = `✅ ${t().closed} · ${m.from}: ${m.text.split('\n')[0]} (${m.time})`;
     lastFrom = null;
   } else {
-    const first = lastFrom !== m.from, p = profile(m.from), b = badge(m.text);
+    const first = lastFrom !== m.from + (m._room || ''), p = profile(m.from, m._room ? nConfig || config : config), b = badge(m.text);
     el = document.createElement('div');
     el.className = 'row' + (SELF.has(m.from) ? ' out' : '') + (first ? ' first' : '');
     el.innerHTML = avatar(m.from) + `<div class="bubble${b && b.plan ? ' plan' : ''}">` +
       (first ? `<div class="who-line"><span class="name" style="color:${p.color}">${esc(m.from)}</span>` +
+               (m._room ? `<span class="roomtag">🏢 ${esc(m._room)}</span>` : '') +
                (p.role ? `<span class="role">${esc(p.role)}</span>` : '') + `</div>` : '') +
       (b ? `<div class="badge ${b.cls}">${esc(b.label)}</div><br>` : '') +
       `<div class="text">${render(m.text)}</div>` + pics(m) +
       `<div class="meta"><span class="num">#${m.n}</span>${m.time}</div></div>`;
-    lastFrom = m.from;
+    lastFrom = m.from + (m._room || '');
   }
-  el.id = 'm' + m.n;
+  el.id = (m._room ? 'n' : 'm') + m.n;
   el.dataset.n = m.n;
   if (!matches(m)) el.classList.add('hidden');
   return el;
@@ -396,11 +404,33 @@ function add(m) {
   if (stick) feed.scrollTop = feed.scrollHeight;
   else { unseen++; $('newer').textContent = t().newer(unseen); $('newer').style.display = 'block'; }
 }
+// the common room's lines, when the user wants them in the main chat too: drawn here only, the agents never read them
+let commonShown = [];
+function buildCommon(m) {
+  const el = document.createElement('div');
+  el.className = 'pill common';
+  el.innerHTML = `🛋 <b>${esc(m.from)}</b> · ${m.doc ? `<a href="common/doc/${+m.doc.id}" target="_blank" rel="noopener">📎 ${esc(m.doc.name)}</a>` : inline(m.text)} <span class="num">${esc(m.time || '')}</span>`;
+  lastFrom = null;
+  return el;
+}
+window.addEventListener('chatroom:common', e => {
+  if (!config.common?.mirror) { if (commonShown.length) { commonShown = []; rerender(); } return; }
+  for (const m of e.detail.messages || []) {
+    if (commonShown.some(c => c.n === m.n && c.from === m.from)) continue;
+    const c = {...m, _at: Date.now()}, stick = nearBottom();
+    commonShown.push(c);
+    $('empty')?.remove();
+    feed.appendChild(buildCommon(c));
+    if (stick) feed.scrollTop = feed.scrollHeight;
+  }
+});
 function rerender() {
   const stick = nearBottom();
-  feed.innerHTML = all.length ? '' : `<div id="empty">${esc(t().empty)}</div>`;
+  feed.innerHTML = all.length || commonShown.length ? '' : `<div id="empty">${esc(t().empty)}</div>`;
   lastFrom = null;
-  for (const m of all) feed.appendChild(build(m));
+  const mine = scope === 'other' ? [] : all, theirs = scope === 'self' ? [] : nAll;
+  const items = [...mine.map(m => [stamp(m), m, false]), ...theirs.map(m => [stamp(m), m, false]), ...commonShown.map(c => [c._at, c, true])].sort((a, b) => a[0] - b[0]);
+  for (const [, m, common] of items) feed.appendChild(common ? buildCommon(m) : build(m));
   if (stick) feed.scrollTop = feed.scrollHeight;
 }
 
@@ -483,6 +513,40 @@ async function loadConfig(force) {
     }
   } catch (e) {}
 }
+// two live rooms share one office: see this room, the other, or both (the user's eyes only; agents never mix)
+let scope = pref('scope', 'self'), nAll = [], nConfig = null, nKey = '';
+async function pollNeighbor() {
+  try {
+    const rc = await fetch('neighbor/config.json?t=' + Date.now(), {cache: 'no-store'});
+    if (!rc.ok) { if (nConfig) { nConfig = null; nAll = []; drawScope(); if (scope !== 'self') setScope('self'); } return; }
+    nConfig = await rc.json();
+    const title = nConfig.title || nConfig.topic || '?';
+    const r = await fetch('neighbor/chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
+    const next = [];
+    for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { next.push({...JSON.parse(l), _room: title}); } catch (e) {} } }
+    const key = title + next.length;
+    nAll = next;
+    window.dispatchEvent(new CustomEvent('chatroom:neighbor', {detail: {all: nAll, config: nConfig}}));
+    drawScope();
+    if (key !== nKey) { nKey = key; if (scope !== 'self') rerender(); }
+  } catch (e) {}
+}
+function drawScope() {
+  const el = $('scope');
+  el.hidden = !nConfig;
+  if (!nConfig) return;
+  const mine = config.title || config.topic || 'Chat', theirs = nConfig.title || nConfig.topic || '?';
+  el.innerHTML = [['self', '🏠 ' + mine], ['other', '🏢 ' + theirs], ['all', '👁 ' + t().both]]
+    .map(([k, label]) => `<button data-s="${k}" class="${scope === k ? 'on' : ''}">${esc(label)}</button>`).join('');
+}
+function setScope(s) {
+  scope = s; setPref('scope', s); drawScope(); rerender();
+  window.dispatchEvent(new CustomEvent('chatroom:scope', {detail: {scope}}));
+  $('box').placeholder = scope === 'other' && nConfig ? t().placeholder((nConfig.user_name || 'USER') + ' → ' + (nConfig.title || '')) : t().placeholder(config.user_name || 'USER');
+}
+$('scope').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (b) setScope(b.dataset.s); });
+window.chatroomScope = () => scope;
+setInterval(pollNeighbor, 3000);
 async function poll() {
   try {
     const r = await fetch('chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
@@ -492,7 +556,7 @@ async function poll() {
       all = next;
       window.dispatchEvent(new CustomEvent('chatroom:data', {detail: {all, config}}));
       const fresh = all.slice(shown);
-      for (const m of fresh) add(m);
+      if (scope === 'self') for (const m of fresh) add(m); else if (fresh.length) rerender();
       if (fresh.length && shown && sound && fresh.some(m => !SELF.has(m.from))) beep();
       if (fresh.length && !window.officeOwnsTitle) document.title = `(${all.length}) ${config.title || config.topic || 'Chat room'}`;
       shown = Math.max(shown, all.length);
@@ -524,9 +588,9 @@ async function sendMessage() {
   const text = box.value.trim(); if (!text && !pending.length) return;
   send.disabled = true;
   try {
-    const r = await fetch('post', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch(scope === 'other' && nConfig ? 'neighbor/post' : 'post', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                    body: JSON.stringify({text, images: pending})});
-    if (r.ok) { box.value = ''; box.style.height = ''; pending = []; showPending(); feed.scrollTop = feed.scrollHeight; poll(); }
+    if (r.ok) { box.value = ''; box.style.height = ''; pending = []; showPending(); feed.scrollTop = feed.scrollHeight; poll(); pollNeighbor(); }
     else alert(t().notSent + await r.text());
   } catch (e) { alert(t().notSent + t().unreachable); }
   send.disabled = false; box.focus();

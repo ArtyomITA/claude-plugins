@@ -10,6 +10,8 @@ import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
+import {DEFAULT_LAYOUT, resolve, floorPlan, workstation} from './office-layout.js';
+import {createEditor} from './office-edit.js';
 import {createUI, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
 
 const pref = (k, d) => { try { const v = localStorage.getItem('chatroom.office.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -36,24 +38,23 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.32;
 
 const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
-const HOME = {pos: new THREE.Vector3(1.0, 19.5, 22.5), target: new THREE.Vector3(0, 0.2, 0.3)};
+const HOME = {pos: new THREE.Vector3(...DEFAULT_LAYOUT.camera.pos), target: new THREE.Vector3(...DEFAULT_LAYOUT.camera.target)};
 camera.position.copy(HOME.pos);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.copy(HOME.target);
-Object.assign(controls, {enableDamping: true, dampingFactor: 0.08, minDistance: 6, maxDistance: 42, minPolarAngle: 0.3,
+Object.assign(controls, {enableDamping: true, dampingFactor: 0.08, minDistance: 6, maxDistance: 75, minPolarAngle: 0.3,
                          maxPolarAngle: 1.3, minAzimuthAngle: -1.3, maxAzimuthAngle: 1.3, screenSpacePanning: true});
 
 const hemi = new THREE.HemisphereLight('#fff3df', '#5b4632', 0.9);
 const sun = new THREE.DirectionalLight('#ffe8c4', 2.1);
-sun.position.set(-13, 15, 7); sun.castShadow = true;
-Object.assign(sun.shadow.camera, {left: -13, right: 13, top: 11, bottom: -11, near: 1, far: 50});
+sun.position.set(-17, 20, 9); sun.castShadow = true;
+{
+  const half = Math.max(...DEFAULT_LAYOUT.size) / 2 + 5;                  // the shadow box covers the whole floor
+  Object.assign(sun.shadow.camera, {left: -half, right: half, top: half, bottom: -half, near: 1, far: 80});
+}
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.025; sun.shadow.radius = 1.5;
 scene.add(hemi, sun);
-const lamps = [];
-for (const [x, z, model] of [[-7.45, -1.3, true], [4.3, -5.45, true], [6.0, 4.1, false], [-6.0, 4.3, false]]) {
-  if (model) { const g = V.floorLamp(); g.position.set(x, 0, z); scene.add(g); }
-  const l = new THREE.PointLight('#ffcf8a', 1, 7, 1.6); l.position.set(x, model ? 1.85 : 2.5, z); scene.add(l); lamps.push(l);
-}
+const lamps = [], towerWindows = [];                                       // warm point lights; lit windows of our own building
 
 // ------------------------------------------------------------------ quality and post-processing
 // sharp: 4x MSAA in the composer's own target (the canvas antialias does not reach post-processing), rendering
@@ -96,35 +97,151 @@ function wrapText(g, text, x, y, maxW, lh, maxLines) {
   if (line && n < maxLines) g.fillText(line, x, y + n * lh);
 }
 
-// ------------------------------------------------------------------ the room
-// Plan (x right, z toward the camera): open space with pods of four desks in the middle; the boss's glass office
-// in the back right corner, the assistant's desk outside its door; a glass meeting room front right; kitchen
-// front left and a lounge under the left windows; server rack and printer back left.
-const BOSS_ROOM = {x0: 3.8, z1: -2.6}, MEET_ROOM = {x0: 3.8, z0: 2.2}, CORRIDOR = 1.9;
-scene.add(V.zoneFloor(32, 24, (i, j) => {
-  if (i >= 24 && j <= 6) return j % 2 ? '#a87443' : '#9c6a3d';                          // boss office: parquet
-  if (i >= 24 && j >= 17) return j % 2 ? '#b98b5f' : '#ad7f53';                         // meeting room: parquet
-  if (i <= 6 && j >= 17) return (i + j) % 2 ? '#e3dfd6' : '#d6d1c6';                    // kitchen: tiles
-  if (i >= 1 && i <= 5 && j >= 9 && j <= 14) return i === 1 || i === 5 || j === 9 || j === 14 ? '#574a5e' : '#6b5b73';  // lounge rug
-  return (Math.floor(i / 2) + Math.floor(j / 2)) % 2 ? '#5b626d' : '#555c67';            // carpet tiles
-}));
-const back = V.blindWall(64, 12); back.position.set(-8, 0, -6); scene.add(back);
-const left = V.blindWall(48, 12, [[20, 29], [34, 43]]); left.position.set(-8, 0, 6); left.rotation.y = Math.PI / 2; scene.add(left);
+// ------------------------------------------------------------------ the room, built from the layout
+// office-layout.js holds the plan as data (furniture catalog, walls, glass, zones, boards, pods); here it turns into
+// meshes, lights and the places people use. Outer walls drop to a low stub when the camera is outside them (the
+// dollhouse view) and stand whole in first person, where the ceiling appears too.
+await V.loadPack('vendor/office-pack.json');                             // pack models, before the room is built
+let saved = null;                                                           // the user's own office, if they furnished one
+try { const r = await fetch('office.json', {cache: 'no-store'}); if (r.ok) saved = await r.json(); } catch (e) {}
+const VISIT = new URLSearchParams(location.search).has('visit');            // visiting the friend whose common room you joined
+let visit = null;
+if (VISIT) { try { const r = await fetch('visit.json', {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
+const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: visit.items || DEFAULT_LAYOUT.items}
+  : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: saved.items} : DEFAULT_LAYOUT;
+const PLACED = resolve(LAYOUT, {packSize: V.packSize}), FLOOR = floorPlan(LAYOUT, PLACED);
+const [SIZE_X, SIZE_Z] = LAYOUT.size;
+const add = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); m.rotation.y = ry; scene.add(m); return m; };
 
-const sky = board(30, 9, 512); sky.mat.color.setScalar(0.72); sky.mesh.position.set(-15, 1.9, 0); sky.mesh.rotation.y = Math.PI / 2; scene.add(sky.mesh);
+const ZONE = {
+  carpet: (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 2 ? '#5b626d' : '#555c67',
+  parquet: (i, j) => j % 2 ? '#a87443' : '#9c6a3d', parquetLight: (i, j) => j % 2 ? '#b98b5f' : '#ad7f53',
+  tiles: (i, j) => (i + j) % 2 ? '#e3dfd6' : '#d6d1c6',
+  rug: (i, j, z) => i === z.i0 || i === z.i1 || j === z.j0 || j === z.j1 ? '#574a5e' : '#6b5b73',
+  game: (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 2 ? '#3f5a4c' : '#395246',
+  booth: (i, j) => (i + j) % 2 ? '#4a5260' : '#454c59', mat: () => '#34363c',
+  common: (i, j) => i % 3 === 0 ? '#9c7353' : j % 2 ? '#b0835c' : '#a67a55', stone: (i, j) => (i + j) % 2 ? '#bdb8ae' : '#b3ada3',
+};
+{
+  const tile = (v, half) => Math.round((v + half) * 2);
+  const zones = LAYOUT.floor.zones.map(z => ({...z, i0: tile(z.x0, SIZE_X / 2), i1: tile(z.x1, SIZE_X / 2) - 1, j0: tile(z.z0, SIZE_Z / 2), j1: tile(z.z1, SIZE_Z / 2) - 1}));
+  scene.add(V.zoneFloor(SIZE_X * 2, SIZE_Z * 2, (i, j) => {
+    const z = zones.findLast(z => i >= z.i0 && i <= z.i1 && j >= z.j0 && j <= z.j1);
+    return (ZONE[z ? z.kind : LAYOUT.floor.base] || ZONE.carpet)(i, j, z);
+  }));
+}
+const cutaway = [];
+for (const w of PLACED.walls) {
+  const cells = Math.round(w.len / 0.25), c = ([u, v]) => [Math.floor(u / 0.25 + 0.01), Math.ceil(v / 0.25 - 0.01) - 1];
+  const holes = w.windows.map(c), doors = w.doors.map(c);
+  const full = add(V.blindWall(cells, 12, holes, '#ece8e1', doors), w.a[0], 0, w.a[1], w.rot);
+  const stub = add(V.blindWall(cells, 2, [], '#ece8e1', doors), w.a[0], 0, w.a[1], w.rot);
+  cutaway.push({full, stub, mid: new THREE.Vector3(w.mid[0], 0, w.mid[1]), out: new THREE.Vector3(w.out[0], 0, w.out[1])});
+  for (const [u, v] of w.windows) {                                        // the glass in each window
+    const mid = (u + v) / 2, p = new THREE.Mesh(new THREE.PlaneGeometry(v - u, 1.75), V.WINDOW); p.renderOrder = 2;
+    full.attach(add(p, w.a[0] + w.dx / w.len * mid, 1.62, w.a[1] + w.dz / w.len * mid, w.rot));
+  }
+}
+for (const g of PLACED.glass) {
+  add(V.glassFrame(g.len, g.doors.length ? g.doors : null), g.a[0], 0, g.a[1], g.rot);
+  let from = 0;
+  for (const [u, v] of [...[...g.doors].sort((p, q) => p[0] - q[0]), [g.len, g.len]]) {
+    if (u - from > 0.05) {
+      const mid = (from + u) / 2, x = g.a[0] + g.dx / g.len * mid, z = g.a[1] + g.dz / g.len * mid;
+      add(V.glassPane(u - from), x, 1.25, z, g.rot);
+      const band = new THREE.Mesh(new THREE.PlaneGeometry(u - from, 0.12), V.FROST); band.renderOrder = 3; add(band, x, 1.1, z, g.rot);
+    }
+    from = v;
+  }
+}
+// door leaves, open; the one onto the bridge swings open only while the common room is shared
+let bridgeLeaf = null;
+for (const d of PLACED.doors) {
+  const leaf = add(d.kind === 'glass' ? V.glassDoor(d.len) : V.woodDoor(d.len), d.hinge[0], 0, d.hinge[1], d.rot);
+  if (d.kind === 'bridge') { bridgeLeaf = leaf; leaf.userData.closed = d.rot; }
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(d.kind === 'bridge' ? d.len : d.len, 0.02, 0.18), new THREE.MeshStandardMaterial({color: '#9ea7b0', metalness: 0.5, roughness: 0.4}));
+  if (d.kind !== 'bridge') { sill.visible = false; }
+}
+// the building the office is in, and the street far below: no black void out of the windows
+{
+  const [sx, sz] = LAYOUT.size;
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.8, 0.3, sz + 0.8), new THREE.MeshStandardMaterial({color: '#8a9099', roughness: 0.9}));
+  slab.position.set(0, -0.16, 0); slab.receiveShadow = true; scene.add(slab);
+  const tower = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.4, 11.7, sz + 0.4), new THREE.MeshStandardMaterial({color: '#4f5663', roughness: 0.85}));
+  tower.position.set(0, -6.15, 0); scene.add(tower);
+  const street = board(260, 260, 1024); street.mesh.rotation.x = -Math.PI / 2; street.mesh.position.y = -12; scene.add(street.mesh);
+  const {g, canvas: k} = street, m = k.lw / 260;                          // 1 m = m pixels; roads every 40 m, our block in the middle
+  g.fillStyle = '#3b4048'; g.fillRect(0, 0, k.lw, k.lh);
+  for (let c = -120; c <= 120; c += 40) {
+    const p = (c + 130) * m;
+    g.fillStyle = '#23272e'; g.fillRect(p - 5 * m, 0, 10 * m, k.lh); g.fillRect(0, p - 5 * m, k.lw, 10 * m);
+    g.fillStyle = '#c9b458'; for (let t = 0; t < k.lw; t += 6 * m) { g.fillRect(p - 0.2 * m, t, 0.4 * m, 3 * m); g.fillRect(t, p - 0.2 * m, 3 * m, 0.4 * m); }
+  }
+  street.mat.color.setScalar(0.55); street.tex.needsUpdate = true;
+  const lit = [], r = V.rnd(41);
+  for (const [nx, nz, w] of [[0, 1, sx], [0, -1, sx], [1, 0, sz], [-1, 0, sz]]) for (let y = -10.5; y < -1; y += 2.4) for (let t = -w / 2 + 1; t < w / 2 - 0.5; t += 1.6) {
+    if (r() < 0.55) lit.push([nx ? nx * (sx / 2 + 0.21) : t, y, nz ? nz * (sz / 2 + 0.21) : t, nx ? Math.sign(nx) * Math.PI / 2 : nz > 0 ? 0 : Math.PI]);
+  }
+  const own = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.1, 1.2), new THREE.MeshBasicMaterial({color: '#e0b56a'}), lit.length);
+  lit.forEach(([x, y, z, ry], i) => { const mm = new THREE.Matrix4().makeRotationY(ry); mm.setPosition(x, y, z); own.setMatrixAt(i, mm); });
+  scene.add(own); towerWindows.push(own);
+}
+const buildItem = it => it.pack ? V.packModel(it.pack, it) : V[it.model](...it.args);
+const ITEM_MESHES = [];                                                     // the pieces the editor can move (not walls, not cubicles)
+for (const it of PLACED.items) {
+  if (it.part) continue;                                                   // a cubicle of a block: built with its block below
+  const m = add(buildItem(it), it.x, it.y, it.z, it.rot);
+  if (it.src !== undefined) { m.userData.src = it.src; m.userData.label = it.label || ''; ITEM_MESHES.push(m); }
+}
+for (const [src, item] of (LAYOUT.items || []).entries()) if (item.type === 'pod' || item.type === 'workstation') {
+  const m = placeItem(item); m.userData.src = src; m.userData.label = item.label || ''; ITEM_MESHES.push(m);
+}
+/** one layout piece as a mesh in the scene, for the editor; a cubicle block is one group (its desks come with the
+ *  saved layout), a workstation an invisible handle (its desk is drawn with the other desks) */
+function placeItem(item) {
+  const r = resolve({items: [{...item, x: 0, z: 0, rot: 0}], pods: LAYOUT.pods}, {packSize: V.packSize}), g = new THREE.Group();
+  if (item.type === 'workstation') g.add(new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.8, 1.8), new THREE.MeshBasicMaterial({transparent: true, opacity: 0, depthWrite: false})));
+  else if (r.items.length === 1) return add(buildItem(r.items[0]), item.x, r.items[0].y, item.z, item.rot || 0);
+  for (const it of r.items) { const m = buildItem(it); m.position.set(it.x, it.y, it.z); m.rotation.y = it.rot; g.add(m); }
+  return add(g, item.x, 0, item.z, item.rot || 0);
+}
+for (const [x, y, z] of [...(PLACED.fx.light || []), ...(LAYOUT.lights || [])]) {
+  const l = new THREE.PointLight('#ffcf8a', 1, 7, 1.6); l.position.set(x, y, z); scene.add(l); lamps.push(l);
+}
+
+// ceiling and its light panels: first person only
+const ceiling = new THREE.Group();
+{
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(SIZE_X, SIZE_Z), new THREE.MeshStandardMaterial({color: '#e9e6df', roughness: 0.95}));
+  p.rotation.x = Math.PI / 2; p.position.y = 3; ceiling.add(p);
+  for (let x = -SIZE_X / 2 + 3; x < SIZE_X / 2 - 1; x += 4) for (let z = -SIZE_Z / 2 + 2.5; z < SIZE_Z / 2 - 1; z += 4) {
+    const l = V.ceilingLight(); l.position.set(x, 2.99, z); ceiling.add(l);
+  }
+  ceiling.visible = false; scene.add(ceiling);
+}
+
+// sky all around and a city below the windows (the office is a few floors up)
+const sky = board(30, 9, 512); sky.mat.color.setScalar(0.72); sky.mat.side = THREE.BackSide;
+sky.mesh.geometry.dispose(); sky.mesh.geometry = new THREE.CylinderGeometry(70, 70, 60, 48, 1, true); sky.mesh.position.y = 10; scene.add(sky.mesh);
 const city = new THREE.Group(), cityLights = [];
 {
-  const r = V.rnd(77);
-  for (let i = 0; i < 16; i++) {
-    const h = 6 + Math.floor(r() * 16), w = 3 + Math.floor(r() * 3), b = V.building(w, h, 3, ['#2c3446', '#343c52', '#262d3d'][i % 3]);
-    b.position.set(-10 - r() * 3.5, -1.5, -6.5 + i * 0.85); b.castShadow = false; city.add(b);
-    for (let k = 0; k < 6; k++) cityLights.push([b.position.x + w * 0.25 + 0.01, -1 + r() * h * 0.5, b.position.z - 0.5 + r()]);
+  const r = V.rnd(77), reach = Math.max(SIZE_X, SIZE_Z) / 2;
+  for (let i = 0; i < 46; i++) {
+    const a = (i / 46) * Math.PI * 2 + r() * 0.06;
+    let R = reach + 7 + r() * 16;
+    if (LAYOUT.bridge && Math.cos(a) > 0.55) R += 16;                    // leave room for the friend's building
+    const h = 20 + Math.floor(r() * 30), w = 4 + Math.floor(r() * 5), b = V.building(w, h, 4, ['#2c3446', '#343c52', '#262d3d'][i % 3]);
+    b.position.set(Math.sin(a) * R, -12, Math.cos(a) * R); b.rotation.y = a; b.castShadow = false; city.add(b);
+    for (let k = 0; k < 7; k++) {                                 // lit windows on the face toward the office
+      const lx = (r() - 0.5) * w * 0.45, ly = -11.5 + r() * h * 0.45, lz = -1.03;
+      cityLights.push([b.position.x + lx * Math.cos(a) + lz * Math.sin(a), ly, b.position.z - lx * Math.sin(a) + lz * Math.cos(a), a + Math.PI]);
+    }
   }
   scene.add(city);
 }
-const winGeo = new THREE.PlaneGeometry(0.16, 0.2), winMat = new THREE.MeshBasicMaterial({color: '#e0b56a'});
+const winGeo = new THREE.PlaneGeometry(0.3, 0.4), winMat = new THREE.MeshBasicMaterial({color: '#e0b56a'});
 const winLights = new THREE.InstancedMesh(winGeo, winMat, cityLights.length);
-cityLights.forEach(([x, y, z], i) => { const m = new THREE.Matrix4().makeRotationY(Math.PI / 2); m.setPosition(x, y, z); winLights.setMatrixAt(i, m); });
+cityLights.forEach(([x, y, z, ry], i) => { const m = new THREE.Matrix4().makeRotationY(ry); m.setPosition(x, y, z); winLights.setMatrixAt(i, m); });
 scene.add(winLights);
 
 function drawSky(hour) {
@@ -133,88 +250,96 @@ function drawSky(hour) {
   const stops = night ? ['#0a1030', '#1b2350', '#2b2f5e'] : dusk ? ['#3b4a8c', '#e07e57', '#f2b072'] : ['#4f97d1', '#8cc3ea', '#c9e6f7'];
   stops.forEach((s, i) => grad.addColorStop(i / 2, s));
   g.fillStyle = grad; g.fillRect(0, 0, c.lw, c.lh);
-  if (night) { const r = V.rnd(5); g.fillStyle = '#fff'; for (let i = 0; i < 90; i++) g.fillRect(r() * c.lw, r() * c.lh * 0.7, 2, 2); }
+  if (night) { const r = V.rnd(5); g.fillStyle = '#fff'; for (let i = 0; i < 90; i++) g.fillRect(r() * c.lw, r() * c.lh * 0.6, 2, 2); }
   sky.tex.needsUpdate = true;
   winLights.visible = night || dusk;
+  for (const t of towerWindows) t.visible = night || dusk;
   sun.color.set(night ? '#8ea4ff' : dusk ? '#ffb27a' : '#ffe8c4'); sun.intensity = night ? 0.45 : dusk ? 1.3 : 1.9;
   hemi.intensity = night ? 0.45 : 0.85;
   for (const l of lamps) l.intensity = night ? 4.5 : dusk ? 2.5 : 1.0;
   scene.background.set(night ? '#11131d' : '#1c1f2c');
 }
 
-const add = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); m.rotation.y = ry; scene.add(m); return m; };
-
-// back wall of the open space: whiteboard (kanban) and TV with the live chat
-const tv = board(2.2, 1.25, 512); tv.mesh.position.set(0.9, 1.7, -5.83); scene.add(tv.mesh);
-const wb = board(2.6, 1.4, 512); wb.mesh.position.set(-2.6, 1.6, -5.83); scene.add(wb.mesh);
+// boards on the walls: TV with the live chat, whiteboard (kanban), clock, coffee sign, the boss's nameplate
+const placeBoard = (b, key) => { const s = LAYOUT.boards[key]; add(b.mesh, s.x, s.y, s.z, s.rot || 0); return b; };
+const tv = placeBoard(board(2.2, 1.25, 512), 'tv'), wb = placeBoard(board(2.6, 1.4, 512), 'whiteboard');
 for (const [b, w, h, col] of [[tv, 2.36, 1.4, '#16181f'], [wb, 2.76, 1.56, '#cfd3da']]) {
   const f = V.mesh(new V.Vox().box(0, 0, 0, Math.round(w * 10) - 1, Math.round(h * 10) - 1, 0, col), {pivot: [w * 5, h * 5, 1]});
-  f.position.copy(b.mesh.position); f.position.z -= 0.02; scene.add(f);
+  f.position.copy(b.mesh.position); f.rotation.y = b.mesh.rotation.y; f.translateZ(-0.02); scene.add(f);
 }
-add(V.rack(), -7.25, 0, -5.3);
-const printerG = add(V.printer(), -6.3, 0, -5.35);
-add(V.shelf(11), -4.85, 0, -5.65);
+const clock = placeBoard(board(0.7, 0.7, 128), 'clock');
+const coffeeSign = placeBoard(board(1.1, 0.36, 256), 'coffeeSign');
+const nameplate = placeBoard(board(0.55, 0.16, 256), 'nameplate');
+const commonSign = LAYOUT.boards.commonSign ? placeBoard(board(1.7, 0.42, 256), 'commonSign') : null;
 
-// the boss's glass office
-const clock = board(0.7, 0.7, 128); clock.mesh.position.set(4.7, 2.3, -5.84); scene.add(clock.mesh);
-add(V.bossDesk(), 5.6, 0, -4.5, Math.PI);
-add(V.bossChair(), 5.6, 0, -5.35, Math.PI);
-add(V.laptop(), 5.95, 0.8, -4.6, Math.PI - 0.25);
-add(V.shelf(23), 7.2, 0, -5.65);
-const nameplate = board(0.55, 0.16, 256); nameplate.mesh.position.set(5.6, 0.95, -3.99); scene.add(nameplate.mesh);
-add(V.glassFrame(3.4), BOSS_ROOM.x0, 0, -6, -Math.PI / 2);
-add(V.glassFrame(4.2, [0.6, 1.4]), BOSS_ROOM.x0, 0, BOSS_ROOM.z1);
-add(V.glassPane(3.4), BOSS_ROOM.x0, 1.25, -4.3, Math.PI / 2);
-add(V.glassPane(0.6), BOSS_ROOM.x0 + 0.3, 1.25, BOSS_ROOM.z1);
-add(V.glassPane(2.8), BOSS_ROOM.x0 + 2.8, 1.25, BOSS_ROOM.z1);
-
-// the assistant, outside the boss's door, facing the open space
-const LEAD_ROT = -0.8;
-const LEAD_SEAT = {pos: new THREE.Vector3(5.6, 0.1, -1.95), rot: LEAD_ROT, pose: 'sit'};
-add(V.smallDesk(), 5.6 + Math.sin(LEAD_ROT) * 0.62, 0, -1.95 + Math.cos(LEAD_ROT) * 0.62, LEAD_ROT);
-add(V.chair('#2d5b56'), 5.6, 0, -1.95, LEAD_ROT + Math.PI);
-
-// the glass meeting room
-add(V.glassFrame(4.2, [0.6, 1.4]), MEET_ROOM.x0, 0, MEET_ROOM.z0);
-add(V.glassFrame(3.8), MEET_ROOM.x0, 0, 6, -Math.PI / 2 + Math.PI);
-add(V.glassPane(0.6), MEET_ROOM.x0 + 0.3, 1.25, MEET_ROOM.z0);
-add(V.glassPane(2.8), MEET_ROOM.x0 + 2.8, 1.25, MEET_ROOM.z0);
-add(V.glassPane(3.8), MEET_ROOM.x0, 1.25, 4.1, Math.PI / 2);
-add(V.confTable(), 6.0, 0, 4.1);
-const MEET = [];
-const meetRoute = approach => [new THREE.Vector3(4.8, 0, CORRIDOR), new THREE.Vector3(4.8, 0, 2.7), approach];
-for (const [x, z, ry, ax, az] of [[5.0, 3.1, 0, 5.0, 2.65], [6.0, 3.1, 0, 6.0, 2.65], [7.0, 3.1, 0, 7.0, 2.65], [5.0, 5.15, Math.PI, 5.0, 5.6],
-                                   [6.0, 5.15, Math.PI, 6.0, 5.6], [7.0, 5.15, Math.PI, 7.0, 5.6], [4.3, 4.1, Math.PI / 2, 4.3, 2.7], [7.7, 4.1, -Math.PI / 2, 7.7, 2.7]]) {
-  add(V.meetChair(), x, 0, z, ry + Math.PI);
-  MEET.push({pos: new THREE.Vector3(x, 0.1, z), rot: ry, pose: 'sit', route: meetRoute(new THREE.Vector3(ax, 0, az))});
+// the common room's door and, while the room is shared with friends, a glass bridge to their building
+const bridge = new THREE.Group(), commonDoor = new THREE.Group();
+let friendSign = null, bridgeOpen = null;
+/** while shared, the bridge's floor is walkable and its door open; otherwise the door is shut and blocks the way */
+function openBridge(on) {
+  const B = LAYOUT.bridge, w = B.width;
+  if (bridgeLeaf) bridgeLeaf.rotation.y = bridgeLeaf.userData.closed + (on ? 100 * Math.PI / 180 : 0);
+  FLOOR.setExtra(on ? [{x0: B.x - w / 2, z0: B.z - 0.2, x1: B.x + w / 2, z1: B.z + B.length}] : [],
+                 on ? [{x: B.x - w / 2, z: B.z + B.length / 2, hw: 0.05, hd: B.length / 2, rot: Math.PI / 2}, {x: B.x + w / 2, z: B.z + B.length / 2, hw: 0.05, hd: B.length / 2, rot: Math.PI / 2}]
+                    : [{x: B.x, z: B.z, hw: 0.7, hd: 0.15, rot: 0}]);
+  outCache.clear();
+}
+if (LAYOUT.bridge) {
+  const B = LAYOUT.bridge, w = B.width, len = B.length, z1 = B.z + len, mid = B.z + len / 2;
+  const steel = new THREE.MeshStandardMaterial({color: '#8c96a1', roughness: 0.5, metalness: 0.4});
+  const box = (sx, sy, sz, x, y, z, mat = steel) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; bridge.add(m); return m; };
+  box(w, 0.12, len, B.x, -0.06, mid, new THREE.MeshStandardMaterial({color: '#9aa3ad', roughness: 0.8}));            // deck
+  box(w + 0.2, 0.5, len, B.x, -0.4, mid);                                                                         // girder
+  for (const sx of [-1, 1]) {
+    box(0.08, 0.08, len, B.x + sx * w / 2, 2.5, mid); box(0.08, 0.08, len, B.x + sx * w / 2, 0.02, mid);
+    const pane = V.glassPane(len); pane.rotation.y = Math.PI / 2; pane.position.set(B.x + sx * w / 2, 1.25, mid); bridge.add(pane);
+    const strip = V.mesh(new V.Vox().box(0, 0, 0, 0, 0, Math.round(len * 10) - 1, '#4dd0e1'), {pivot: [0.5, 0, 0]}, true);   // floor light
+    strip.position.set(B.x + sx * (w / 2 - 0.12), 0.01, B.z); bridge.add(strip);
+  }
+  for (let k = 0; k <= len; k += 1) { box(w, 0.08, 0.08, B.x, 2.5, B.z + k); for (const sx of [-1, 1]) box(0.08, 2.5, 0.08, B.x + sx * w / 2, 1.25, B.z + k); }
+  const roof = V.glassPane(w, len); roof.rotation.x = -Math.PI / 2; roof.position.set(B.x, 2.52, mid); bridge.add(roof);
+  // the friend's building: same floor height as ours, lit windows facing us, an open entrance with a sign
+  const fb = V.building(40, 30, 26, '#3a4660'); fb.position.set(B.x, -12, z1 + 6.5);      // its roof level with our ceiling fb.castShadow = false; bridge.add(fb);
+  const lit = [], r = V.rnd(19);
+  for (let y = -11; y < 2.6; y += 1.6) for (let x = -9; x <= 9; x += 1.5) if (Math.abs(x) > 1.6 || y < -0.5 || y > 2.6) if (r() < 0.62) lit.push([B.x + x, y, z1 - 0.02]);
+  const wins = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshBasicMaterial({color: '#ffd9a0', toneMapped: false}), lit.length);
+  lit.forEach(([x, y, z], i) => { const m = new THREE.Matrix4().makeRotationY(Math.PI); m.setPosition(x, y, z); wins.setMatrixAt(i, m); });
+  bridge.add(wins);
+  box(w, 2.4, 0.05, B.x, 1.2, z1 - 0.03, new THREE.MeshBasicMaterial({color: '#12202b'}));                         // doorway
+  const frame = V.mesh(new V.Vox().box(0, 0, 0, Math.round(w * 10) + 1, 0, 0, '#80deea').box(0, 0, 0, 0, 24, 0, '#80deea')
+    .box(Math.round(w * 10) + 1, 0, 0, Math.round(w * 10) + 1, 24, 0, '#80deea').box(0, 24, 0, Math.round(w * 10) + 1, 24, 0, '#80deea'), {pivot: [w * 5 + 1, 0, 0.5]}, true);
+  frame.position.set(B.x, 0, z1 - 0.06); bridge.add(frame);
+  friendSign = board(2.6, 0.5, 256); friendSign.mesh.position.set(B.x, 2.95, z1 - 0.08); friendSign.mesh.rotation.y = Math.PI; bridge.add(friendSign.mesh);
+  const glow = new THREE.PointLight('#80deea', 2.5, 8, 1.8); glow.position.set(B.x, 2.2, B.z + 1); bridge.add(glow);
+  bridge.visible = false; scene.add(bridge);
+  scene.add(commonDoor);
 }
 
-// kitchen and lounge
-add(V.kitchen(28), -7.6, 0, 4.25, Math.PI / 2);
-add(V.upperCabinets(28), -7.72, 1.55, 4.25, Math.PI / 2);
-add(V.fridge(), -7.6, 0, 2.45, Math.PI / 2);
-add(V.barTable(), -5.5, 0, 4.3);
-const coffeeSign = board(1.1, 0.36, 256); coffeeSign.mesh.position.set(-7.86, 2.55, 4.25); coffeeSign.mesh.rotation.y = Math.PI / 2; scene.add(coffeeSign.mesh);
-add(V.sofa('#3f6f73'), -7.25, 0, 0.1, Math.PI / 2);
-add(V.coffeeTable(), -6.15, 0, 0.1, Math.PI / 2);
-const kitchenIn = new THREE.Vector3(-4.4, 0, CORRIDOR);
-const COFFEE = [
-  {pos: new THREE.Vector3(-6.85, 0, 3.55), rot: -Math.PI / 2, pose: 'stand', route: [kitchenIn, new THREE.Vector3(-6.3, 0, 3.55)]},
-  {pos: new THREE.Vector3(-5.5, 0.4, 3.6), rot: 0, pose: 'sit', route: [kitchenIn, new THREE.Vector3(-5.5, 0, 3.1)]},
-  {pos: new THREE.Vector3(-6.85, 0, 5.0), rot: -Math.PI / 2, pose: 'stand', route: [kitchenIn, new THREE.Vector3(-6.2, 0, 5.0)]},
-  {pos: new THREE.Vector3(-7.05, 0.05, -0.4), rot: Math.PI / 2, pose: 'sofa', route: [kitchenIn, new THREE.Vector3(-5.5, 0, -0.4)]},
-  {pos: new THREE.Vector3(-4.8, 0.4, 4.3), rot: -Math.PI / 2, pose: 'sit', route: [kitchenIn, new THREE.Vector3(-4.4, 0, 4.3)]},
-  {pos: new THREE.Vector3(-7.05, 0.05, 0.6), rot: Math.PI / 2, pose: 'sofa', route: [kitchenIn, new THREE.Vector3(-5.5, 0, 0.6)]},
-];
-for (const c of COFFEE) if (c.pose === 'sit') add(V.barStool(), c.pos.x, 0, c.pos.z);
-for (const [x, z, s] of [[-4.6, -4.6, 3], [3.35, 3.2, 4], [7.6, 0.6, 5], [-7.5, -2.0, 6], [-4.6, 5.6, 7], [7.5, -3.25, 8]]) add(V.planter(s), x, 0, z);
+// the places people use, from the layout
+const vec = s => ({pos: new THREE.Vector3(s.x, s.y || 0, s.z), rot: s.rot, pose: s.pose || 'stand', tag: s.tag});
+const SEATS = PLACED.seats.map(vec), STANDS = PLACED.spots.map(vec);
+const seatOr = (tag, x, z) => SEATS.find(s => s.tag === tag) || {pos: new THREE.Vector3(x, 0, z), rot: 0, pose: 'stand', tag};
+const LEAD_SEAT = seatOr('lead', 0, 0), LEAD2_SEAT = SEATS.find(s => s.tag === 'lead2') || LEAD_SEAT;
+const MEET = [...SEATS.filter(s => s.tag === 'meet'), ...SEATS.filter(s => s.tag === 'team')];
+const COMMON = SEATS.filter(s => s.tag === 'common');
+// the common room (the second coffee room): who may spend a break there, and whether friends share it (phase 4)
+const commonRoom = () => {
+  const c = DATA.config.common || {}, who = new Set(c.who || []);
+  return {all: !!c.all, who, shared: !!c.shared, lets: name => !!c.all || who.has(name)};
+};
+const COFFEE = [...STANDS.filter(s => s.tag === 'coffee'), ...STANDS.filter(s => s.tag === 'play').map(s => ({...s, act: 'play'})),
+                ...SEATS.filter(s => s.tag === 'coffee')];
+if (!MEET.length) MEET.push(LEAD_SEAT);
+if (!COFFEE.length) COFFEE.push(LEAD_SEAT);
+const MACHINE = new THREE.Vector3(...(PLACED.fx.machine?.[0] || [0, 1.5, 0]));
+const STEAM = [MACHINE, ...(PLACED.fx.steam || []).map(p => new THREE.Vector3(...p))];
+const PAPER = new THREE.Vector3(...(PLACED.fx.paper?.[0] || [0, 1, 0]));
 
-
-// LEDs of the server rack and of the espresso machine: tiny glowing voxels that blink
+// LEDs of the server racks and of the espresso machines: tiny glowing voxels that blink (espresso: steady red)
+const LED_AT = [...(PLACED.fx.leds || []).map(p => [p, false]), ...(PLACED.fx.led || []).map(p => [p, true])];
 const ledGeo = new THREE.BoxGeometry(0.06, 0.04, 0.02), ledMat = new THREE.MeshBasicMaterial({toneMapped: false});
-const leds = new THREE.InstancedMesh(ledGeo, ledMat, 28);
-for (let i = 0; i < 27; i++) { const m = new THREE.Matrix4().makeTranslation(-7.5 + (i % 3) * 0.18, 0.28 + Math.floor(i / 3) * 0.2, -4.94); leds.setMatrixAt(i, m); }
-leds.setMatrixAt(27, new THREE.Matrix4().makeTranslation(-7.38, 1.05, 4.05));
+const leds = new THREE.InstancedMesh(ledGeo, ledMat, Math.max(1, LED_AT.length));
+LED_AT.forEach(([[x, y, z]], i) => leds.setMatrixAt(i, new THREE.Matrix4().makeTranslation(x, y, z)));
 scene.add(leds);
 const ledColor = new THREE.Color();
 
@@ -270,49 +395,60 @@ function stepPlanes(dt) {
 const SPOTS = new Map();                // name -> {g, scr, beacon, seat, stand, intern}
 const people = new Map();               // name -> Person
 const raycastables = [];
-// pods of four desks facing each other across a fabric divider; the far row faces the camera. As many pods as the
-// room needs: one centred pod up to four agents, two side by side up to eight, then more pods in a back row.
-const SLOTS = [], podsBuilt = new Set();
-const pod = (cx, z0, front) => ({cx, z0, front, aisles: [cx - 1.95, Math.min(cx + 1.95, 3.65)]});
-function addPod(p) { for (const [row, side] of [['far', -1], ['far', 1], ['near', -1], ['near', 1]]) SLOTS.push({pod: p, row, side}); }
-function planDesks(n) {
-  if (!SLOTS.length) {
-    if (n <= 4) addPod(pod(-0.3, -0.9, true));
-    else { addPod(pod(-2.2, -0.9, true)); addPod(pod(1.9, -0.9, true)); }
-  }
-  for (let k = 0; SLOTS.length < n; k++) addPod(pod(k % 2 ? 1.9 : -2.2, -4.0 - Math.floor(k / 2) * 2.9, false));
+// every cubicle desk is furnished from the start, so an office with few agents still looks lived in; an agent takes
+// the first free desk in the layout's order: its colour goes on the chair cushion and the mug, its screen comes alive
+const chairFor = color => V.packModel('Chairs/Office_Chair_White_02', color ? {tint: {map: {'#e2e2e2': color, '#a9a9a9': V.darker(color, 0.8)}}} : {});
+const DESKS = PLACED.desks.map((d, i) => buildDesk(d, i));
+function buildDesk(d, i) {
+  const g = new THREE.Group(); g.position.set(d.x, 0, d.z); g.rotation.y = d.rot; scene.add(g);
+  const put = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); m.rotation.y = ry; g.add(m); return m; };
+  put(V.workDesk(), 0, 0, 0);
+  put(V.monitor(), 0, 0.7, -0.27); put(V.keyboard(), -0.05, 0.71, 0.12);
+  put(V.packModel(i % 3 ? 'Misc/Office_Misc_Papers' : 'Misc/Office_Misc_Organizer', {scale: 0.03}), 0.45, 0.71, -0.1, 0.3);
+  if (i % 2) put(V.deskLamp(), -0.62, 0.71, -0.2); else put(V.plant(i + 2, false), -0.62, 0.71, -0.22);
+  if (i % 4 === 1) put(V.packModel('Misc/Electronics/Office_Misc_Phone', {scale: 0.03}), -0.35, 0.71, 0.05, -0.3);
+  put(V.packModel('Misc/Trashcans/Office_Misc_Trashcan_Small_0' + (1 + i % 3), {scale: 0.04}), 0.66, 0, 0.12);
+  const chair = put(chairFor(null), 0, 0, 0.8, Math.PI);
+  const scr = board(0.82, 0.5, 192); scr.mesh.position.set(0, 1.2, -0.21); g.add(scr.mesh);
+  { const {g: c, canvas: k} = scr; c.fillStyle = '#0b0e15'; c.fillRect(0, 0, k.lw, k.lh); c.fillStyle = '#1b2230'; c.fillRect(k.lw / 2 - 6, k.lh / 2 - 6, 12, 12); scr.tex.needsUpdate = true; }
+  const beacon = V.mesh(new V.Vox().box(0, 0, 0, 2, 2, 2, '#ff1744'), {pivot: [1.5, 0, 1.5], glow: 1.5}, true);
+  beacon.position.set(0.55, 1.45, -0.3); beacon.visible = false; g.add(beacon);
+  const beaconLight = new THREE.PointLight('#ff1744', 0, 3.5, 1.5); beaconLight.position.set(0.55, 1.7, -0.3); g.add(beaconLight);
+  g.updateMatrixWorld(true);
+  const W = (lx, lz, y = 0) => g.localToWorld(new THREE.Vector3(lx, y, lz));
+  return {g, scr, beacon, beaconLight, chair, owner: null,
+          seat: {pos: W(0, 0.78, -0.07), rot: d.rot + Math.PI, pose: 'sit', desk: i},
+          stand: {pos: W(-0.55, 1.35), rot: d.rot, pose: 'stand', desk: i},
+          intern: {pos: W(0.62, 1.1), rot: d.rot + Math.PI, pose: 'stand'}};
 }
 
+// more agents than desks: a workstation where the floor is free, nearest to the other desks (not saved: furnish it to keep it)
+function addWorkstation() {
+  const cx = DESKS.reduce((a, d) => a + d.g.position.x, 0) / Math.max(1, DESKS.length), cz = DESKS.reduce((a, d) => a + d.g.position.z, 0) / Math.max(1, DESKS.length);
+  const fits = (x, z) => { for (let dx = -1.0; dx <= 1.0; dx += 0.25) for (let dz = -0.6; dz <= 1.3; dz += 0.25) if (FLOOR.blocked(x + dx, z + dz, 0.05)) return false; return true; };
+  let best = null;
+  for (let x = -SIZE_X / 2 + 1.5; x < SIZE_X / 2 - 1.5; x += 0.5) for (let z = -SIZE_Z / 2 + 1; z < SIZE_Z / 2 - 1.5; z += 0.5)
+    if (fits(x, z) && (!best || Math.hypot(x - cx, z - cz) < best.d)) best = {x, z, d: Math.hypot(x - cx, z - cz)};
+  if (!best) return null;
+  const out = {boxes: [], desks: []};
+  workstation(out, best.x, best.z, 0);
+  FLOOR.addBoxes(out.boxes); outCache.clear();
+  const d = buildDesk(out.desks[0], DESKS.length); DESKS.push(d);
+  return d;
+}
 function deskLayout(names) {
-  planDesks(Math.max(names.length, (DATA.config.participants || []).length));
-  names.forEach((name, i) => {
-    if (SPOTS.has(name)) return;
-    const {pod, row, side} = SLOTS[i];
-    if (!podsBuilt.has(pod)) { podsBuilt.add(pod); add(V.divider(34), pod.cx, 0, pod.z0); }
-    const color = DATA.profile(name).color, near = row === 'near';
-    const x = pod.cx + side * 0.85, zc = pod.z0 + (near ? 0.45 : -0.45), ry = near ? 0 : Math.PI;
-    const g = new THREE.Group(); g.position.set(x, 0, zc); g.rotation.y = ry; scene.add(g);
-    g.add(V.workDesk());
-    const mon = V.monitor(); mon.position.set(0, 0.7, -0.27); g.add(mon);
-    const kb = V.keyboard(); kb.position.set(-0.05, 0.71, 0.12); g.add(kb);
-    const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); g.add(mug);
-    if (i % 2) { const lamp = V.deskLamp(); lamp.position.set(-0.62, 0.71, -0.2); g.add(lamp); }
-    else { const pl = V.plant(i + 2, false); pl.position.set(-0.62, 0.71, -0.22); g.add(pl); }
-    const ch = V.chair('#33373f', color); ch.position.set(0, 0, 0.8); g.add(ch);
-    const scr = board(0.82, 0.5, 192); scr.mesh.position.set(0, 1.2, -0.21); g.add(scr.mesh);
-    const beacon = V.mesh(new V.Vox().box(0, 0, 0, 2, 2, 2, '#ff1744'), {pivot: [1.5, 0, 1.5], glow: 1.5}, true);
-    beacon.position.set(0.55, 1.45, -0.3); beacon.visible = false; g.add(beacon);
-    const beaconLight = new THREE.PointLight('#ff1744', 0, 3.5, 1.5); beaconLight.position.set(0.55, 1.7, -0.3); g.add(beaconLight);
-    g.updateMatrixWorld(true);
-    const W = (lx, lz, y = 0) => g.localToWorld(new THREE.Vector3(lx, y, lz));
-    const behind = W(0, 1.4), aisle = pod.aisles[side < 0 ? 0 : 1];
-    const route = near && pod.front ? [new THREE.Vector3(behind.x, 0, CORRIDOR), behind]
-                       : [new THREE.Vector3(aisle, 0, CORRIDOR), new THREE.Vector3(aisle, 0, behind.z), behind];
-    SPOTS.set(name, {g, scr, beacon, beaconLight,
-      seat: {pos: W(0, 0.78, 0.1), rot: ry + Math.PI, pose: 'sit', route, desk: name},
-      stand: {pos: W(-0.55, 1.35), rot: 0, pose: 'stand', route, desk: name},
-      intern: {pos: W(0.95, 0.5), rot: ry + Math.PI, pose: 'stand'}});
-  });
+  for (const name of names) {
+    if (SPOTS.has(name)) continue;
+    // this room's agents take desks from the first, the other session's from the last: both offices agree
+    const pick = D.per[name]?.neighbor ? [...DESKS].reverse().find(k => !k.owner) : DESKS.find(k => !k.owner);
+    const d = pick || addWorkstation();
+    if (!d) continue;                                            // ponytail: no free floor left either
+    const color = DATA.profile(name).color;
+    d.owner = name;
+    d.g.remove(d.chair); d.chair = chairFor(color); d.chair.position.set(0, 0, 0.8); d.chair.rotation.y = Math.PI; d.g.add(d.chair);
+    const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); d.g.add(mug);
+    SPOTS.set(name, d);
+  }
 }
 
 class Person {
@@ -328,10 +464,9 @@ class Person {
   }
   goTo(spot) {
     if (this.spot === spot || (this.spot.pos.equals(spot.pos) && this.spot.rot === spot.rot)) { this.spot = spot; return; }
-    // out along the current spot's route to the corridor, along the corridor, then in along the new spot's route
-    const same = spot.desk && spot.desk === this.spot.desk;
-    const out = same ? [] : [...(this.spot.route || [])].reverse(), inn = same ? [] : spot.route || [];
-    this.path = [...out, ...inn, spot.pos].map(p => p.clone()); this.spot = spot; this.pose = 'walk';
+    // off the chair to the nearest free floor, around everything to the free floor nearest the spot, then onto it
+    const start = this.path.length ? this.pos.clone() : nearestFree(this.pos);
+    this.path = [start, ...(route(start, spot.pos) || []), spot.pos.clone()]; this.spot = spot; this.pose = 'walk';
   }
   head() { return this.root.localToWorld(new THREE.Vector3(0, this.pose === 'sit' || this.pose === 'sofa' ? 1.6 : 1.75, 0)); }
   update(dt, now) {
@@ -363,6 +498,9 @@ class Person {
       else if (a === 'agent') { T.armR = -1.4; T.armRz = -0.6 + Math.sin(t * 3) * 0.3; T.headY = -0.35; }
       else if (a === 'raise') { T.armR = -2.95; T.armRz = 0.25 + Math.sin(t * 9) * 0.35; T.headX = -0.15; T.bob = Math.abs(Math.sin(t * 4.5)) * 0.06; }
       else if (a === 'celebrate') { T.armL = T.armR = -2.9; T.armLz = -0.3; T.armRz = 0.3; T.bob = Math.abs(Math.sin(t * 7)) * 0.32; }
+      else if (a === 'play') { T.armL = T.armR = -1.25 + Math.sin(t * 9) * 0.18; T.armLz = -0.2; T.armRz = 0.2; T.headX = 0.3; T.torso = 0.06; }
+      else if (a === 'wave') { T.armR = -2.8; T.armRz = 0.35 + Math.sin(t * 11) * 0.4; T.headZ = 0.08; }
+      else if (a === 'brew') { T.armL = T.armR = -1.25 + Math.sin(t * 3) * 0.05; T.armLz = -0.15; T.armRz = 0.15; T.headX = 0.25; }
       else if (a === 'coffee') { T.armR = -1.3 - (Math.sin(t * 0.7) > 0.85 ? 0.6 : 0); T.headX = Math.sin(t * 0.7) > 0.85 ? -0.2 : 0.05; }
       else if (a === 'speak') { T.armR = -1.5 + Math.sin(t * 6) * 0.25; T.armRz = 0.3; T.headX = -0.1; }
       else if (a === 'meet') { T.armL = T.armR = -0.9; T.headY = Math.sin(t * 0.9) * 0.25; }
@@ -385,17 +523,59 @@ class Person {
 }
 
 // ------------------------------------------------------------------ data
+const NEIGH = {rank: 0, room: null, profiles: {}};                            // another session's room sharing this office
 const DATA = {
   all: [], config: {participants: [], profiles: {}, lang: 'it', user_name: 'USER', self_names: []}, state: {agents: {}}, loaded: false,
   profile(name) {
-    const p = (this.config.profiles || {})[name] || {};
+    const p = (this.config.profiles || {})[name] || NEIGH.profiles[name] || {};
     let color = p.color;
     if (!color) { const pal = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085', '#b7950b', '#6c5ce7']; color = pal[V.hashName(name) % pal.length]; }
     return {color, emoji: p.emoji || name.slice(0, 1), role: p.role || '', model: [p.model, p.effort].filter(Boolean).join(' · ')};
   },
 };
-window.addEventListener('chatroom:data', e => { DATA.all = e.detail.all || []; DATA.config = e.detail.config || DATA.config; DATA.loaded = true; derive(); });
+window.addEventListener('chatroom:data', e => {
+  if (VISIT && visit) { localUser = e.detail.config?.user_name || localUser; DATA.config.lang = e.detail.config?.lang || 'it'; return deriveVisit(); }
+  DATA.all = e.detail.all || []; DATA.config = e.detail.config || DATA.config; DATA.loaded = true; derive();
+});
+// on a visit the people are the friend's: names, colours and working or on a break, nothing else
+let localUser = 'USER';
+function deriveVisit() {
+  const now = Date.now() / 1000, ppl = visit.people || [];
+  DATA.config = {...DATA.config, participants: ppl.map(p => p.name), profiles: Object.fromEntries(ppl.map(p => [p.name, {emoji: p.emoji, color: p.color}])),
+                 user_name: localUser, self_names: [], title: visit.title, heartbeat: 3600};
+  DATA.all = ppl.filter(p => p.state === 'break').map((p, i) => ({n: i + 1, from: p.name, kind: 'idle', text: '', ts: now}));
+  DATA.state = {agents: {}}; DATA.loaded = true;
+  derive();
+}
+if (VISIT && visit) setInterval(async () => {
+  try { const r = await fetch('visit.json', {cache: 'no-store'}); if (r.ok) { visit = {...visit, people: (await r.json()).people}; deriveVisit(); } } catch (e) {}
+}, 4000);
+let viewScope = window.chatroomScope ? window.chatroomScope() : 'self', nLastN = -1;
+window.addEventListener('chatroom:scope', e => { viewScope = e.detail.scope; });
+window.addEventListener('chatroom:neighbor', e => {
+  const all = e.detail.all || [], cfg = e.detail.config || {}, title = (cfg.title || cfg.topic || '').slice(0, 16), top = all.length ? all[all.length - 1].n : 0;
+  if (nLastN < 0) { nLastN = top; return; }
+  for (const m of all) if (m.n > nLastN) {
+    const who = people.get(`${m.from}@${title}`) || ((cfg.self_names || []).includes(m.from) ? otherLead : null);
+    if (who) who.bubble = {text: m.text, until: Date.now() / 1000 + (m.kind ? 4.5 : 7), kind: m.kind === 'idle' ? 'idle' : m.kind ? 'status' : 'msg'};
+  }
+  nLastN = top;
+});
+async function pollNeighbors() {
+  if (VISIT) return;
+  try {
+    const r = await fetch('neighbors.json', {cache: 'no-store'});
+    if (!r.ok) return;
+    const n = await r.json(), room = n.room;
+    NEIGH.rank = n.rank || 0;
+    NEIGH.room = room ? {...room, agents: room.agents.map(a => ({...a, key: `${a.name}@${room.title.slice(0, 16)}`}))} : null;
+    NEIGH.profiles = Object.fromEntries((NEIGH.room?.agents || []).map(a => [a.key, {emoji: a.emoji, color: a.color, role: '🏢 ' + room.title}]));
+    derive();
+  } catch (e) {}
+}
+setInterval(pollNeighbors, 2500);
 async function pollState() {
+  if (VISIT && visit) return;
   try { const r = await fetch('state.json?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) { DATA.state = await r.json(); derive(); } } catch (e) {}
 }
 setInterval(pollState, 1000);
@@ -434,33 +614,198 @@ function derive() {
     per[name] = {pct, idle, late: !idle && silence !== null && silence > hb, silence, last, real, tagged, vote: votes[name] || null,
                  a: (DATA.state.agents || {})[name] || null, msgs: mine.filter(m => !m.kind).slice(-3).reverse()};
   }
+  // the other session's agents: names, colours, working or on a break, the tool they run; their chat stays theirs
+  for (const a of NEIGH.room?.agents || []) {
+    const key = a.key;
+    names.push(key);
+    per[key] = {pct: a.pct ?? null, idle: !!a.idle, late: false, silence: null, last: null, real: null, tagged: false, vote: null, neighbor: true,
+                a: a.tool || a.waiting ? {tool: a.tool, waiting: !!a.waiting, since: now, target: ''} : null, msgs: []};
+  }
   const waiting = new Set(names.filter(n => per[n].a?.waiting));
   D = {names, self: selfNames, lead, user, per, plan, closed, waiting, all, hb, now};
   sync(); events();
 }
 
 // ------------------------------------------------------------------ cast: build and place the figures
-let boss = null, assistant = null;
-const BOSS_SEAT = {pos: new THREE.Vector3(5.6, 0.2, -5.28), rot: 0, pose: 'sit'};
+let boss = null, assistant = null, otherLead = null;
+const OWNER_SEAT = seatOr('boss', 0, 0);
+const BOSS_SEAT = visit ? (LAYOUT.bridge && STANDS.find(s => s.tag === 'bridgeIn')) || STANDS.find(s => s.tag === 'entrance') || {pos: new THREE.Vector3(0, 0, SIZE_Z / 2 - 1), rot: Math.PI, pose: 'stand'} : OWNER_SEAT;
+let hostFigure = null;                                                      // on a visit: the friend in their own chair
 const interns = new Map();
+
+// ------------------------------------------------------------------ the user's own figure: walk, sit, coffee
+// Only the user's figure takes orders (the agents keep doing what their work says): W/A/S/D and E in first person,
+// otherwise a click on the floor, on a free chair or on the coffee machine. Walking goes through the layout's floor
+// plan (office-layout.js): what blocks, and A* around it.
+const v3 = p => new THREE.Vector3(p.x, 0, p.z);
+const blocked = (x, z) => FLOOR.blocked(x, z);
+const route = (from, to) => FLOOR.route(from, to)?.map(v3) || null;
+const nearestFree = p => { const q = FLOOR.nearest(p); return q ? v3(q) : p.clone(); };
+const BREW = STANDS.find(s => s.tag === 'brew') || {pos: MACHINE.clone().setY(0), rot: 0, pose: 'stand'};
+const USER_SEATS = SEATS.filter(s => s.tag !== 'lead');
+const me = {act: 'idle', yaw: 0, pitch: -0.08, then: null, rising: false, cup: null, cupUntil: 0, brewUntil: 0};
+const keys = new Set();
+const sitSpots = () => USER_SEATS.filter(s => ![...people.values()].some(p => p.spot === s));
+const outCache = new Map();
+const outOf = s => { if (!outCache.has(s)) outCache.set(s, nearestFree(s.pos)); return outCache.get(s).clone(); };
+const seated = p => !p.path.length && (p.pose === 'sit' || p.pose === 'sofa');
+function walkTo(goal, spot, then = null) {
+  const from = seated(boss) ? outOf(boss.spot) : boss.pos;
+  const pts = route(from, goal);
+  if (!pts) return;
+  if (seated(boss)) pts.unshift(from.clone());
+  if (spot.rot === null) {                                                     // a spot on the floor: face the way you walked
+    if (!pts.length) return;
+    const b = pts[pts.length - 1], a = pts.length > 1 ? pts[pts.length - 2] : boss.pos;
+    spot.pos = b.clone(); spot.rot = Math.atan2(b.x - a.x, b.z - a.z);
+  } else pts.push(spot.pos.clone());
+  boss.path = pts; boss.spot = spot; boss.pose = 'walk'; boss.faceRot = null;
+  me.then = then; me.rising = false;
+  if (me.act === 'brew') me.act = 'idle';
+}
+function standUp() {
+  const out = outOf(boss.spot);
+  boss.path = [out.clone()]; boss.spot = {pos: out.clone(), rot: boss.rot, pose: 'stand'}; boss.pose = 'walk';
+  me.rising = true; me.then = null;
+}
+function brew() { me.act = 'brew'; me.brewUntil = performance.now() / 1000 + 3; }
+/** what E would do now, the nearest thing first: stand up, talk to an agent in front of you, make a coffee, sit on a
+ *  free seat, look at the TV or the whiteboard you face */
+const _fwd = new THREE.Vector3(), _to = new THREE.Vector3();
+function nearby() {
+  if (!boss || boss.path.length) return null;
+  if (seated(boss)) return {kind: atMyDesk() ? 'desk' : 'stand'};
+  const d = p => Math.hypot(p.x - boss.pos.x, p.z - boss.pos.z);
+  _fwd.set(Math.sin(boss.rot + me.yaw), 0, Math.cos(boss.rot + me.yaw));
+  const facing = p => _to.set(p.x - boss.pos.x, 0, p.z - boss.pos.z).normalize().dot(_fwd);
+  const opts = [];
+  for (const [name, p] of people) if (d(p.pos) < 1.9 && facing(p.pos) > 0.3) opts.push({kind: 'talk', name, k: d(p.pos)});
+  if (assistant && d(assistant.pos) < 1.9 && facing(assistant.pos) > 0.3) opts.push({kind: 'talk', name: D.lead, k: d(assistant.pos)});
+  if (d(BREW.pos) < 1.3) opts.push({kind: 'coffee', k: d(BREW.pos)});
+  for (const s of sitSpots()) { const k = Math.min(d(s.pos), d(outOf(s))); if (k < 1.3) opts.push({kind: 'sit', seat: s, k: k + 0.2}); }
+  for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
+  return opts.sort((a, b) => a.k - b.k)[0] || null;
+}
+function interact() {
+  const t = nearby();
+  if (!t) return;
+  if (t.kind === 'stand' || t.kind === 'desk') return standUp();
+  if (t.kind === 'coffee') return walkTo(BREW.pos, BREW, brew);
+  if (t.kind === 'sit') return walkTo(outOf(t.seat), t.seat);
+  if (t.kind === 'talk') return talkTo(t.name);
+  watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
+}
+let watching = null;
+/** the agent turns to you and the chat opens with its name tagged */
+function talkTo(name) {
+  const p = people.get(name) || (name === D.lead ? assistant : null);
+  if (p) { p.look = boss.head(); setTimeout(() => { p.look = null; }, 4000); }
+  if (mode === 'office') { mode = 'split'; setPref('mode', mode); applyMode(); }
+  window.chatroom?.tag(name);
+}
+/** Q: a wave; whoever is near turns to look */
+function wave() {
+  me.waveUntil = performance.now() / 1000 + 2.2;
+  for (const p of [...people.values(), assistant]) if (p && p.pos.distanceTo(boss.pos) < 7) { p.look = boss.head(); setTimeout(() => { p.look = null; }, 2500); }
+}
+/** from the inspector: walk up to an agent and stop a step in front of it */
+function walkOver(name) {
+  const p = people.get(name) || (name === D.lead ? assistant : null);
+  if (!p || !boss) return;
+  const goal = nearestFree(p.pos.clone().add(boss.pos.clone().sub(p.pos).setY(0).setLength(1.1)));
+  walkTo(goal, {pos: goal, rot: Math.atan2(p.pos.x - goal.x, p.pos.z - goal.z), pose: 'stand'}, () => { p.look = boss.head(); setTimeout(() => { p.look = null; }, 3000); });
+}
+/** a click outside first person: the coffee machine, a free seat, or that spot on the floor */
+function goToPoint(p) {
+  if (!boss) return;
+  if (Math.hypot(p.x - MACHINE.x, p.z - MACHINE.z) < 0.9) return walkTo(BREW.pos, BREW, brew);
+  const seat = sitSpots().find(s => Math.hypot(p.x - s.pos.x, p.z - s.pos.z) < 0.5);
+  if (seat) return walkTo(outOf(seat), seat);
+  const goal = new THREE.Vector3(p.x, 0, p.z);
+  walkTo(goal, {pos: goal, rot: null, pose: 'stand'});
+}
+let leaving = false, doorToast = 0;
+/** W/S walk, A/D turn; looking around with the mouse turns the body once you walk */
+function drive(dt) {
+  const f = (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0), turn = (keys.has('a') ? 1 : 0) - (keys.has('d') ? 1 : 0);
+  if (!pov || !boss || (!f && !turn)) { if (boss && boss.pose === 'walk' && !boss.path.length) boss.pose = 'stand'; return; }
+  if (seated(boss)) return standUp();
+  if (boss.path.length) { if (me.rising) return; boss.path = []; me.then = null; }
+  if (me.act === 'brew') me.act = 'idle';
+  watching = null;
+  if (f) { boss.rot += me.yaw; me.yaw = 0; }
+  boss.rot += turn * dt * 2.4;
+  const step = f * dt * (f > 0 ? 2.0 : 1.2), nx = boss.pos.x + Math.sin(boss.rot) * step, nz = boss.pos.z + Math.cos(boss.rot) * step;
+  const others = [...people.values(), ...remote.values(), assistant, hostFigure].filter(p => p && p !== boss);
+  const bump = (x, z) => others.some(p => {                                   // people are solid: you cannot walk into them
+    const d = Math.hypot(p.pos.x - x, p.pos.z - z);
+    return d < 0.55 && d < Math.hypot(p.pos.x - boss.pos.x, p.pos.z - boss.pos.z);
+  });
+  if (!blocked(nx, boss.pos.z) && !bump(nx, boss.pos.z)) boss.pos.x = nx;
+  if (!blocked(boss.pos.x, nz) && !bump(boss.pos.x, nz)) boss.pos.z = nz;
+  const B = LAYOUT.bridge;
+  if (B && bridgeOpen && boss.pos.z > B.z + B.length - 0.6 && !leaving) {   // the friend's door
+    if (visit) { leaving = true; location.search = ''; }
+    else if (commonState?.bridge?.joined) { leaving = true; location.search = '?visit'; }
+    else if (performance.now() - doorToast > 4000) { doorToast = performance.now(); ui.placeName(ui.t().friendDoor); }
+  }
+  boss.pos.y = 0; boss.pose = f ? 'walk' : 'stand'; boss.faceRot = null;
+  boss.spot = {pos: boss.pos.clone(), rot: boss.rot, pose: 'stand'};
+}
+/** after the figure moved: arrivals, the coffee being made, the cup in hand */
+function tendMe(dt, t) {
+  if (me.rising && !boss.path.length) me.rising = false;
+  if (me.then && !boss.path.length) { const fn = me.then; me.then = null; fn(); }
+  if (me.act === 'brew') {
+    if (boss.spot !== BREW || boss.path.length) me.act = 'idle';
+    else if (t > me.brewUntil) { me.act = 'coffee'; me.cup.visible = true; me.cupUntil = t + 120; emit(8, MACHINE, {color: '#ffffff', speed: 0.3, up: 0.8, life: 1.2, size: 0.06, gravity: 0.3, glow: 0.9}); }
+    else if (Math.random() < dt * 14) emit(1, MACHINE, {color: '#ffffff', speed: 0.15, up: 0.7, life: 1.4, size: 0.06, gravity: 0.25, glow: 0.9});
+  }
+  if (me.cup.visible && t > me.cupUntil) { me.cup.visible = false; if (me.act === 'coffee') me.act = 'idle'; }
+  me.cup.rotation.x = -boss.parts.armR.rotation.x;                             // the cup stays upright in the hand
+}
+// a break place for an idle agent: one at random among the free ones (or its own desk), kept for 40 to 130 s,
+// then another at random; never the user's seat, never one another agent is heading to
+function breakSpot(p, desk, list, now) {
+  if (p.breakAt && now < p.breakUntil && p.breakAt !== boss?.spot) return p.breakAt;
+  const taken = new Set([...people.values()].filter(q => q !== p).map(q => q.breakAt));
+  const free = [desk.seat, ...list.filter(s => !taken.has(s) && s !== boss?.spot)];
+  p.breakAt = free[Math.floor(Math.random() * free.length)];
+  p.breakUntil = now + 40 + Math.random() * 90;
+  return p.breakAt;
+}
 function sync() {
   deskLayout(D.names);
-  if (!boss) { boss = new Person(D.user, 'boss', BOSS_SEAT, false); }
-  if (!assistant) { assistant = new Person(D.lead, 'lead', LEAD_SEAT, false); }
-  for (const name of D.names) if (!people.has(name)) people.set(name, new Person(name, 'agent', SPOTS.get(name).seat, !firstDerive));
+  if (!boss) {
+    boss = new Person(D.user, 'boss', BOSS_SEAT, false);
+    me.cup = V.mug('#f5f5f5'); me.cup.position.set(0, -0.5, 0.12); me.cup.visible = false; boss.parts.armR.add(me.cup);
+  }
+  const mySeat = NEIGH.rank === 1 ? LEAD2_SEAT : LEAD_SEAT, theirSeat = mySeat === LEAD_SEAT ? LEAD2_SEAT : LEAD_SEAT;
+  if (!assistant) { assistant = new Person(D.lead, 'lead', mySeat, false); } else assistant.goTo(mySeat);
+  if (NEIGH.room && !otherLead) otherLead = new Person(NEIGH.room.lead + '@' + NEIGH.room.title.slice(0, 16), 'lead', theirSeat, true);
+  if (!NEIGH.room && otherLead) { otherLead.dispose(); otherLead = null; }
+  if (visit && !hostFigure) { hostFigure = new Person(visit.host, 'boss', OWNER_SEAT, false); hostFigure.act = 'code'; }
+  for (const name of D.names) if (!people.has(name) && SPOTS.has(name)) people.set(name, new Person(name, 'agent', SPOTS.get(name).seat, !firstDerive));
   firstDerive = false;
   const now = D.now;
-  let meetIdx = 0, coffeeIdx = 0;
+  let meetIdx = 0;
+  const free = list => list.filter(s => s !== boss.spot);                 // never the seat the user is in
+  const MEET_ = free(MEET), COFFEE_ = free(COFFEE), COMMON_ = free(COMMON), room = commonRoom();
   for (const name of D.names) {
     const p = people.get(name), d = D.per[name], a = d.a, spot = SPOTS.get(name);
+    if (!p || !spot) continue;
     const tool = a?.tool && now - (a.since || now) < 900 ? a.tool : null, c = cat(tool, a?.target || '');
     const posted = d.real && now - (d.real.ts || 0) < 6;
     let want = spot.seat, act;
-    if (D.closed) { want = MEET[meetIdx++ % MEET.length]; act = now - (D.closed.ts || 0) < 8 ? 'celebrate' : 'meet'; }
+    if (D.closed && !d.neighbor && now - (D.closed.ts || 0) < 90) { want = MEET_[meetIdx++ % MEET_.length]; act = now - (D.closed.ts || 0) < 8 ? 'celebrate' : 'meet'; }
     else if (a?.waiting) { want = spot.stand; act = 'raise'; }
-    else if (d.idle && (!c || c === 'chat')) { want = COFFEE[coffeeIdx++ % COFFEE.length]; act = 'coffee'; }
-    else if (D.plan && d.vote === 'yes' && (!c || c === 'chat')) { want = MEET[meetIdx++ % MEET.length]; act = 'meet'; }
+    else if (d.idle && (!c || c === 'chat')) {                              // a break, somewhere chosen at random
+      want = breakSpot(p, spot, room.lets(name) ? COMMON_ : COFFEE_, now);
+      act = want === spot.seat ? 'idle' : want.act || 'coffee';
+    }
+    else if (D.plan && !D.closed && d.vote === 'yes' && (!c || c === 'chat')) { want = MEET_[meetIdx++ % MEET_.length]; act = 'meet'; }
     else act = posted ? 'speak' : c || (a?.text_at && now - a.text_at < 15 ? 'think' : d.silence !== null && d.silence < 25 ? 'think' : 'idle');
+    if (!d.idle) p.breakAt = null;
     p.goTo(want); p.act = act;
     p.faceRot = want === spot.seat && posted ? 0.0 : null;               // turn the chair round to talk
     // a subagent of this agent: an intern beside the desk
@@ -494,7 +839,7 @@ function events() {
     if (tagsName(m.text, D.user)) notify('tag' + m.n, `💬 ${m.from} → ${D.user}`, m.text.slice(0, 160), false, () => window.chatroom?.jumpTo(m.n));
     if (CLOSED.test(m.text) && m.n > lastClosedN) {
       lastClosedN = m.n;
-      emit(260, new THREE.Vector3(0, 2.4, 4.4), {color: ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb'], speed: 5, up: 5, life: 3, size: 0.08, gravity: -4});
+      emit(260, new THREE.Vector3(0, 2.4, 0), {color: ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb'], speed: 5, up: 5, life: 3, size: 0.08, gravity: -4});
       printJob = 3;
       notify('closed', `✅ ${D.closed ? 'CLOSED v' + D.closed.v : 'CLOSED'}`, m.text.slice(0, 160), false);
     }
@@ -551,6 +896,23 @@ function drawBoards() {
     g.fillStyle = '#d4a640'; g.font = '700 40px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(`👑 ${D.user}`, k.lw / 2, k.lh / 2 + 2);
     g.textAlign = 'left'; nameplate.tex.needsUpdate = true;
   }
+  if (LAYOUT.bridge) {
+    const shared = commonRoom().shared;
+    bridge.visible = shared; commonDoor.visible = !shared;
+    if (shared !== bridgeOpen) { bridgeOpen = shared; openBridge(shared); }
+    const {g, canvas: k} = friendSign;
+    g.fillStyle = '#0f1a24'; g.fillRect(0, 0, k.lw, k.lh); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = '#80deea'; g.font = '700 22px "Segoe UI", sans-serif'; g.fillText(`🌐 ${L.friendOffice}`, k.lw / 2, k.lh / 2 + 1);
+    g.textAlign = 'left'; friendSign.tex.needsUpdate = true;
+  }
+  if (commonSign) {
+    const {g, canvas: k} = commonSign, room = commonRoom();
+    g.fillStyle = '#2b2f36'; g.fillRect(0, 0, k.lw, k.lh); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = '#f3e3c3'; g.font = '700 25px "Segoe UI", sans-serif'; g.fillText(`🛋 ${L.common}`, k.lw / 2, k.lh * 0.36);
+    g.fillStyle = room.shared ? '#69f0ae' : '#b0bec5'; g.font = '15px "Segoe UI", sans-serif';
+    g.fillText((room.all ? L.commonAll : room.who.size ? L.commonSome(room.who.size) : L.commonClosed) + (room.shared ? ' · 🌐' : ''), k.lw / 2, k.lh * 0.74);
+    g.textAlign = 'left'; commonSign.tex.needsUpdate = true;
+  }
 }
 function drawClock() {
   const {g, canvas: k} = clock, d = new Date(), r = k.lw / 2;
@@ -597,19 +959,132 @@ function drawScreen(name, act, t) {
 
 // ------------------------------------------------------------------ UI, modes, selection, camera
 let mode = pref('mode', window.innerWidth >= 1000 ? 'split' : 'office'), selected = null, follow = false;
+// first person: the camera is the user's figure's eyes; leaving it flies back to the overview before the orbit resumes
+let pov = pref('pov', false), flyHome = false, povLocked = false;
+const povLook = HOME.target.clone(), _look = new THREE.Vector3(), _eye = new THREE.Vector3();
+controls.enabled = !pov;
+function setPov(on) {
+  pov = on; setPref('pov', on); povLocked = false; keys.clear();
+  if (on) { povLook.copy(controls.target); tween = null; follow = false; flyHome = false; controls.enabled = false; me.yaw = 0; me.pitch = -0.08; }
+  else flyHome = true;
+}
+const atMyDesk = () => boss && seated(boss) && boss.spot === OWNER_SEAT && !visit;
+async function openCommands() {
+  try {
+    const list = await (await fetch('commands.json', {cache: 'no-store'})).json();
+    ui.palette(list, async c => { await post('command', {name: c.name}); ui.placeName(ui.t().cmdSent(c.icon + ' ' + c.name)); });
+  } catch (e) {}
+}
+document.addEventListener('keydown', e => {
+  if (ui.paletteOpen() && ui.paletteKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (e.key === '/' && atMyDesk() && mode !== 'chat' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
+    e.preventDefault(); return openCommands();
+  }
+}, true);
+document.addEventListener('keydown', e => {
+  if (!pov || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  const k = e.key.toLowerCase();
+  if (['w', 'a', 's', 'd'].includes(k)) { keys.add(k); e.preventDefault(); }
+  else if (k === 'e' && !e.repeat) { interact(); e.preventDefault(); }
+  else if (k === 'q' && !e.repeat) { wave(); e.preventDefault(); }
+});
+document.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+window.addEventListener('blur', () => keys.clear());
+renderer.domElement.addEventListener('pointermove', e => {                    // first person: drag to look around
+  if (!pov || !(e.buttons & 1)) return;
+  watching = null;
+  me.yaw = Math.max(-2.4, Math.min(2.4, me.yaw - e.movementX * 0.005));
+  me.pitch = Math.max(-1.1, Math.min(0.7, me.pitch - e.movementY * 0.004));
+});
 const ui = createUI(root, {
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
-  onReset: () => { follow = false; tween = {pos: HOME.pos.clone(), target: HOME.target.clone()}; },
+  onPov: () => setPov(!pov),
+  onEdit: () => { if (VISIT) return; if (pov) setPov(false); ui.commonPanel(null); select(null); editor.toggle(); },
+  onCommonOpen: () => ui.commonOpen() ? ui.commonPanel(null) : openCommon(),
+  onShare: async (action, extra) => { await post('share', {action, ...extra}); pollCommon(); },
+  onJoin: async (url, pin) => { const r = await post('join', url === null ? {leave: true} : {url, pin}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onCommonWrite: async text => { await post('common/post', {text}); pollCommon(); },
+  onGame: async (game, text) => { const r = await post('common/post', {text, game}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onCommonDoc: async (name, data, error) => {
+    if (error) return ui.roomTip(error, 20, 120);
+    const r = await post('common/doc', {name, data}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon();
+  },
+  onAsk: async text => { const r = await post('join/ask', {text}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onVisit: () => { location.search = '?visit'; },
+  onCommon: async cfg => {
+    DATA.config.common = cfg; openCommon(); drawBoards();
+    try { await fetch('config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({common: cfg})}); } catch (e) {}
+  },
+  onReset: () => { follow = false; if (pov) setPov(false); else tween = {pos: HOME.pos.clone(), target: HOME.target.clone()}; },
   onFollow: () => { follow = !follow && !!selected; },
   onQuality: () => { quality = QUALITY[(QUALITY.indexOf(quality) + 1) % QUALITY.length]; setPref('quality', quality); applyQuality(); },
   onSelect: n => select(n),
   onTag: n => { if (mode === 'office') { mode = 'split'; applyMode(); } window.chatroom?.tag(n); },
+  onGo: n => walkOver(n),
   onJump: n => { if (n && window.chatroom) { if (mode === 'office') { mode = 'split'; applyMode(); } window.chatroom.jumpTo(n); } },
   onNext: dir => { const list = D.names; if (!list.length) return; const i = list.indexOf(selected); select(list[(i + dir + list.length) % list.length]); },
 });
-document.addEventListener('keydown', e => { if (mode !== 'chat') ui.onKey(e); });
+const editor = createEditor({scene, camera, controls, renderer, root, layout: LAYOUT, meshes: ITEM_MESHES, place: placeItem,
+                             lang: () => DATA.config.lang === 'en' ? 'en' : 'it'});
+document.addEventListener('keydown', e => { if (mode !== 'chat' && !editor.active()) ui.onKey(e); });
 // the chat header's 🏢 button: from the chat alone back to the split view, otherwise to the chat alone
 window.officeMode = m => { mode = m || (mode === 'chat' ? 'split' : 'chat'); setPref('mode', mode); applyMode(); };
+async function post(path, body) {
+  try { return await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}); } catch (e) { return null; }
+}
+// ------------------------------------------------------------------ the common room, live: its chat, guests drawn in the office
+let commonState = null, lastCommonN = -1;
+const askedSeen = new Set();
+const remote = new Map();                                                    // name -> Person, figures from the other side
+async function pollCommon() {
+  try {
+    const r = await fetch('common.json', {cache: 'no-store'});
+    if (!r.ok) return;
+    commonState = await r.json();
+    ui.commonState(commonState);
+    for (const q of commonState.share?.requests || []) if (q.status === 'pending' && !askedSeen.has(q.id)) {
+      askedSeen.add(q.id); chime(); notify('ask' + q.id, `🙋 ${q.guest}`, q.text.slice(0, 160), true, () => openCommon());
+    }
+    window.dispatchEvent(new CustomEvent('chatroom:common', {detail: commonState}));
+    syncRemote();
+  } catch (e) {}
+}
+setInterval(pollCommon, 2000);
+function syncRemote() {
+  const s = commonState;
+  if (!s || !boss) return;
+  const joined = !!(s.bridge && s.bridge.joined);
+  // from the other side: as host, the guests and their agents; as guest, everyone but me and my own agents
+  const list = (s.people || []).filter(p => (joined ? p.guest !== s.me : !!p.guest)
+                                            && !(visit && (DATA.config.participants || []).includes(p.name)) && !(visit && p.name === visit.host));
+  const names = new Set(list.map(p => p.name));
+  for (const [n, p] of remote) if (!names.has(n)) { emit(20, p.head(), {color: ['#80deea', '#ffffff']}); p.dispose(); remote.delete(n); }
+  const used = new Set([...people.values()].map(p => p.spot)), free = [...COMMON.filter(s => !used.has(s) && s !== boss.spot).reverse(),
+                                                                         ...STANDS.filter(s => s.tag === 'portal')];
+  let k = 0;
+  for (const p of list) {
+    if (!remote.has(p.name)) {
+      const seat = free[k % Math.max(1, free.length)] || BOSS_SEAT;
+      const r = new Person(p.name, 'guest', seat, true, p.color || '#888888'); r.remoteEmoji = p.emoji; r.act = 'idle';
+      remote.set(p.name, r);
+    }
+    k++;
+    remote.get(p.name).act = p.state === 'work' ? 'think' : 'coffee';
+  }
+  // new lines in the common room: a bubble over whoever said it
+  const msgs = s.messages || [], top = msgs.length ? msgs[msgs.length - 1].n : 0;
+  if (lastCommonN < 0) lastCommonN = top;
+  for (const m of msgs) if (m.n > lastCommonN) {
+    const who = remote.get(m.from) || people.get(m.from) || (m.from === s.me ? boss : null);
+    if (who) who.bubble = {text: m.text, until: Date.now() / 1000 + 7, kind: 'msg'};
+  }
+  lastCommonN = Math.max(lastCommonN, top);
+}
+function openCommon() {
+  const r = commonRoom();
+  ui.commonPanel({cfg: {all: r.all, shared: r.shared, mirror: !!(DATA.config.common || {}).mirror, who: [...r.who]},
+                  names: D.names.map(n => ({name: n, emoji: DATA.profile(n).emoji, color: DATA.profile(n).color}))});
+}
 function applyMode() {
   document.body.classList.remove('mode-split', 'mode-office', 'mode-chat');
   document.body.classList.add('mode-' + mode);
@@ -620,6 +1095,7 @@ function select(name) {
   selected = name && (people.has(name) || name === D.user || name === D.lead) ? name : null;
   if (!selected) { follow = false; ui.inspect(null); return; }
   const p = people.get(selected) || (selected === D.user ? boss : assistant);
+  if (pov || flyHome) { inspect(); return; }                       // in first person the eyes stay where they are
   const h = p.head(), off = camera.position.clone().sub(controls.target).setLength(Math.min(9, camera.position.distanceTo(controls.target)));
   tween = {pos: h.clone().add(off), target: h.clone().add(new THREE.Vector3(0, -0.6, 0))};
   inspect();
@@ -627,7 +1103,7 @@ function select(name) {
 function inspect() {
   if (!selected) return;
   const L = ui.t(), pr = DATA.profile(selected), d = D.per[selected];
-  if (!d) { ui.inspect({name: selected, emoji: selected === D.user ? '👑' : '👓', role: selected === D.user ? L.you : L.lead, model: pr.model, color: pr.color,
+  if (!d) { ui.inspect({name: selected, you: selected === D.user, emoji: selected === D.user ? '👑' : '👓', role: selected === D.user ? L.you : L.lead, model: pr.model, color: pr.color,
                        msgs: D.all.filter(m => m.from === selected && !m.kind).slice(-3).reverse(), lastN: D.all.filter(m => m.from === selected).pop()?.n}); return; }
   const a = d.a;
   ui.inspect({name: selected, emoji: pr.emoji, role: pr.role, model: pr.model, color: pr.color, pct: d.pct, state: people.get(selected)?.act,
@@ -637,14 +1113,37 @@ function inspect() {
 renderer.domElement.addEventListener('pointerdown', e => { unlockAudio(); downAt = [e.clientX, e.clientY]; });
 let downAt = null;
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+// room names: the one under the mouse shows by the pointer for a moment; in first person, the one you walk into
+const roomAt = (x, z) => (LAYOUT.rooms || []).find(r => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1 && (!r.shared || commonRoom().shared));
+const roomName = r => r ? (DATA.config.lang === 'en' ? r.en : r.it) : '';
+const _floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), _hit = new THREE.Vector3();
+let hoverRoom = null, hoverAt = 0, povRoom = null, hintAcc = 0;
+const hintText = n => { const L = ui.t(); if (n.kind === 'desk') return (pov ? `E · ${L.hint_stand}   ` : '') + `/ · ${L.hint_cmds}`; return 'E · ' + (n.kind === 'talk' ? L.hintTalk(n.name) : n.kind === 'tv' || n.kind === 'board' ? (watching ? L.hintStop : L['hint_' + n.kind]) : L['hint_' + n.kind]); };
+renderer.domElement.addEventListener('pointermove', e => {
+  const now = performance.now();
+  if (pov || e.buttons || now - hoverAt < 80) return;
+  hoverAt = now;
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const room = ray.ray.intersectPlane(_floor, _hit) ? roomAt(_hit.x, _hit.z) : null;
+  if (room && room !== hoverRoom) ui.roomTip(roomName(room), e.clientX - r.left, e.clientY - r.top);
+  hoverRoom = room;
+});
+renderer.domElement.addEventListener('pointerleave', () => { hoverRoom = null; });
 renderer.domElement.addEventListener('click', e => {
+  if (editor.active()) return;
   if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   const r = renderer.domElement.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
   const name = hit?.object.userData.person;
-  select(name && !name.endsWith('·sub') ? name : null);
+  if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
+  select(null);
+  if (pov) return;
+  const spot = ray.intersectObjects(scene.children, true).find(h => h.object.isMesh && h.object.visible && !h.object.material?.transparent && !h.object.userData.person);
+  if (spot) goToPoint(spot.point);
 });
 controls.addEventListener('start', () => { tween = null; });
 
@@ -659,15 +1158,23 @@ new ResizeObserver(resize).observe(root);
 const _v = new THREE.Vector3();
 function placeTags() {
   const L = ui.t(), w = root.clientWidth, h = root.clientHeight, now = Date.now() / 1000;
-  const all = [...people.values(), boss, assistant].filter(Boolean);
+  const all = [...people.values(), ...remote.values(), boss, assistant, hostFigure, otherLead].filter(Boolean);
   for (const p of all) {
     _v.copy(p.head()); _v.y += 0.25; const dist = camera.position.distanceTo(_v); _v.project(camera);
-    const vis = _v.z < 1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2;
+    const vis = _v.z < 1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2 && !(p === boss && !boss.parts.head.visible);
     ui.place(p.name, (_v.x * 0.5 + 0.5) * w, (-_v.y * 0.5 + 0.5) * h, vis, Math.max(0.72, Math.min(1.12, 14 / dist)));
     const pr = DATA.profile(p.name), d = D.per[p.name], bubble = p.bubble && p.bubble.until > now ? p.bubble : null;
     const flags = [];
     let line = '', title = p.name, sub = pr.model, emoji = pr.emoji, pct = null;
-    if (p === boss) { emoji = '👑'; sub = L.you; }
+    if (p === otherLead) { emoji = '👓'; title = NEIGH.room?.lead || title; sub = '🏢 ' + (NEIGH.room?.title || ''); }
+    else if (D.per[p.name]?.neighbor) { title = p.name.split('@')[0]; sub = '🏢 ' + (NEIGH.room?.title || ''); }
+    // which room's thoughts and messages show: this one, the other, or both (the figures always do)
+    const theirs = p === otherLead || !!D.per[p.name]?.neighbor, ours = !theirs && p !== boss && p !== hostFigure && p.kind !== 'guest';
+    const muted = (viewScope === 'self' && theirs) || (viewScope === 'other' && ours);
+    if (p === otherLead) {}
+    else if (p === hostFigure) { emoji = '👑'; sub = '🌐 ' + L.guest; }
+    else if (p === boss) { emoji = visit ? '🚶' : '👑'; sub = L.you; }
+    else if (p.kind === 'guest') { emoji = p.remoteEmoji || '🌐'; sub = '🌐 ' + L.guest; }
     else if (p === assistant) { emoji = '👓'; sub = [L.lead, pr.model].filter(Boolean).join(' · '); line = `👀 #${lastSeenN}`; }
     else if (d) {
       const a = d.a, c = cat(a?.tool, a?.target || '');
@@ -681,7 +1188,8 @@ function placeTags() {
       else if (d.idle) line = `${EMOJI.coffee} ${L.coffee}`;
       else line = `${EMOJI.think} ${L.think}`;
     }
-    ui.tag(p.name, {title, sub, emoji, color: pr.color, pct, line, flags, bubble: bubble ? ({status: '📝 ', idle: '💤 ', vote: '🗳 '}[bubble.kind] || '') + String(bubble.text).replace(/\s+/g, ' ').slice(0, bubble.kind === 'status' || bubble.kind === 'idle' ? 90 : 150) : '', bubbleKind: bubble?.kind});
+    if (muted) { line = ''; }
+    ui.tag(p.name, {title, sub, emoji, color: pr.color, pct, line, flags, bubble: bubble && !muted ? ({status: '📝 ', idle: '💤 ', vote: '🗳 '}[bubble.kind] || '') + String(bubble.text).replace(/\s+/g, ' ').slice(0, bubble.kind === 'status' || bubble.kind === 'idle' ? 90 : 150) : '', bubbleKind: bubble?.kind});
   }
   const work = D.names.filter(n => !D.per[n].idle && !D.per[n].a?.waiting).length, idle = D.names.filter(n => D.per[n].idle).length;
   const pcts = D.names.map(n => D.per[n].pct).filter(x => x !== null);
@@ -689,7 +1197,12 @@ function placeTags() {
   const st = DATA.state, src = st.mod && Date.now() / 1000 - st.mod < 120 ? L.mod : Object.keys(st.agents || {}).length ? L.tail : L.nodata;
   ui.hud({title: `${DATA.config.icon || '💬'} ${DATA.config.title || DATA.config.topic || 'Chat room'}`, pct: pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null,
           waiting: D.waiting.size, working: work, idle, plan: D.closed ? `✅ ${L.done} v${D.closed.v}` : D.plan ? `🗳 ${L.plan(D.plan.v)}: ${L.votes(yes, D.names.length - yes)}` : '',
-          src: '📡 ' + src, mode, follow, quality});
+          src: '📡 ' + src, mode, follow, quality, pov, edit: editor.active()});
+  // labels the user gave to pieces of furniture, a little above each
+  ui.itemLabels(ITEM_MESHES.filter(m => m.userData.label).map(m => {
+    _v.copy(m.position); _v.y += 1.25; _v.project(camera);
+    return {key: m.uuid, text: m.userData.label, x: (_v.x * 0.5 + 0.5) * w, y: (-_v.y * 0.5 + 0.5) * h, vis: _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1};
+  }));
   window.officeOwnsTitle = true;
   badge(DATA.config.title || DATA.config.topic || 'Chat room', D.waiting.size, DATA.config.icon);
 }
@@ -700,7 +1213,8 @@ let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc 
 function frame(now) {
   requestAnimationFrame(frame);
   if (mode === 'chat' || (document.hidden && !FORCE)) { last = now; return; }
-  const busy = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length;
+  const busy = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || tween || flyHome
+               || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
   const fps = quality === 'bassa' ? 24 : busy ? (quality === 'alta' ? 45 : 30) : 15;
   acc += now - last; last = now;
   if (acc < 1000 / fps) return;
@@ -710,33 +1224,79 @@ function frame(now) {
   if (d.getSeconds() !== secDrawn) { secDrawn = d.getSeconds(); drawClock(); }
   for (const p of people.values()) p.update(dt, t);
   for (const p of interns.values()) p.update(dt, t);
-  if (boss) { boss.act = boss.bubble && boss.bubble.until > Date.now() / 1000 ? 'speak' : 'idle'; boss.update(dt, t); }
+  for (const p of remote.values()) p.update(dt, t);
+  if (hostFigure) hostFigure.update(dt, t);
+  if (otherLead) { otherLead.act = 'read'; otherLead.update(dt, t); }
+  if (boss) {
+    drive(dt);
+    if (pov && povLocked) { const r = roomAt(boss.pos.x, boss.pos.z); if (r !== povRoom) { povRoom = r; if (r) ui.placeName(roomName(r)); } }
+    hintAcc += dt;
+    if (hintAcc > 0.2) { hintAcc = 0; const n = pov && povLocked ? nearby() : atMyDesk() ? {kind: 'desk'} : null; ui.hint(n ? hintText(n) : ''); }
+    boss.act = boss.bubble && boss.bubble.until > Date.now() / 1000 ? 'speak' : t < (me.waveUntil || 0) ? 'wave' : me.act;
+    boss.update(dt, t); tendMe(dt, t);
+  }
   if (assistant) { assistant.act = assistant.bubble && assistant.bubble.until > Date.now() / 1000 ? 'speak' : 'read'; assistant.update(dt, t); }
   screenAcc += dt;
   if (screenAcc > 1 / 6) { screenAcc = 0; for (const [n, p] of people) drawScreen(n, p.act, t); }
   for (const s of SPOTS.values()) if (s.beacon.visible) { s.beacon.rotation.y += dt * 6; s.beaconLight.intensity = 1.6 + Math.sin(t * 9) * 1.2; } else s.beaconLight.intensity = 0;
-  for (let i = 0; i < 28; i++) { ledColor.set(i === 27 ? '#ff5252' : (Math.sin(t * (2 + i % 5) + i) > 0.2 ? ['#00e676', '#40c4ff', '#ffab40'][i % 3] : '#10301c')).multiplyScalar(1.15); leds.setColorAt(i, ledColor); }
-  leds.instanceColor.needsUpdate = true;
-  if (Math.random() < dt * 3) emit(1, new THREE.Vector3(-7.5, 1.6, 4.05), {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9});
-  if (printJob > 0 && Math.random() < dt * 2) { printJob -= 1; emit(1, printerG.position.clone().add(new THREE.Vector3(0, 1.1, 0.2)), {color: '#ffffff', speed: 0.2, up: 1.5, life: 2, size: 0.18, gravity: -1.5, glow: 1}); }
+  for (let i = 0; i < LED_AT.length; i++) { ledColor.set(LED_AT[i][1] ? '#ff5252' : (Math.sin(t * (2 + i % 5) + i) > 0.2 ? ['#00e676', '#40c4ff', '#ffab40'][i % 3] : '#10301c')).multiplyScalar(1.15); leds.setColorAt(i, ledColor); }
+  if (leds.instanceColor) leds.instanceColor.needsUpdate = true;
+  for (const at of STEAM) if (Math.random() < dt * 3) emit(1, at, {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9});
+  if (printJob > 0 && Math.random() < dt * 2) { printJob -= 1; emit(1, PAPER, {color: '#ffffff', speed: 0.2, up: 1.5, life: 2, size: 0.18, gravity: -1.5, glow: 1}); }
   stepParticles(dt); stepPlanes(dt);
-  if (tween) {
-    camera.position.lerp(tween.pos, Math.min(1, dt * 4)); controls.target.lerp(tween.target, Math.min(1, dt * 4));
-    if (camera.position.distanceTo(tween.pos) < 0.05) tween = null;
-  } else if (follow && selected) {
-    const p = people.get(selected); if (p) { const h = p.head().add(new THREE.Vector3(0, -0.6, 0)); const delta = h.clone().sub(controls.target).multiplyScalar(Math.min(1, dt * 3)); controls.target.add(delta); camera.position.add(delta); }
+  cutWalls();
+  if (pov || flyHome) flyCamera(dt);
+  else {
+    if (tween) {
+      camera.position.lerp(tween.pos, Math.min(1, dt * 4)); controls.target.lerp(tween.target, Math.min(1, dt * 4));
+      if (camera.position.distanceTo(tween.pos) < 0.05) tween = null;
+    } else if (follow && selected) {
+      const p = people.get(selected); if (p) { const h = p.head().add(new THREE.Vector3(0, -0.6, 0)); const delta = h.clone().sub(controls.target).multiplyScalar(Math.min(1, dt * 3)); controls.target.add(delta); camera.position.add(delta); }
+    }
+    controls.update();
   }
-  controls.update();
   uiAcc += dt;
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
 }
 
-if (FORCE) window.__officeStep = t => frame(t);                 // tests: step the loop by hand in a hidden tab
+// the dollhouse view: an outer wall drops to its stub when the camera is outside it; in first person (camera below
+// the ceiling) every wall stands and the ceiling shows
+const _cw = new THREE.Vector3();
+function cutWalls() {
+  const inside = pov && camera.position.y < 2.9;
+  for (const w of cutaway) { const show = inside || _cw.copy(camera.position).sub(w.mid).dot(w.out) < 0; w.full.visible = show; w.stub.visible = !show; }
+  ceiling.visible = inside;
+}
+
+// first person: the camera sits in front of the figure's face and looks where the figure faces (plus where the mouse
+// turned the head); it flies there first, then stays locked to the eyes. The figure's own head hides once inside it.
+function flyCamera(dt) {
+  let pos = HOME.pos, look = HOME.target, fov = 30;
+  if (pov && boss) {
+    boss.root.updateMatrixWorld(true);
+    pos = boss.parts.head.localToWorld(_eye.set(0, 0.26, 0.32));
+    const yaw = boss.rot + me.yaw, c = Math.cos(me.pitch);
+    look = _look.set(Math.sin(yaw) * c, Math.sin(me.pitch), Math.cos(yaw) * c).add(pos);
+    fov = 68;
+    if (watching) { look = _look.copy(watching.mesh.position); fov = 38; }
+  }
+  const k = povLocked ? 1 : Math.min(1, dt * 3), kl = povLocked ? Math.min(1, dt * 7) : k;
+  camera.position.lerp(pos, k); povLook.lerp(look, kl); camera.lookAt(povLook);
+  camera.fov = lerp(camera.fov, fov, kl); camera.updateProjectionMatrix();
+  if (pov && boss && camera.position.distanceTo(pos) < 0.03) povLocked = true;
+  if (boss) boss.parts.head.visible = !pov || camera.position.distanceTo(pos) > 0.8;
+  if (!pov && camera.position.distanceTo(HOME.pos) < 0.05) {
+    flyHome = false; camera.fov = 30; camera.updateProjectionMatrix(); controls.target.copy(HOME.target); controls.enabled = true;
+  }
+}
+
+if (FORCE) window.__officeStep = t => frame(t ?? performance.now());                 // tests: step the loop by hand in a hidden tab
 
 // ------------------------------------------------------------------ start
 ui.setLang(DATA.config.lang);
+if (visit) ui.visitBanner(ui.t().visiting(visit.host), () => { location.search = ''; });
 window.addEventListener('chatroom:data', () => ui.setLang(DATA.config.lang));
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();

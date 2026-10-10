@@ -98,39 +98,56 @@ export function person({name = '?', shirt = '#3a7bd5', kind = 'agent', scale = 1
   const headphones = kind === 'agent' && r() < 0.3, glasses = kind === 'lead' || (kind === 'agent' && r() < 0.18);
   const shoe = '#2a2420';
 
-  const leg = new Vox().box(0, 1, 0, 1, 3, 1, pants).box(0, 0, 0, 1, 0, 1, shoe).box(0, 0, 2, 1, 0, 2, shoe);
-  const arm = new Vox().box(0, 1, 0, 1, 4, 1, kind === 'boss' ? '#262a3a' : shirt).box(0, 0, 0, 1, 0, 1, skin);
-  const torso = new Vox().box(0, 0, 0, 5, 4, 2, kind === 'boss' ? '#262a3a' : shirt).box(0, 0, 0, 5, 0, 2, darker(pants, 0.8));
-  if (kind === 'boss') torso.box(2, 1, 2, 3, 4, 2, '#f2f2f2').box(2, 1, 3, 2, 3, 3, '#c62828').set(3, 4, 3, '#c62828');
-  else if (kind === 'lead') torso.box(2, 2, 2, 3, 4, 2, '#f5f5f5').set(1, 3, 3, '#f5c542');          // shirt under the cardigan, a pen
-  else torso.box(2, 4, 2, 3, 4, 2, darker(shirt, 0.75)).set(4, 3, 3, '#ffffff');                     // collar and badge
+  // drawn at 5 cm voxels (twice the furniture's detail); every part keeps the size and pivot it had at 10 cm
+  const top = kind === 'boss' ? '#262a3a' : shirt, cuff = kind === 'boss' ? '#f2f2f2' : darker(top, 0.8);
+  const leg = new Vox().box(0, 2, 0, 3, 7, 3, pants).box(1, 3, 3, 2, 7, 3, darker(pants, 0.88))          // trousers, crease
+    .box(0, 0, 0, 3, 0, 4, '#d8d2c8').box(0, 1, 0, 3, 1, 4, shoe).box(0, 2, 3, 3, 2, 4, shoe);          // sole, shoe, toe
+  const arm = new Vox().box(0, 3, 0, 3, 9, 3, top).box(0, 2, 0, 3, 2, 3, cuff).box(0, 0, 0, 3, 1, 3, skin);
+  const torso = new Vox().box(0, 0, 0, 11, 9, 5, top).box(0, 0, 0, 11, 1, 5, darker(pants, 0.8)).box(5, 0, 6, 6, 1, 6, '#c9a227');  // belt, buckle
+  if (kind === 'boss') {                                                         // suit: white shirt, lapels, red tie
+    torso.box(4, 5, 5, 7, 9, 5, '#f2f2f2').box(5, 2, 5, 6, 4, 5, '#f2f2f2').box(3, 4, 6, 4, 9, 6, darker(top, 0.8)).box(7, 4, 6, 8, 9, 6, darker(top, 0.8));
+    torso.box(5, 3, 6, 6, 8, 6, '#c62828').box(5, 9, 6, 6, 9, 6, '#a01f1f').set(8, 7, 6, '#f2f2f2');
+  } else if (kind === 'lead') {                                                  // cardigan open on a shirt, buttons, a pen
+    torso.box(5, 2, 5, 6, 9, 5, '#f5f5f5').box(4, 9, 6, 7, 9, 6, '#f5f5f5');
+    for (const y of [3, 5, 7]) torso.set(4, y, 6, '#d7ccc8');
+    torso.box(2, 6, 6, 2, 8, 6, '#f5c542');
+  } else if (r() < 0.5) {                                                        // hoodie: pocket and strings
+    torso.box(3, 2, 6, 8, 4, 6, darker(top, 0.85)).box(4, 6, 6, 4, 8, 6, '#ffffff').box(7, 6, 6, 7, 8, 6, '#ffffff').box(2, 9, 0, 9, 9, 6, darker(top, 0.9));
+  } else {                                                                       // polo: collar, buttons, badge
+    torso.box(3, 9, 5, 8, 9, 6, darker(top, 0.75)).set(5, 8, 6, '#ffffff').set(5, 6, 6, '#ffffff').box(8, 5, 6, 9, 6, 6, '#ffffff');
+  }
 
-  const head = new Vox().box(0, 0, 0, 6, 5, 5, skin);
-  head.set(2, 2, 5, '#1b1b2a').set(4, 2, 5, '#1b1b2a').set(3, 1, 5, '#a8584f');
-  head.set(1, 1, 5, '#f0a3a0').set(5, 1, 5, '#f0a3a0');
+  const head = new Vox().box(0, 0, 0, 13, 11, 11, skin);
+  head.box(3, 4, 11, 4, 5, 11, '#ffffff').box(4, 4, 11, 4, 5, 11, '#1b1b2a').box(9, 4, 11, 10, 5, 11, '#ffffff').box(9, 4, 11, 9, 5, 11, '#1b1b2a');
+  head.box(3, 7, 11, 4, 7, 11, darker(hair, 0.9)).box(9, 7, 11, 10, 7, 11, darker(hair, 0.9));             // eyebrows
+  head.box(6, 3, 12, 7, 4, 12, darker(skin, 0.9));                                                          // nose
+  head.box(6, 1, 11, 7, 1, 11, '#a8584f').set(5, 2, 11, '#a8584f').set(8, 2, 11, '#a8584f');               // smile
+  head.set(2, 2, 11, '#f0a3a0').set(11, 2, 11, '#f0a3a0');
+  head.box(-1, 4, 5, -1, 6, 6, darker(skin, 0.94)).box(14, 4, 5, 14, 6, 6, darker(skin, 0.94));              // ears
   const H = (x0, y0, z0, x1, y1, z1) => head.box(x0, y0, z0, x1, y1, z1, hair);
   if (style !== 'bald' && style !== 'cap' && style !== 'beanie') {
-    H(0, 5, 0, 6, 5, 5); H(0, 2, 0, 6, 5, 1); H(0, 3, 0, 0, 5, 4); H(6, 3, 0, 6, 5, 4); H(0, 4, 5, 1, 4, 5); H(5, 4, 5, 6, 4, 5);
+    H(0, 10, 0, 13, 11, 11); H(0, 4, 0, 13, 11, 2); H(0, 6, 0, 1, 11, 9); H(12, 6, 0, 13, 11, 9);
+    H(0, 8, 10, 3, 9, 11); H(10, 8, 10, 13, 9, 11); H(4, 9, 11, 6, 9, 11);                                // fringe
   }
-  if (style === 'spiky') { H(1, 6, 2, 1, 6, 2); H(3, 6, 1, 3, 7, 1); H(5, 6, 3, 5, 6, 3); H(2, 6, 4, 2, 6, 4); H(4, 6, 4, 4, 6, 4); H(3, 6, 2, 3, 6, 3); }
-  if (style === 'bob') { H(0, 1, 0, 0, 5, 3); H(6, 1, 0, 6, 5, 3); H(0, 0, 0, 6, 1, 0); }
-  if (style === 'bun') { H(2, 6, 1, 4, 7, 3); H(3, 8, 2, 3, 8, 2); }
-  if (style === 'long') { H(0, 0, 0, 6, 1, 1); H(0, 1, 0, 0, 2, 3); H(6, 1, 0, 6, 2, 3); }
-  if (style === 'cap') { head.box(0, 5, 0, 6, 6, 5, shirt).box(1, 5, 6, 5, 5, 7, darker(shirt, 0.7)); H(0, 2, 0, 6, 4, 0); }
-  if (style === 'beanie') { head.box(0, 4, 0, 6, 6, 5, darker(shirt, 0.85)).set(3, 7, 3, '#ffffff'); head.box(0, 4, 5, 6, 4, 5, '#eeeeee'); }
-  if (style === 'bald') { head.box(1, 0, 5, 5, 0, 5, hair).set(1, 1, 5, hair).set(5, 1, 5, hair).set(3, 0, 6, hair); }
-  if (headphones) { head.box(0, 6, 3, 6, 6, 3, '#222222').box(-1, 2, 2, -1, 3, 3, shirt).box(7, 2, 2, 7, 3, 3, shirt); }
-  if (glasses) { head.box(1, 2, 6, 2, 2, 6, '#9fd3ff').box(4, 2, 6, 5, 2, 6, '#9fd3ff').box(1, 3, 6, 5, 3, 6, '#20202a'); }
+  if (style === 'spiky') for (const [x, z, h] of [[2, 4, 13], [5, 2, 14], [7, 6, 13], [10, 3, 14], [4, 8, 13], [9, 9, 13], [6, 4, 15]]) H(x, 12, z, x + 1, h, z + 1);
+  if (style === 'bob') { H(0, 2, 0, 1, 11, 7); H(12, 2, 0, 13, 11, 7); H(0, 1, 0, 13, 3, 1); }
+  if (style === 'bun') { H(4, 12, 3, 9, 14, 8); H(6, 15, 5, 7, 16, 6); }
+  if (style === 'long') { H(0, 0, 0, 13, 3, 3); H(0, 2, 0, 1, 5, 7); H(12, 2, 0, 13, 5, 7); }
+  if (style === 'cap') { head.box(0, 10, 0, 13, 13, 11, shirt).box(2, 10, 12, 11, 10, 15, darker(shirt, 0.7)).box(6, 14, 5, 7, 14, 6, darker(shirt, 0.7)); H(0, 4, 0, 13, 9, 1); }
+  if (style === 'beanie') { head.box(0, 8, 0, 13, 13, 11, darker(shirt, 0.85)).box(0, 8, 0, 13, 9, 12, '#eeeeee').box(6, 14, 5, 7, 15, 6, '#ffffff'); }
+  if (style === 'bald') { H(0, 4, 1, 1, 7, 8); H(12, 4, 1, 13, 7, 8); H(0, 4, 0, 13, 7, 1); H(2, 0, 11, 11, 0, 12); H(5, 2, 12, 8, 2, 12); }  // fringe of hair, beard
+  if (headphones) { head.box(0, 12, 5, 13, 12, 6, '#222222').box(-2, 3, 4, -1, 7, 7, shirt).box(14, 3, 4, 15, 7, 7, shirt); }
+  if (glasses) { head.box(2, 4, 12, 5, 5, 12, '#9fd3ff').box(8, 4, 12, 11, 5, 12, '#9fd3ff').box(2, 6, 12, 11, 6, 12, '#20202a').box(6, 5, 12, 7, 5, 12, '#20202a'); }
 
   const root = new THREE.Group(), body = new THREE.Group();
   root.add(body); body.scale.setScalar(scale);
-  const part = (vox, pivot, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); g.add(mesh(vox, {pivot})); body.add(g); return g; };
+  const part = (vox, pivot, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); g.add(mesh(vox, {pivot, scale: 0.05, jitter: 0.04})); body.add(g); return g; };
   const parts = {
-    legL: part(leg, [1, 4, 1], -0.1, 0.4, 0), legR: part(leg, [1, 4, 1], 0.1, 0.4, 0),
-    torso: part(torso, [3, 0, 1.5], 0, 0.4, 0),
-    head: part(head, [3.5, 0, 3], 0, 0.9, 0),
+    legL: part(leg, [2, 8, 2], -0.1, 0.4, 0), legR: part(leg, [2, 8, 2], 0.1, 0.4, 0),
+    torso: part(torso, [6, 0, 3], 0, 0.4, 0),
+    head: part(head, [7, 0, 6], 0, 0.9, 0),
   };
-  parts.armL = part(arm, [1, 5, 1], -0.4, 0.88, 0); parts.armR = part(arm, [1, 5, 1], 0.4, 0.88, 0);
+  parts.armL = part(arm, [2, 10, 2], -0.4, 0.88, 0); parts.armR = part(arm, [2, 10, 2], 0.4, 0.88, 0);
   parts.torso.add(parts.head); parts.head.position.set(0, 0.5, 0);           // the head follows the torso
   parts.torso.add(parts.armL); parts.armL.position.set(-0.4, 0.48, 0);
   parts.torso.add(parts.armR); parts.armR.position.set(0.4, 0.48, 0);
@@ -297,13 +314,34 @@ export function deskLamp() {
 /** aluminium posts and rails of a glass wall, len in metres along x; the glass is a separate pane */
 export function glassFrame(len, door = null) {
   const v = new Vox(), n = Math.round(len * 10), al = '#a7b0ba';
+  const doors = !door ? [] : Array.isArray(door[0]) ? door : [door];            // one [from, to] or a list, in metres
   v.box(0, 25, 0, n - 1, 25, 0, al).box(0, 0, 0, n - 1, 0, 0, al);
   for (let x = 0; x < n; x += 10) v.box(x, 0, 0, x, 25, 0, al);
   v.box(n - 1, 0, 0, n - 1, 25, 0, al);
-  if (door) for (let x = Math.round(door[0] * 10); x <= Math.round(door[1] * 10); x++) v.del(x, 0, 0);
+  for (const [a, b] of doors) {
+    for (let x = Math.round(a * 10); x <= Math.round(b * 10); x++) v.del(x, 0, 0);
+    v.box(Math.round(a * 10) - 1, 0, 0, Math.round(a * 10) - 1, 25, 0, al).box(Math.round(b * 10) + 1, 0, 0, Math.round(b * 10) + 1, 25, 0, al);
+  }
   return mesh(v, {pivot: [0, 0, 0.5]});
 }
-export const GLASS = new THREE.MeshStandardMaterial({color: '#cfe8f5', transparent: true, opacity: 0.16, roughness: 0.05, metalness: 0.2, depthWrite: false, side: THREE.DoubleSide});
+export const GLASS = new THREE.MeshStandardMaterial({color: '#b9dcec', transparent: true, opacity: 0.26, roughness: 0.05, metalness: 0.3, depthWrite: false, side: THREE.DoubleSide});
+export const FROST = new THREE.MeshBasicMaterial({color: '#ffffff', transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide});
+export const WINDOW = new THREE.MeshStandardMaterial({color: '#a9c9dc', transparent: true, opacity: 0.14, roughness: 0.05, metalness: 0.4, depthWrite: false, side: THREE.DoubleSide});
+/** a glass door leaf w metres wide: aluminium frame, glass with a frosted band, a long handle; hinge at x = 0, along +x */
+export function glassDoor(w = 1) {
+  const g = new THREE.Group(), n = Math.round(w * 10), al = '#6f7b88';
+  g.add(mesh(new Vox().box(0, 0, 0, n - 1, 0, 0, al).box(0, 20, 0, n - 1, 20, 0, al).box(0, 0, 0, 0, 20, 0, al).box(n - 1, 0, 0, n - 1, 20, 0, al)
+    .box(n - 3, 7, -1, n - 3, 13, -1, '#d6dce2').box(n - 3, 7, 1, n - 3, 13, 1, '#d6dce2'), {pivot: [0, 0, 0.5]}));
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.2, 1.9), GLASS); p.position.set(w / 2, 1.05, 0); p.renderOrder = 2; g.add(p);
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.2, 0.12), FROST); f.position.set(w / 2, 1.1, 0.002); f.renderOrder = 3; g.add(f);
+  return g;
+}
+/** a wooden door leaf: panel, a small window, a brass handle; hinge at x = 0, along +x */
+export function woodDoor(w = 1) {
+  const n = Math.round(w * 10);
+  return mesh(new Vox().box(0, 0, 0, n - 1, 21, 0, '#8d6e63').box(2, 13, 0, n - 3, 18, 0, '#cfe8f5').box(1, 2, 1, n - 2, 2, 1, '#795548')
+    .box(n - 2, 9, 1, n - 2, 10, 1, '#d4a640').box(n - 2, 9, -1, n - 2, 10, -1, '#d4a640'), {pivot: [0, 0, 0.5]});
+}
 export function glassPane(len, h = 2.5) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(len, h), GLASS); m.renderOrder = 2;
   return m;
@@ -365,14 +403,195 @@ export function zoneFloor(w, d, fn) {
   m.castShadow = false;
   return m;
 }
-/** a wall like wall(), but its windows have venetian blinds: slats every other row */
-export function blindWall(length, height, holes = [], color = '#ece8e1') {
+/** a wall like wall(), but its windows have venetian blinds: slats every other row; doors are 2.25 m openings */
+export function blindWall(length, height, holes = [], color = '#ece8e1', doors = []) {
   const v = new Vox();
   for (let x = 0; x < length; x++) for (let y = 0; y < height; y++) {
+    if (doors.some(([a, b]) => x >= a && x <= b && y <= 8)) continue;
+    const door = doors.some(([a, b]) => ((x === a - 1 || x === b + 1) && y <= 9) || (x >= a - 1 && x <= b + 1 && y === 9));
     const inHole = holes.some(([a, b]) => x >= a && x <= b && y >= 3 && y <= 9);
     const frame = holes.some(([a, b]) => (x === a - 1 || x === b + 1) && y >= 3 && y <= 9) || holes.some(([a, b]) => x >= a - 1 && x <= b + 1 && (y === 2 || y === 10));
     if (inHole) { if (y % 2 === 0) v.set(x, y, 1, '#e3e6e8'); continue; }
-    v.set(x, y, 0, y === 0 ? '#5f6670' : frame ? '#f7f7f5' : y === 11 ? darker(color, 0.9) : color);
+    v.set(x, y, 0, door ? '#8d6e63' : y === 0 ? '#5f6670' : frame ? '#f7f7f5' : y === height - 1 ? darker(color, 0.9) : color);
   }
   return mesh(v, {pivot: [0, 0, 0.5], scale: 0.25, jitter: 0.03});
+}
+
+// ------------------------------------------------------------------ models from the office pack (CC BY 4.0)
+// vendor/office-pack.json: MagicaVoxel models by MariaIsMe (see vendor/office-pack-CREDITS.md), one tile = 16 voxels.
+let PACK = {};
+export async function loadPack(url = 'vendor/office-pack.json') {
+  try { const r = await fetch(url); if (r.ok) PACK = await r.json(); } catch (e) {}
+  return PACK;
+}
+const packCache = new Map();
+/** the voxels of a pack model turned to this office's axes: MagicaVoxel's z is up and its models face -y, so x stays,
+ *  z becomes the height and -y becomes +z (models face +z here, like ours); bounds in voxels */
+function packVoxels(name) {
+  if (packCache.has(name)) return packCache.get(name);
+  const m = PACK[name];
+  if (!m) return null;
+  const raw = atob(m.v), list = [];
+  const b = {x0: Infinity, x1: -Infinity, y1: 0, z0: Infinity, z1: -Infinity};
+  for (let i = 0; i < raw.length; i += 4) {
+    const x = raw.charCodeAt(i), y = raw.charCodeAt(i + 1), z = raw.charCodeAt(i + 2), c = raw.charCodeAt(i + 3);
+    list.push([x, z, -y, c]);
+    b.x0 = Math.min(b.x0, x); b.x1 = Math.max(b.x1, x); b.y1 = Math.max(b.y1, z); b.z0 = Math.min(b.z0, -y); b.z1 = Math.max(b.z1, -y);
+  }
+  const out = {list, b, pal: m.p};
+  packCache.set(name, out);
+  return out;
+}
+export const packNames = () => Object.keys(PACK);
+/** size in metres [width, height, depth] of a pack model at a scale */
+export function packSize(name, scale = 0.065) {
+  const p = packVoxels(name);
+  return p ? [(p.b.x1 - p.b.x0 + 1) * scale, (p.b.y1 + 1) * scale, (p.b.z1 - p.b.z0 + 1) * scale] : null;
+}
+/** a recolouring: map swaps exact colours; hue/sat/light move every coloured (not grey) voxel, for variants */
+export function recolor(hex, {map = null, hue, sat = 1, light = 1} = {}) {
+  if (map && map[hex]) return map[hex];
+  if (hue === undefined && sat === 1 && light === 1) return hex;
+  const c = new THREE.Color(hex), h = {}; c.getHSL(h);
+  if (h.s < 0.12) return hex;                                    // greys, black and white stay
+  c.setHSL(hue ?? h.h, Math.min(1, h.s * sat), Math.min(1, h.l * light));
+  return '#' + c.getHexString();
+}
+/** a pack model as a mesh, centred on its footprint and standing on y = 0; sy squashes it vertically */
+export function packModel(name, {scale = 0.065, sy = 1, tint = null} = {}) {
+  const p = packVoxels(name);
+  if (!p) return new THREE.Group();
+  const pal = p.pal.map(c => recolor(c, tint || {})), v = new Vox();
+  for (const [x, y, z, c] of p.list) v.set(x, y, z, pal[c]);
+  const m = mesh(v, {pivot: [(p.b.x0 + p.b.x1 + 1) / 2, 0, (p.b.z0 + p.b.z1 + 1) / 2], scale, jitter: 0.03});
+  if (sy !== 1) m.scale.y = sy;
+  return m;
+}
+
+// ------------------------------------------------------------------ the bigger office: games, water, ceiling
+/** table football: wooden body, green field, six rods with red and blue players, handles out both sides */
+export function foosball() {
+  const v = new Vox(), wood = '#6d4c41';
+  v.box(0, 6, 0, 13, 8, 7, wood).box(1, 8, 1, 12, 8, 6, '#2e7d32').box(1, 8, 3, 12, 8, 4, (x) => x === 7 ? '#e8f5e9' : '#2e7d32');
+  for (const [x, z] of [[1, 1], [12, 1], [1, 6], [12, 6]]) v.box(x, 0, z, x, 5, z, '#3e2723');
+  for (let i = 0; i < 6; i++) {
+    const x = 2 + i * 2;
+    v.box(x, 9, -1, x, 9, 8, '#b0bec5').set(x, 9, -2, '#212121').set(x, 9, 9, '#212121');
+    for (const z of [2, 5]) v.set(x, 9, z, i % 2 ? '#1565c0' : '#c62828').set(x, 10, z, '#ffe0b2');
+  }
+  return mesh(v, {pivot: [7, 0, 4]});
+}
+export function waterCooler() {
+  return mesh(new Vox().box(0, 0, 0, 3, 9, 3, '#eceff1').box(0, 10, 0, 3, 15, 3, '#90caf9').box(1, 16, 1, 2, 16, 2, '#1e88e5')
+    .box(1, 7, 4, 2, 7, 4, '#607d8b'), {pivot: [2, 0, 2]});
+}
+export function armchair(color = '#7b5e57') {
+  const v = new Vox();
+  v.box(0, 0, 0, 7, 3, 7, darker(color, 0.8)).box(0, 4, 0, 7, 9, 1, color).box(0, 4, 0, 0, 6, 7, color).box(7, 4, 0, 7, 6, 7, color);
+  v.box(1, 4, 2, 6, 4, 7, darker(color, 1.15));
+  return mesh(v, {pivot: [4, 0, 4]});
+}
+// ------------------------------------------------------------------ fine pieces at 5 cm (what the pack lacks)
+const fine = (v, pivot) => mesh(v, {pivot, scale: 0.05, jitter: 0.04});
+const disc = (v, y, r, c) => { for (let x = -r; x < r; x++) for (let z = -r; z < r; z++) if ((x + 0.5) ** 2 + (z + 0.5) ** 2 <= r * r) v.set(x, y, z, typeof c === 'function' ? c(x, z) : c); return v; };
+/** round café table: 80 cm top on a single post */
+export function cafeTable(top = '#d7b98c') {
+  const v = new Vox();
+  disc(v, 14, 8, (x, z) => (x + 0.5) ** 2 + (z + 0.5) ** 2 > 52 ? darker(top, 0.85) : top);
+  v.box(-1, 2, -1, 0, 13, 0, '#3b3f46'); disc(v, 0, 5, '#2f3338'); disc(v, 1, 3, '#3b3f46');
+  return fine(v, [0, 0, 0]);
+}
+/** café chair facing +z: coloured seat and slatted back, thin metal legs */
+export function cafeChair(color = '#c0392b') {
+  const v = new Vox(), metal = '#2f3338';
+  for (const [x, z] of [[0, 0], [7, 0], [0, 7], [7, 7]]) v.box(x, 0, z, x, 8, z, metal);
+  v.box(0, 9, 0, 7, 9, 7, color).box(0, 9, 7, 7, 9, 7, darker(color, 0.85));
+  v.box(0, 10, 0, 0, 18, 0, metal).box(7, 10, 0, 7, 18, 0, metal);
+  for (const y of [12, 15, 18]) v.box(0, y, 0, 7, y, 0, y === 18 ? color : darker(color, 0.9));
+  return fine(v, [4, 0, 4]);
+}
+/** bar counter along x, len in 5 cm voxels: wooden front with grooves, stone top, foot rail */
+export function barCounter(len = 60, wood = '#8d5a3b') {
+  const v = new Vox();
+  v.box(0, 0, 2, len - 1, 19, 11, (x, y) => x % 6 === 0 ? darker(wood, 0.85) : wood);
+  v.box(-1, 20, 0, len, 21, 12, (x) => x % 9 === 0 ? '#4a4f56' : '#3a3f45');
+  v.box(0, 3, 0, len - 1, 3, 0, '#b0bec5');
+  for (let x = 4; x < len; x += 16) v.box(x, 0, 0, x, 2, 0, '#b0bec5');
+  return fine(v, [len / 2, 0, 6]);
+}
+/** drinks vending machine: lit window with rows of cans, keypad, slot */
+export function vendingMachine() {
+  const v = new Vox(), cans = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#fb8c00', '#8e24aa'];
+  v.box(0, 0, 0, 17, 37, 15, '#c62828').box(1, 6, 16, 11, 34, 16, '#11151c');
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 4; c++) v.box(2 + c * 2 + (c > 1 ? 1 : 0), 8 + r * 4, 16, 2 + c * 2 + (c > 1 ? 1 : 0), 10 + r * 4, 16, cans[(r + c) % cans.length]);
+  v.box(13, 20, 16, 16, 30, 16, '#212121').box(14, 22, 17, 15, 28, 17, '#9e9e9e').box(13, 3, 16, 16, 5, 16, '#212121').box(2, 36, 16, 15, 37, 16, '#fff3e0');
+  return fine(v, [9, 0, 8]);
+}
+/** a row of n lockers: coloured doors with vents, handles and number plates */
+export function lockers(n = 4, color = '#546e7a') {
+  const v = new Vox();
+  for (let i = 0; i < n; i++) {
+    const x0 = i * 8, door = i % 2 ? color : darker(color, 0.92);
+    v.box(x0, 0, 0, x0 + 7, 35, 9, darker(color, 0.75)).box(x0 + 1, 1, 10, x0 + 6, 34, 10, door);
+    for (const y of [29, 31, 33]) v.box(x0 + 2, y, 10, x0 + 5, y, 10, darker(color, 0.6));
+    v.box(x0 + 5, 17, 11, x0 + 5, 19, 11, '#cfd8dc').set(x0 + 2, 25, 11, '#fafafa').set(x0 + 3, 25, 11, '#fafafa');
+  }
+  return fine(v, [n * 4, 0, 5]);
+}
+/** table tennis: blue top with white lines, net, folding legs */
+export function pingPong() {
+  const v = new Vox(), top = '#1565c0';
+  v.box(0, 7, 0, 26, 7, 14, (x, y, z) => x === 0 || x === 26 || z === 0 || z === 14 || z === 7 ? '#fafafa' : top);
+  v.box(13, 8, -1, 13, 9, 15, '#eceff1');
+  for (const [x, z] of [[2, 2], [24, 2], [2, 12], [24, 12]]) v.box(x, 0, z, x, 6, z, '#37474f');
+  return mesh(v, {pivot: [13.5, 0, 7.5]});
+}
+/** a bean bag: a soft lump with a dent to sit in */
+export function beanBag(color = '#ef6c00') {
+  const v = new Vox();
+  for (let y = 0; y < 10; y++) {
+    const r = y < 6 ? 8 - Math.max(0, 3 - y) : 8 - (y - 5) * 1.4;
+    disc(v, y, Math.max(2, Math.round(r)), (x, z) => (x + z + y) % 7 === 0 ? darker(color, 0.9) : color);
+  }
+  for (const [k, [x, y, z]] of v.m) if (y >= 6 && x * x + (z - 2) ** 2 < 14) v.m.delete(k);   // the dent
+  return fine(v, [0, 0, 0]);
+}
+/** reception desk: high front with a light band, low working top behind, a monitor */
+export function receptionDesk(color = '#eceff1') {
+  const v = new Vox();
+  v.box(0, 0, 0, 47, 21, 3, color).box(0, 12, 4, 47, 13, 4, '#ffd54f').box(-1, 22, -1, 48, 22, 5, '#5d4037');
+  v.box(0, 0, 4, 47, 14, 15, darker(color, 0.92)).box(0, 15, 4, 47, 15, 15, '#d7ccc8');
+  v.box(30, 16, 10, 31, 19, 11, '#2b2f38').box(26, 20, 9, 35, 26, 9, '#1f2328').box(27, 21, 8, 34, 25, 8, '#7fd3ff');
+  return fine(v, [24, 0, 8]);
+}
+/** bookcase of binders and boxes, like a real office shelf */
+export function binderShelf(seed = 5, wood = '#d7893a') {
+  const r = rnd(seed), v = new Vox();
+  v.box(0, 0, 0, 21, 41, 0, darker(wood, 0.8)).box(0, 0, 0, 0, 41, 9, wood).box(21, 0, 0, 21, 41, 9, wood);
+  for (const y of [0, 10, 20, 30, 41]) v.box(0, y, 0, 21, y, 9, wood);
+  const binders = ['#1a237e', '#283593', '#c62828', '#2e7d32', '#6a1b9a', '#f9a825', '#37474f'];
+  for (const y0 of [1, 11, 21, 31]) {
+    if (r() < 0.3) { v.box(2, y0, 2, 9, y0 + 6, 8, '#6d4c41').box(4, y0 + 3, 9, 7, y0 + 4, 9, '#3e2723'); v.box(11, y0, 2, 19, y0 + 7, 8, '#795548'); continue; }
+    const col = binders[Math.floor(r() * binders.length)];
+    for (let x = 1; x < 21; x += 2) if (r() < 0.9) {
+      const h = 6 + Math.floor(r() * 3), c = r() < 0.75 ? col : binders[Math.floor(r() * binders.length)];
+      v.box(x, y0, 2, x + 1, y0 + h, 8, c).box(x, y0 + 2, 9, x + 1, y0 + 2, 9, '#fafafa').set(x, y0 + 4, 9, '#9e9e9e');
+    }
+  }
+  return fine(v, [11, 0, 5]);
+}
+/** a floor copier: paper drawers, output tray, control panel, lid */
+export function copier() {
+  const v = new Vox(), body = '#cfd3d6';
+  v.box(0, 0, 0, 17, 13, 13, '#9ea4a8').box(0, 14, 0, 17, 21, 13, body).box(0, 22, 0, 17, 23, 13, '#5f6670');
+  for (const y of [2, 6, 10]) v.box(1, y, 14, 16, y + 2, 14, '#b0b6ba').box(7, y + 1, 15, 10, y + 1, 15, '#607d8b');
+  v.box(-4, 16, 2, -1, 16, 11, '#eceff1').box(-4, 17, 3, -1, 17, 10, '#fafafa');
+  v.box(11, 22, 12, 16, 23, 15, '#263238').box(12, 23, 15, 14, 23, 15, '#69f0ae').set(15, 23, 15, '#ffeb3b');
+  for (const [x, z] of [[1, 1], [16, 1], [1, 12], [16, 12]]) v.set(x, -1, z, '#212121');
+  return fine(v, [9, -1, 7]);
+}
+
+/** a flat ceiling light panel, glowing; seen only from inside (first person) */
+export function ceilingLight() {
+  return mesh(new Vox().box(0, 0, 0, 11, 0, 5, '#fff6dc'), {pivot: [6, 1, 3], glow: 1.05}, true);
 }

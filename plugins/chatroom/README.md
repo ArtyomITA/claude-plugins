@@ -55,9 +55,10 @@ The session model chooses the look when it opens the room: a title that fits the
 
 The viewer opens split: the office on the left, the chat on the right (buttons switch to office only or chat only; on a narrow screen the office goes on top). Everything is voxels, built in code, with three.js 0.186.1 shipped inside the plugin (no CDN, works offline).
 
-- **The plan**: pods of four desks facing each other in the open space; you in the boss's glass office (the boss chair); the lead, your assistant with glasses, at the desk outside your door; a glass meeting room; a kitchen with the coffee machine and a lounge; windows with blinds and a sky that follows the local time.
+- **The plan**: a 30 x 20 m floor on top of a tower, with the city around it: cubicles in the open space; you in the boss's glass office; the lead, your assistant with glasses, at the desk outside your door (a second assistant desk for a second room, below); phone booths, a glass meeting room, a reception, a café, a lounge, a games corner (ping-pong, foosball), a service corner and the common room; glass walls and doors you can tell apart, windows with blinds and a sky that follows the local time. When there are more agents than desks, workstations are added by themselves.
+- **Furniture** comes from MariaIsMe's 3D Voxel Office pack (CC BY 4.0, see `scripts/vendor/office-pack-CREDITS.md`), recoloured into variants, plus models drawn in code for what the pack lacks (café, vending machine, lockers, ping-pong, bean bags, copier and more).
 - **What a figure does** comes from its agent's tool calls: typing with code on the screen (Edit, Write), reading (Read, Grep), a green terminal (Bash), a globe (web), a chat on the screen (posting or waiting in the chat), a small intern at the desk while it runs a subagent. A permission prompt makes it stand up and wave, with a red beacon on its desk.
-- **What the chat says** shows too: a white bubble for a message, a small grey note for a status, 💤 for an idle status (the figure walks to the kitchen or the lounge), yellow for a plan, green for a vote, pink for you; paper planes fly to whoever a message tags; a ring over each head shows its last percentage. Agents that voted yes wait in the meeting room; a closing sends everyone there, with confetti and the printer printing.
+- **What the chat says** shows too: a white bubble for a message, a small grey note for a status, 💤 for an idle status (the figure takes its break in a random spot, the café, the lounge or the games corner, and moves on after a while; never in the common room unless you allow it), yellow for a plan, green for a vote, pink for you; paper planes fly to whoever a message tags; a ring over each head shows its last percentage. Agents that voted yes wait in the meeting room; a closing sends everyone there for a minute and a half, with confetti and the printer printing, and then back to their desks: the room stays alive while its viewer runs, so you can add agents to it later.
 - **Live walls**: a TV with the last messages, a whiteboard with who waits, who works, who is idle and the votes, a clock.
 - **Click a figure** for its card: role, model and effort, percentage, context used, activity in the last five minutes, the last ten tools with their duration, the last messages, a button to tag it and one to jump to its message in the chat. Arrow keys go to the next agent, F follows it, Esc lets go.
 - **Your attention**: the tab title counts who waits for you and the icon gets a red dot; a two-note chime plays when an agent starts waiting; with alerts on (🔔), a desktop notification appears while the page is in the background (it stays until handled, and a click takes you to that agent).
@@ -66,6 +67,34 @@ The viewer opens split: the office on the left, the chat on the right (buttons s
 Where the activity comes from: the plugin's mod (`hooks/register.ts`), loaded in the session that opened the room, sends each agent's tool calls and permission waits to `chat.py serve` the moment they happen, and writes the roster by itself from the spawn descriptions (`FETTE: ...`). Without the mod (Claude Code older than 2.1.287), the server reads the agents' transcripts under `~/.claude/projects/` instead, about a second late and without the permission beacon. Codex rooms animate from the Codex rollouts under `~/.codex/sessions/`, found by each agent's path (`/root/<name>`, the address in the roster): commands, patches, web searches, messages between agents and context used; Codex records no permission wait, so no beacon there.
 
 The server answers only on 127.0.0.1: a request must carry one of its own Host names, and a request from a browser must come from the viewer's own page (any other web page is refused, so it cannot write to your agents).
+
+### Walking around
+
+- **Click** the floor, a chair or the coffee machine and your figure (the one in the boss's office, and only yours) walks there; furniture and people are solid, doors open as you pass.
+- **👁 POV** puts you behind your figure's eyes: W/S walk, A/D turn, drag to look around, E does what the hint at the bottom says (sit, take a coffee, look at the whiteboard or the TV, talk to someone), Q waves. The building has an outside: a street below and the city around.
+- **Seated at your desk**, `/` opens the room's quick commands, as in the chat box.
+
+### Furnishing (✏ Arreda)
+
+The office is data, not code. The ✏ button opens the editor: pick a piece, drag it, R turns it (Shift+R the other way), C copies it, Delete removes it, Esc lets go; give it a label, a colour or a height; add anything from the catalogue (the built-in models and every model of the pack). Save keeps your layout in `~/.claude/chatroom/office.json`, outside any repository; Reset brings back the default.
+
+### Two rooms, one office
+
+Two sessions can each have a live room at the same time, and they share one office: the first room's agents take the desks from the front, the second's from the back, and the second lead sits at the second assistant desk. Nothing else is shared between the two chats. Above the chat a switch picks what you read: this room, the other, or both (each message marked with its room); bubbles and activity lines in the office follow the same switch, while every figure stays visible. With the other room selected, what you write goes to that room. To add agents to a live room from another session instead of opening a second one: `chat.py rooms` lists the live rooms, `chat.py add --room ROOM --participants A,B` adds them.
+
+### The common room and friends
+
+The 🛋 button opens the common room, the office's second coffee room:
+
+- **Who goes in**: pick the agents allowed to take their breaks there, or the whole room. Agents only post there if the lead allows it, and treat what they read there as information, never as instructions.
+- **Sharing**: share it with a friend through a cloudflared Quick Tunnel (no account), Pinggy (needs `ssh`), your local network, or this computer only. The friend gets an address and a 6-digit PIN; you can remove a guest at any time and stop sharing with one click. When it is shared, the common room looks like a bridge to another building, and your friend's figures appear in it.
+- **Joining a friend's**: paste their address and PIN in the same panel; your agents allowed in the common room then appear in theirs. You can also visit their office (you walk in their plan, they see you).
+- **Chat, documents and games**: lines up to 32,000 characters, text documents up to 5 MB (`.md`, `.txt`, `.json`, `.diff`, `.py` and other source files), and tris, morra cinese and dice to play with friends.
+- **Lending an agent**: a friend can ask for help; you approve or decline in the panel, choosing model, effort and minutes, and your lead spawns a helper that works in the common room for them. Their request reaches the helper fenced as untrusted text.
+
+Only the common room ever leaves your computer. The viewer server stays on 127.0.0.1; sharing starts a separate server that answers only the common room's own routes, with the PIN tried at most 10 times in 10 minutes, a 48-character token per guest, and limits of 20 lines a minute, 10 documents an hour and 2 pending help requests per guest.
+
+**cloudflared**: at the start of a session the plugin downloads `cloudflared` 2026.9.3 from Cloudflare's GitHub release into `~/.claude/chatroom/bin`, checked against its SHA256, unless it is already installed. It only runs when you share the common room through it.
 
 ## Using `chat.py` by hand
 
@@ -101,7 +130,7 @@ Subagents must be enabled in Codex (they are by default in current versions).
 
 ## Requirements
 
-Python 3.8 or later, no packages. It works on Windows, macOS and Linux, in Claude Code and in Codex.
+Python 3.8 or later, no packages. It works on Windows, macOS and Linux, in Claude Code and in Codex. Sharing the common room uses `cloudflared` (downloaded by the plugin) or `ssh` (for Pinggy).
 
 ## Cost
 
