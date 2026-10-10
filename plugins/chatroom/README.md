@@ -49,6 +49,12 @@ In Codex the same four skills are there: ask for them in words ("open a chatroom
 
 A tag from the viewer wakes an agent that is waiting through `chat.py wait`. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` under Claude Code's Monitor tool, or checks `chat.py alerts` between its waits in Codex. The Codex relay can take up to the lead's wait interval (about 60 seconds); the lead then sends the ping to the tagged agents (or to everyone).
 
+### Talking to your assistant without other agents
+
+Ask your session to listen in your existing room as `LEAD`, without spawning agents, then write `@LEAD` from the office. The assistant reads with `chat.py wait --room ROOM --as LEAD --timeout 30` and answers with `chat.py post --room ROOM --as LEAD`, repeating while the test or conversation is active. Starting the viewer alone only displays and stores messages; it does not connect the assistant to them.
+
+In Codex the assistant must keep its turn active to listen. A tag cannot reopen a turn that has ended, and a background Python watcher cannot produce the model's replies. If listening has stopped, ask the assistant in the main conversation to resume it. No subagents, discussion or sharing tunnel are needed for this local test.
+
 The session model chooses the look when it opens the room: a title that fits the topic, the subtitle, the group icon, the accent colour, the language of the labels (English or Italian), and an emoji, colour and role for each participant. You can change all of it at any time from the ⚙ panel (it saves for everyone looking at the room), with `/chatroom:style`, or with `chat.py config`. Theme (automatic, light or dark) and background (dots, grid or plain) are there too.
 
 ## The 3D office

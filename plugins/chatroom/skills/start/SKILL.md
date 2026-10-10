@@ -1,6 +1,6 @@
 ---
 name: start
-description: Open a live group chat where several agents discuss a topic together, in parallel and without turns, in one shared room that everyone reads. Includes an instant alert when someone writes, a silence timer that forces short status updates with the percentage done, an idle state that only a tag wakes, a closing rule with plan versions and votes, and a WhatsApp-style live viewer where the user can write to everyone. Use when the user wants agents to debate, brainstorm, challenge each other or agree on a plan together, or asks for a "council", "group chat", "shared room" or "swarm that talks".
+description: Open a live chat and 3D office for the user's assistant alone or for several agents discussing a topic together. Includes message and tag listening, a live viewer, status updates and optional group discussions. Use when the user wants to talk to the assistant from the office, test office tags, or asks for a "council", "group chat", "shared room" or "swarm that talks". A viewer alone does not start message listening.
 argument-hint: "[topic] [roles or number of agents]"
 ---
 
@@ -15,6 +15,19 @@ The usual setup: the user runs a strong model as this session (for example Opus)
 It works the same in Claude Code and in Codex: where they differ, the steps say so. Everything runs through one script, chat.py (Python 3 standard library only). Below, ROOM stands for the room directory and CHAT is `${CLAUDE_PLUGIN_ROOT}/scripts/chat.py`. In Codex, which leaves that variable unfilled, CHAT is the absolute path of this SKILL.md with `skills/start/SKILL.md` replaced by `scripts/chat.py`. In PowerShell, pipe the text to `post` with `$OutputEncoding = [System.Text.UTF8Encoding]::new($false); @'` ... `'@ | python "CHAT" post ...` instead of the heredoc.
 
 ## 1. Decide the setup
+
+### Assistant only, including an existing viewer
+
+If the user wants to talk to you from the office or test `@LEAD`, use the current assistant as LEAD. Do not spawn agents, start a debate, choose extra roles or download sharing tools for this local test. Reuse their room and running viewer; do not reinitialize it or erase messages.
+
+1. Read `python "CHAT" read --room "ROOM" --as LEAD` and answer any pending user message with `post --room "ROOM" --as LEAD` (text on stdin). Respond in the room, not only in the main conversation.
+2. Explain that you are listening now and ask the user to send a fresh `@LEAD` from the office.
+3. Keep this turn active: repeatedly run `python "CHAT" wait --room "ROOM" --as LEAD --timeout 30`, read its output, and answer user messages in the room. A timeout with no new message is not the end of the test. If you need to wait without work, first read pending messages and post one `--idle` status with a percentage, then continue waiting. Do not use `wait_agent` when there are no subagents.
+4. Stop listening when the user asks to stop or agrees the test is complete. Tell them explicitly when listening stops. Do not claim that a detached Python watcher can answer with this model.
+
+In Codex, a tag does not reopen an ended assistant turn. The viewer stores messages; `wait` brings them into the current turn. Running only `serve`, or ending this turn after saying "ready", leaves nobody to read and answer. A fresh main-conversation request can restart this listening loop. Do not promise permanent automatic replies or launch another Codex session as a workaround.
+
+For an assistant-only room no subagent roster is needed. Never send a collaboration ping to `/root`: that tool addresses subagents, not the current lead. Skip the group setup and spawning steps below, and use only the room/viewer steps if they are still needed.
 
 From the request and the conversation, decide:
 
