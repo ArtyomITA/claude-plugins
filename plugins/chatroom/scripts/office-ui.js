@@ -146,7 +146,7 @@ export const L = {
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
        quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first',
        run: 'Run', lendFull: 'Full help: a lent agent works for real in its own folder (commands, a venv, tests)',
-       lendSafe: 'Cautious help: a lent agent only talks and writes drafts', lendSwitch: 'change',
+       lendSafe: 'Cautious help: a lent agent only talks and writes drafts', lendSwitch: 'change', roomChatOn: 'Friends read the room chat and write to everyone in it', roomChatOff: 'The room chat stays yours (friends only see the common room)',
        chosenWait: 'chosen: waiting for the other', pick: {sasso: 'rock', carta: 'paper', forbici: 'scissors'}, oldServer: 'This viewer server started before the update: restart it (and your friend restarts theirs) to see each other move.', friendDoor: 'Your friend opens this door when you are their guest',
        helpTitle: 'Ask for help', askPlaceholder: 'What do you need? (some research, a plan, a change to your files)', askGo: 'Ask',
        visit: h => `Visit ${h}'s office`, requestsTitle: 'Help requests', lend: 'Lend an agent', decline: 'Decline',
@@ -180,7 +180,7 @@ export const L = {
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
        quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita',
        run: 'Corri', lendFull: "Aiuto completo: l'agente prestato lavora davvero nella sua cartella (comandi, venv, test)",
-       lendSafe: "Aiuto prudente: l'agente prestato parla e scrive solo bozze", lendSwitch: 'cambia',
+       lendSafe: "Aiuto prudente: l'agente prestato parla e scrive solo bozze", lendSwitch: 'cambia', roomChatOn: 'Gli amici leggono la chat della stanza e scrivono a tutti', roomChatOff: 'La chat della stanza resta tua (gli amici vedono solo la sala comune)',
        chosenWait: 'scelto: aspetta l\'altro', pick: {sasso: 'sasso', carta: 'carta', forbici: 'forbici'}, oldServer: 'Il server del viewer e\' partito prima dell\'aggiornamento: riavvialo (e il tuo amico il suo) per vedervi muovere.', friendDoor: 'Questa porta si apre quando sei tu l\'ospite del tuo amico',
        helpTitle: 'Chiedi aiuto', askPlaceholder: 'Cosa ti serve? (una ricerca, un piano, una modifica ai tuoi file)', askGo: 'Chiedi',
        visit: h => `Visita l'ufficio di ${h}`, requestsTitle: 'Richieste di aiuto', lend: 'Presta un agente', decline: 'Rifiuta',
@@ -385,6 +385,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         else if (b.dataset.s === 'decline') onShare('decline', {id: +b.closest('.o-req').dataset.id});
         else if (b.dataset.s === 'start') onShare('start', {via: cp.querySelector('[data-s="via"]').value});
         else if (b.dataset.s === 'lendmode') onShare('lend_mode', {mode: b.dataset.mode});
+        else if (b.dataset.s === 'friendschat') onShare('friends_chat', {on: !!b.dataset.on});
         else if (b.dataset.s) onShare(b.dataset.s, {name: b.dataset.name});
         else if (b.dataset.copy) navigator.clipboard?.writeText(b.dataset.copy);
         else if (b.dataset.g) {                                                    // a new game, or a roll of the dice
@@ -439,6 +440,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       }
       if (!(br && br.joined)) {
         const full = s.lend_mode !== 'safe';
+        if (sh.sharing) html += `<div class="o-meta">💬 ${esc(s.friends_chat ? L.roomChatOn : L.roomChatOff)} <button data-s="friendschat" data-on="${s.friends_chat ? '' : '1'}">${esc(L.lendSwitch)}</button></div>`;
         html += `<div class="o-meta">🤝 ${esc(full ? L.lendFull : L.lendSafe)} <button data-s="lendmode" data-mode="${full ? 'safe' : 'full'}">${esc(L.lendSwitch)}</button></div>`;
       }
       if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }

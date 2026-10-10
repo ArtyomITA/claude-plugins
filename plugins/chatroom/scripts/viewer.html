@@ -281,6 +281,9 @@ const PALETTE = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085
 const $ = id => document.getElementById(id);
 const feed = $('feed');
 let config = {heartbeat: 120, user_name: 'USER', self_names: [], participants: [], profiles: {}, lang: 'en'};
+// visiting a friend who shares the room chat: the chat shown and written here is the friend's room chat
+const FRIEND = new URLSearchParams(location.search).has('visit')
+  ? fetch('friendroom/config.json', {cache: 'no-store'}).then(r => r.ok ? 'friendroom/' : '').catch(() => '') : Promise.resolve('');
 let SELF = new Set(['USER']), shown = 0, lastFrom = null, all = [], unseen = 0, sound = false, query = '';
 const t = () => T[config.lang] || T.en;
 
@@ -500,7 +503,7 @@ function applyLook() {
 let configText = '';
 async function loadConfig(force) {
   try {
-    const r = await fetch('config.json?t=' + Date.now(), {cache: 'no-store'});
+    const r = await fetch((await FRIEND) + 'config.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) {
       // compare the server's text, not the merged object: its keys come in another order, so the old comparison
       // saw a change every 5 s and rebuilt the whole feed, cutting the flash of a #n jump and hiding again a
@@ -549,7 +552,7 @@ window.chatroomScope = () => scope;
 setInterval(pollNeighbor, 3000);
 async function poll() {
   try {
-    const r = await fetch('chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
+    const r = await fetch((await FRIEND) + 'chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) {
       const next = [];
       for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { next.push(JSON.parse(l)); } catch (e) {} } }
@@ -588,7 +591,7 @@ async function sendMessage() {
   const text = box.value.trim(); if (!text && !pending.length) return;
   send.disabled = true;
   try {
-    const r = await fetch(scope === 'other' && nConfig ? 'neighbor/post' : 'post', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch((await FRIEND) ? 'friendroom/post' : scope === 'other' && nConfig ? 'neighbor/post' : 'post', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                    body: JSON.stringify({text, images: pending})});
     if (r.ok) { box.value = ''; box.style.height = ''; pending = []; showPending(); feed.scrollTop = feed.scrollHeight; poll(); pollNeighbor(); }
     else alert(t().notSent + await r.text());

@@ -124,10 +124,11 @@ def doc_path(common_dir, doc):
 
 # ------------------------------------------------------------------ the host
 class Share:
-    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}):
+    def __init__(self, common, title, host, port_hint=0, people=lambda: [], office=lambda: {}, room=None):
         """common: the Room of the common room; host: the host's user name; people(): the host's agents in the room;
         office(): the host's plan and everyone's coarse presence, for visits"""
         self.common, self.title, self.host, self.people_fn, self.office_fn = common, title, host, people, office
+        self.room = room                                     # the room's own chat for friends: allowed(), read(since), config(), post(name, text)
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
         self.me_pos = None                                   # where the host's own figure is, from the viewer
         self.lock = threading.Lock()
@@ -237,6 +238,25 @@ class Share:
             g['cids'].append(cid)
         return n
 
+    def room_post(self, g, text, cid=None):
+        """a friend writes in the room's own chat: same limits as the common room, taken once per cid"""
+        cid = re.sub(r'[^0-9a-f]', '', str(cid or ''))[:32]
+        if cid and cid in g.setdefault('cids', deque(maxlen=400)):
+            return 0
+        now = time.time()
+        while g['posts'] and now - g['posts'][0] > 60:
+            g['posts'].popleft()
+        if len(g['posts']) >= 20:
+            raise ValueError('slow down: 20 lines a minute')
+        text = str(text).strip()[:LINE_MAX]
+        if not text:
+            raise ValueError('empty message')
+        g['posts'].append(now)
+        n = self.room.post(g['name'], text, g.get('color'))
+        if cid:
+            g['cids'].append(cid)
+        return n
+
     def ask(self, g, text):
         """a guest asks for help (research, a plan, a change to their files): the host decides, nothing runs before"""
         text = str(text).strip()[:1500]
@@ -309,7 +329,7 @@ def make_handler(share):
 
         def do_GET(self):
             path, _, query = self.path.partition('?')
-            if path not in ('/share/feed', '/share/office') and not re.fullmatch(r'/share/doc/\d{1,6}', path):
+            if path not in ('/share/feed', '/share/office', '/share/room') and not re.fullmatch(r'/share/doc/\d{1,6}', path):
                 return self.send(404, {'error': 'not found'})
             g = share.guest(self.headers.get('X-Chatroom-Token'))
             if not g:
@@ -324,6 +344,11 @@ def make_handler(share):
                 self.send_response(200); self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('X-Content-Type-Options', 'nosniff'); self.send_header('Content-Length', str(len(data))); self.end_headers()
                 return self.wfile.write(data)
+            if path == '/share/room':                     # the room's own chat, when the host shares it with friends
+                if not share.room or not share.room.allowed():
+                    return self.send(403, {'error': 'the host does not share the room chat'})
+                since = int((re.search(r'(?:^|&)since=(\d+)', query) or [0, 0])[1])
+                return self.send(200, {'messages': share.room.read(since)[:300], 'config': share.room.config()})
             if path == '/share/office':                   # a visit: the host's plan and everyone's coarse presence
                 return self.send(200, {**share.office_fn(), 'host': share.host, 'title': share.title, 'present': share.people()})
             since = int((re.search(r'(?:^|&)since=(\d+)', query) or [0, 0])[1])
@@ -347,6 +372,10 @@ def make_handler(share):
             if not g:
                 return self.send(401, {'error': 'join first'})
             try:
+                if path == '/share/room':
+                    if not share.room or not share.room.allowed():
+                        return self.send(403, {'error': 'the host does not share the room chat'})
+                    return self.send(200, {'n': share.room_post(g, body.get('text', ''), body.get('cid'))})
                 if path == '/share/post':
                     return self.send(200, {'n': share.post(g, body.get('from'), body.get('text', ''), body.get('game'), body.get('cid'))})
                 if path == '/share/presence':
@@ -498,6 +527,24 @@ def clean_name(name):
     return re.sub(r'[\x00-\x1f<>&"]', '', str(name or '?'))[:60] or '?'
 
 
+def clean_room_line(m):
+    """a line of the host's room chat, for drawing: number, time, author, text, and whether it is a status"""
+    return {'n': int(m.get('n') or 0), 'time': str(m.get('time') or '')[:8], 'from': clean_name(m.get('from')),
+            'text': str(m.get('text') or '')[:LINE_MAX], **({'kind': m['kind']} if m.get('kind') in ('status', 'idle') else {})}
+
+
+def clean_room_config(c):
+    """the host room's look, for drawing its chat: title, colours, who is who; nothing else"""
+    c = c if isinstance(c, dict) else {}
+    names = lambda v: [clean_name(x) for x in (v if isinstance(v, list) else [])[:30]]
+    profiles = {clean_name(k): {'emoji': str(v.get('emoji', ''))[:8], 'color': v['color'] if COLOR.match(str(v.get('color', ''))) else '#888888',
+                                'role': clean_name(v.get('role', ''))} for k, v in list((c.get('profiles') or {}).items())[:40] if isinstance(v, dict)}
+    return {'title': clean_name(c.get('title') or ''), 'subtitle': clean_name(c.get('subtitle') or ''), 'icon': str(c.get('icon') or '')[:8],
+            'accent': c['accent'] if COLOR.match(str(c.get('accent', ''))) else '#00a884', 'lang': 'en' if c.get('lang') == 'en' else 'it',
+            'participants': names(c.get('participants')), 'self_names': names(c.get('self_names')), 'host': clean_name(c.get('user_name')),
+            'profiles': profiles}
+
+
 def clean_person(p):
     """a presence entry from the other side, for drawing: bounded strings, a real colour, nothing else"""
     out = {'name': clean_name(p.get('name')), 'emoji': str(p.get('emoji', ''))[:8], 'state': 'work' if p.get('state') == 'work' else 'break',
@@ -535,6 +582,7 @@ class Bridge:
         (tags of a lent helper written in the guest's own chat); arrived(lines): the new common room lines"""
         self.dir, self.url, self.pin, self.me, self.people_fn = Path(common_dir), url.strip(), str(pin).strip(), me, people
         self.office_fn, self.outgoing, self.arrived, self.me_pos = office, outgoing, arrived, None
+        self.room_lines, self.room_n, self.room_cfg, self.room_ok, self.room_next = [], 0, None, False, 0
         self.token = self.title = self.host = self.error = None
         self.n, self.people, self.requests, self.stopped = 0, [], [], threading.Event()
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -589,6 +637,16 @@ class Bridge:
                                 pass
                 if lines:
                     self.arrived(lines)
+                if time.time() >= self.room_next:                # the host's room chat, if the host shares it with us
+                    try:
+                        got = call(self.url, f'/share/room?since={self.room_n}', self.token)
+                        new = [clean_room_line(m) for m in (got.get('messages') or [])[:300] if isinstance(m, dict)]
+                        new = [m for m in new if m['n'] > self.room_n]
+                        self.room_lines = (self.room_lines + new)[-500:]
+                        self.room_n = max([self.room_n] + [m['n'] for m in new])
+                        self.room_cfg, self.room_ok = clean_room_config(got.get('config')), True
+                    except (PermissionError, ValueError):
+                        self.room_ok, self.room_next = False, time.time() + 5
                 self.people = [clean_person(p) for p in (feed.get('people') or [])[:60] if isinstance(p, dict)]
                 self.requests = [{k: str(r.get(k, ''))[:300] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes')}
                                  for r in (feed.get('requests') or [])[:20] if isinstance(r, dict)]
@@ -628,6 +686,9 @@ class Bridge:
                 sending.write_text(''.join(json.dumps(x, ensure_ascii=False) + '\n' for x in rest), encoding='utf-8')
                 raise
         sending.unlink()
+
+    def room_post(self, text):
+        return call(self.url, '/share/room', self.token, {'text': str(text)[:LINE_MAX], 'cid': secrets.token_hex(8)})
 
     def ask(self, text):
         return call(self.url, '/share/request', self.token, {'text': text})

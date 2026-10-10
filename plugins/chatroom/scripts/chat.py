@@ -364,7 +364,7 @@ class Room:
 
     def user_names(self):
         c = self.config()
-        return {c.get('user_name', 'USER'), *c.get('self_names', [])}
+        return {c.get('user_name', 'USER'), *c.get('self_names', []), *c.get('friends', [])}
 
     def heartbeat(self):
         return int(self.config().get('heartbeat', 120))
@@ -986,8 +986,22 @@ def cmd_serve(room, a):
                 room.update_config(profiles={m['from']: {'emoji': '🤝', 'color': '#26a69a', 'role': f"lent by {b.host if b else '?'}"}})
             p = sharing.doc_path(common.dir, m['doc']) if m.get('doc') else None
             room.append(m['from'], m['text'] + (f'\n(document: {p})' if p else ''))
+    def friend_post(name, text, color=None):
+        """a friend allowed in the room's chat writes there: from then on the friend counts as the user"""
+        c = room.config()
+        if name not in c.get('friends', []):
+            c.setdefault('friends', []).append(name)
+            room.save_config(c)
+            room.update_config(profiles={name: {'emoji': '🌐', 'color': color or '#888888', 'role': 'friend'}})
+        return room.append(name, text)
+    import types
+    friends_room = types.SimpleNamespace(
+        allowed=lambda: bool(room.config().get('friends_chat')),
+        read=lambda since: [{k: m[k] for k in ('n', 'time', 'from', 'text', 'kind') if k in m} for m in room.messages() if m['n'] > since],
+        config=lambda: {k: room.config().get(k) for k in ('title', 'subtitle', 'icon', 'accent', 'lang', 'participants', 'profiles', 'self_names', 'user_name')},
+        post=friend_post)
     host = sharing.Share(common, room.config().get('title') or room.config().get('topic', ''), me()['name'], people=here_people,
-                         office=office_for_visit)
+                         office=office_for_visit, room=friends_room)
     lend_log = common.dir / 'lend.jsonl'
 
     def lend(rid, model, effort, minutes):
@@ -1148,6 +1162,15 @@ def cmd_serve(room, a):
                 if path.endswith('.jsonl'):
                     return self.send(200, nb.chat.read_bytes() if nb.chat.exists() else b'', 'application/x-ndjson; charset=utf-8')
                 return self.send(200, json.dumps(nb.config(), ensure_ascii=False), 'application/json; charset=utf-8')
+            if path in ('/friendroom/config.json', '/friendroom/chat.jsonl'):   # the host's room chat, when the host shares it
+                b = guest['bridge']
+                if not b or not b.room_ok:
+                    return self.send(404, 'the host does not share the room chat', 'text/plain')
+                if path.endswith('.jsonl'):
+                    return self.send(200, ''.join(json.dumps(m, ensure_ascii=False) + '\n' for m in b.room_lines), 'application/x-ndjson; charset=utf-8')
+                return self.send(200, json.dumps({**(b.room_cfg or {}), 'user_name': me()['name'], 'self_names': [], 'heartbeat': 120,
+                                                  'leads': (b.room_cfg or {}).get('self_names', [])}, ensure_ascii=False),
+                                 'application/json; charset=utf-8')
             if path == '/presence.json':           # where everyone on the other side is, for figures that walk
                 b = guest['bridge']
                 people = host.people() if host.pin else (b.people if b else [])
@@ -1176,7 +1199,8 @@ def cmd_serve(room, a):
                 b = guest['bridge']
                 lines = common.messages()
                 body = {'messages': lines[-40:], 'games': [m for m in lines if m.get('game')][-300:], 'me': me()['name'], 'share': host.status(),
-                        'codex': ping_tool(room.roster()) == 'send_message', 'lend_mode': settings()['lend_mode'],
+                        'codex': ping_tool(room.roster()) == 'send_message', 'friends_chat': bool(room.config().get('friends_chat')),
+                        'room_chat': bool(guest['bridge'] and guest['bridge'].room_ok), 'lend_mode': settings()['lend_mode'],
                         'bridge': b.status() if b else None, 'cloudflared': bool(sharing.cloudflared_path()),
                         'installing': install['busy'], 'install_error': install['error'],
                         'people': (b.people if b else host.people()) if (b or host.pin) else []}
@@ -1287,6 +1311,8 @@ def cmd_serve(room, a):
                     elif act == 'decline':
                         r = host.answer(int(body.get('id', 0)), False)
                         common.append(me()['name'], f"{me()['name']} cannot lend an agent to {r['guest']} right now.")
+                    elif act == 'friends_chat':        # friends linked to the room read and write its own chat
+                        c = room.config(); c['friends_chat'] = bool(body.get('on')); room.save_config(c)
                     elif act == 'lend_mode':
                         save_settings(lend_mode='safe' if body.get('mode') == 'safe' else 'full')
                     elif act == 'install' and not install['busy']:
@@ -1298,6 +1324,14 @@ def cmd_serve(room, a):
             if path == '/settings':                # the viewer saves the figure's look
                 save_settings(avatar=sharing.clean_avatar(body.get('avatar')))
                 return self.send(200, '{}', 'application/json')
+            if path == '/friendroom/post':         # the guest writes in the host's room chat
+                b = guest['bridge']
+                if not b or not b.room_ok or not str(body.get('text', '')).strip():
+                    return self.send(400, 'the host does not share the room chat', 'text/plain')
+                try:
+                    return self.send(200, json.dumps(b.room_post(body['text'])), 'application/json')
+                except (ValueError, PermissionError, OSError) as exc:
+                    return self.send(502, str(exc), 'text/plain')
             if path == '/presence':                # the viewer: where the user's own figure is (and whose office)
                 pos = sharing.clean_pos(body)
                 host.me_pos = pos
