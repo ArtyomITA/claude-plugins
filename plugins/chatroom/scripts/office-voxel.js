@@ -90,28 +90,33 @@ const STYLES = ['short', 'spiky', 'bob', 'bun', 'cap', 'beanie', 'long', 'bald']
 export const darker = (hex, f = 0.7) => '#' + new THREE.Color(hex).multiplyScalar(f).getHexString();
 
 /** a chibi voxel person facing +z; returns {root, body, parts} with pivots to animate */
-export function person({name = '?', shirt = '#3a7bd5', kind = 'agent', scale = 1}) {
-  const r = rnd(hashName(name));
-  const skin = SKIN[Math.floor(r() * SKIN.length)], hair = HAIR[Math.floor(r() * HAIR.length)];
-  const pants = kind === 'boss' ? '#1f2230' : PANTS[Math.floor(r() * PANTS.length)];
-  const style = kind === 'boss' ? 'short' : kind === 'lead' ? 'bun' : STYLES[Math.floor(r() * STYLES.length)];
-  const headphones = kind === 'agent' && r() < 0.3, glasses = kind === 'lead' || (kind === 'agent' && r() < 0.18);
+export const LOOK = {skins: SKIN, hairs: HAIR, styles: STYLES, outfits: ['suit', 'cardigan', 'hoodie', 'polo']};
+/** a figure; `look` (skin, hair, style, outfit, top, pants, glasses, headphones) overrides what the name would pick */
+export function person({name = '?', shirt = '#3a7bd5', kind = 'agent', scale = 1, look = null}) {
+  const r = rnd(hashName(name)), L = look || {};
+  const skin = L.skin || SKIN[Math.floor(r() * SKIN.length)], hair = L.hair || HAIR[Math.floor(r() * HAIR.length)];
+  const pants = L.pants || (kind === 'boss' ? '#1f2230' : PANTS[Math.floor(r() * PANTS.length)]);
+  const style = L.style || (kind === 'boss' ? 'short' : kind === 'lead' ? 'bun' : STYLES[Math.floor(r() * STYLES.length)]);
+  const phones = kind === 'agent' && r() < 0.3, specs = kind === 'lead' || (kind === 'agent' && r() < 0.18);
+  const headphones = L.headphones ?? phones, glasses = L.glasses ?? specs;
   const shoe = '#2a2420';
 
   // drawn at 5 cm voxels (twice the furniture's detail); every part keeps the size and pivot it had at 10 cm
-  const top = kind === 'boss' ? '#262a3a' : shirt, cuff = kind === 'boss' ? '#f2f2f2' : darker(top, 0.8);
+  const outfit = L.outfit || (kind === 'boss' ? 'suit' : kind === 'lead' ? 'cardigan' : null);
+  const top = L.top || (kind === 'boss' ? '#262a3a' : shirt), cuff = outfit === 'suit' ? '#f2f2f2' : darker(top, 0.8);
+  shirt = L.top || shirt;
   const leg = new Vox().box(0, 2, 0, 3, 7, 3, pants).box(1, 3, 3, 2, 7, 3, darker(pants, 0.88))          // trousers, crease
     .box(0, 0, 0, 3, 0, 4, '#d8d2c8').box(0, 1, 0, 3, 1, 4, shoe).box(0, 2, 3, 3, 2, 4, shoe);          // sole, shoe, toe
   const arm = new Vox().box(0, 3, 0, 3, 9, 3, top).box(0, 2, 0, 3, 2, 3, cuff).box(0, 0, 0, 3, 1, 3, skin);
   const torso = new Vox().box(0, 0, 0, 11, 9, 5, top).box(0, 0, 0, 11, 1, 5, darker(pants, 0.8)).box(5, 0, 6, 6, 1, 6, '#c9a227');  // belt, buckle
-  if (kind === 'boss') {                                                         // suit: white shirt, lapels, red tie
+  if (outfit === 'suit') {                                                       // suit: white shirt, lapels, red tie
     torso.box(4, 5, 5, 7, 9, 5, '#f2f2f2').box(5, 2, 5, 6, 4, 5, '#f2f2f2').box(3, 4, 6, 4, 9, 6, darker(top, 0.8)).box(7, 4, 6, 8, 9, 6, darker(top, 0.8));
     torso.box(5, 3, 6, 6, 8, 6, '#c62828').box(5, 9, 6, 6, 9, 6, '#a01f1f').set(8, 7, 6, '#f2f2f2');
-  } else if (kind === 'lead') {                                                  // cardigan open on a shirt, buttons, a pen
+  } else if (outfit === 'cardigan') {                                            // cardigan open on a shirt, buttons, a pen
     torso.box(5, 2, 5, 6, 9, 5, '#f5f5f5').box(4, 9, 6, 7, 9, 6, '#f5f5f5');
     for (const y of [3, 5, 7]) torso.set(4, y, 6, '#d7ccc8');
     torso.box(2, 6, 6, 2, 8, 6, '#f5c542');
-  } else if (r() < 0.5) {                                                        // hoodie: pocket and strings
+  } else if (outfit === 'hoodie' || (!outfit && r() < 0.5)) {                     // hoodie: pocket and strings
     torso.box(3, 2, 6, 8, 4, 6, darker(top, 0.85)).box(4, 6, 6, 4, 8, 6, '#ffffff').box(7, 6, 6, 7, 8, 6, '#ffffff').box(2, 9, 0, 9, 9, 6, darker(top, 0.9));
   } else {                                                                       // polo: collar, buttons, badge
     torso.box(3, 9, 5, 8, 9, 6, darker(top, 0.75)).set(5, 8, 6, '#ffffff').set(5, 6, 6, '#ffffff').box(8, 5, 6, 9, 6, 6, '#ffffff');

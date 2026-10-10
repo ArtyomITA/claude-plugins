@@ -732,7 +732,8 @@ def settings():
         s = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         s = {}
-    return {'lend_mode': 'safe' if s.get('lend_mode') == 'safe' else 'full'}
+    from share import clean_avatar
+    return {'lend_mode': 'safe' if s.get('lend_mode') == 'safe' else 'full', 'avatar': clean_avatar(s.get('avatar'))}
 
 
 def save_settings(**changes):
@@ -1059,6 +1060,8 @@ def cmd_serve(room, a):
                 return self.send(200, viewer.read_bytes(), 'text/html; charset=utf-8')
             if re.fullmatch(r'/office(-[a-z]+)?\.js', path):
                 return self.send(200, (HERE / path[1:]).read_bytes(), 'text/javascript; charset=utf-8')
+            if path == '/settings.json':              # the user's lasting choices: how far a lent helper goes, the figure's look
+                return self.send(200, json.dumps(settings(), ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/tv.json':                    # the lounge TV's channels
                 return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')
             m = re.fullmatch(r'/tv/([\w.-]{1,60})/([\w.-]{1,120}\.(?:mp4|webm))', path)
@@ -1292,6 +1295,9 @@ def cmd_serve(room, a):
                 except ValueError as exc:
                     return self.send(400, str(exc), 'text/plain')
                 return self.send(200, json.dumps(host.status()), 'application/json')
+            if path == '/settings':                # the viewer saves the figure's look
+                save_settings(avatar=sharing.clean_avatar(body.get('avatar')))
+                return self.send(200, '{}', 'application/json')
             if path == '/presence':                # the viewer: where the user's own figure is (and whose office)
                 pos = sharing.clean_pos(body)
                 host.me_pos = pos

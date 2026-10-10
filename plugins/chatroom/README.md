@@ -80,6 +80,7 @@ The server answers only on 127.0.0.1: a request must carry one of its own Host n
 - **Click** the floor, any free chair (the empty desks' too) or the coffee machine and your figure (the one in the boss's office, and only yours) walks there; furniture and people are solid, doors open as you pass. 🏃 x2 doubles your speed, and so does holding Shift.
 - **👁 POV** puts you behind your figure's eyes: W/S walk, A/D turn, drag to look around, E does what the hint at the bottom says (sit, take a coffee, look at the whiteboard or the TV, talk to someone), Q waves. The building has an outside: a street below and the city around.
 - **Seated at your desk**, `/` opens the room's quick commands, as in the chat box.
+- **👤 Look**: choose your figure's skin, hair and hair style, outfit (suit, cardigan, hoodie, polo), the colours of top and trousers, glasses and headphones; every change shows at once, Save keeps it in `~/.claude/chatroom/settings.json`. Friends see you with the same look, in their office and in yours.
 
 ### Furnishing (✏ Arreda)
 

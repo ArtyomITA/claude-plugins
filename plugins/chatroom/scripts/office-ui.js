@@ -70,6 +70,10 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-common hr { border: 0; border-top: 1px solid #ffffff1a; margin: 8px 0; }
 #office .o-common .o-meta { opacity: .7; font-size: 11.5px; }
 #office .o-common { width: 300px; }
+#office .o-look { left: auto; right: 12px; width: 260px; }
+#office .o-sws { display: flex; flex-wrap: wrap; gap: 5px; margin: 3px 0 8px; }
+#office .o-sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #ffffff33; padding: 0; cursor: pointer; }
+#office .o-sw.o-on { border-color: #fff; box-shadow: 0 0 0 2px #ffffff55; }
 #office .o-common h4 { margin: 4px 0; font-size: 12.5px; }
 #office .o-common input[type=text], #office .o-common select { width: 100%; box-sizing: border-box; margin: 3px 0; background: #22242f; color: #f4f1ea;
   border: 1px solid #ffffff22; border-radius: 3px; padding: 5px 7px; font: inherit; }
@@ -147,7 +151,8 @@ export const L = {
        helpTitle: 'Ask for help', askPlaceholder: 'What do you need? (some research, a plan, a change to your files)', askGo: 'Ask',
        visit: h => `Visit ${h}'s office`, requestsTitle: 'Help requests', lend: 'Lend an agent', decline: 'Decline',
        lent: h => `${h} is on it`, declined: 'declined', pending: 'waiting for an answer', visiting: h => `Visiting ${h}'s office`, back: 'Back to my office',
-       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'change channel (remote)',
+       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'change channel (remote)', look: 'Look', lookSkin: 'Skin', lookHair: 'Hair', lookTop: 'Top', lookPants: 'Trousers', save: 'Save', close: 'Close',
+       lookNames: {short: 'short', spiky: 'spiky', bob: 'bob', bun: 'bun', long: 'long', cap: 'cap', beanie: 'beanie', bald: 'bald', suit: 'suit', cardigan: 'cardigan', hoodie: 'hoodie', polo: 'polo'},
        hint_board: 'look at the whiteboard', hintStop: 'stop looking', go: 'Walk over', edit: 'Furnish', cmdTitle: 'quick commands for the room',
        hint_cmds: 'quick commands', cmdSent: c => `${c} sent to the room`,
        jump: 'In the chat', ctx: 'context', pulse: 'activity, last 5 min', tools: 'last tools', msgs: 'last messages',
@@ -180,7 +185,8 @@ export const L = {
        helpTitle: 'Chiedi aiuto', askPlaceholder: 'Cosa ti serve? (una ricerca, un piano, una modifica ai tuoi file)', askGo: 'Chiedi',
        visit: h => `Visita l'ufficio di ${h}`, requestsTitle: 'Richieste di aiuto', lend: 'Presta un agente', decline: 'Rifiuta',
        lent: h => `${h} è al lavoro`, declined: 'rifiutata', pending: 'in attesa di risposta', visiting: h => `Sei in visita da ${h}`, back: 'Torna nel tuo ufficio',
-       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'cambia canale (telecomando)',
+       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'cambia canale (telecomando)', look: 'Aspetto', lookSkin: 'Pelle', lookHair: 'Capelli', lookTop: 'Maglia', lookPants: 'Pantaloni', save: 'Salva', close: 'Chiudi',
+       lookNames: {short: 'corti', spiky: 'a punta', bob: 'caschetto', bun: 'chignon', long: 'lunghi', cap: 'cappellino', beanie: 'berretto', bald: 'calvo', suit: 'giacca', cardigan: 'cardigan', hoodie: 'felpa', polo: 'polo'},
        hint_board: 'guarda la lavagna', hintStop: 'smetti di guardare', go: 'Vai da lui', edit: 'Arreda', cmdTitle: 'comandi rapidi per la stanza',
        hint_cmds: 'comandi rapidi', cmdSent: c => `${c} mandato alla stanza`,
        jump: 'Nella chat', ctx: 'contesto', pulse: 'attività, ultimi 5 min', tools: 'ultimi strumenti', msgs: 'ultimi messaggi',
@@ -233,7 +239,7 @@ async function sha256hex(text) {
 const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
 const revealed = new Set();
 
-export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
+export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
                                 onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
@@ -242,7 +248,7 @@ export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuali
       <span class="o-chip" data-k="work"></span><span class="o-chip" data-k="idle"></span><span class="o-chip" data-k="plan" hidden></span><span class="o-chip" data-k="src"></span>
 </div>
     <div class="o-btns"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button>
-      <button data-b="edit"></button><button data-b="common"></button><button data-b="pov"></button><button data-b="run"></button><button data-b="reset"></button><button data-b="follow"></button><button data-b="quality"></button><button data-b="notify"></button></div>
+      <button data-b="edit"></button><button data-b="common"></button><button data-b="pov"></button><button data-b="run"></button><button data-b="look"></button><button data-b="reset"></button><button data-b="follow"></button><button data-b="quality"></button><button data-b="notify"></button></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
   const cp = root.querySelector('.o-common');
@@ -253,7 +259,7 @@ export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuali
     const b = e.target.closest('button'); if (!b) return;
     const k = b.dataset.b;
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
-    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
+    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
   });
   const labels = new Map(), itemLabels = new Map();
@@ -302,6 +308,7 @@ export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuali
       chip('src').textContent = d.src;
       for (const k of ['split', 'office', 'chat']) { btn(k).textContent = t()[k]; btn(k).classList.toggle('o-on', d.mode === k); }
       btn('pov').textContent = '👁 POV'; btn('pov').classList.toggle('o-on', !!d.pov);
+      btn('look').textContent = '👤 ' + t().look;
       btn('run').textContent = '🏃 x2'; btn('run').title = t().run + ' (Shift)'; btn('run').classList.toggle('o-on', !!d.run);
       btn('edit').textContent = '🛠 ' + t().edit; btn('edit').classList.toggle('o-on', !!d.edit);
       btn('common').textContent = '🛋 ' + t().common; btn('common').classList.toggle('o-on', cp.classList.contains('o-open'));
@@ -494,6 +501,34 @@ export function createUI(root, {onMode, onPov, onRun, onReset, onFollow, onQuali
     visitBanner(text, onBack) {
       root.insertAdjacentHTML('beforeend', `<div class="o-visit">🚶 ${esc(text)} <button>${esc(t().back)}</button></div>`);
       root.querySelector('.o-visit button').onclick = onBack;
+    },
+    /** your figure's look: colours, hair, outfit; every change shows at once, Save keeps it (and friends see it) */
+    lookPanel(look, opts, onChange) {
+      let el = root.querySelector('.o-look');
+      if (el) { el.remove(); return; }
+      const L = t(), cur = {skin: opts.skins[0], hair: opts.hairs[0], style: 'short', outfit: 'suit', top: '#262a3a', pants: '#1f2230', glasses: false, headphones: false, ...(look || {})};
+      el = document.createElement('div'); el.className = 'o-look o-common o-open';
+      const sw = (k, list) => list.map(c => `<button data-k="${k}" data-v="${c}" class="o-sw${cur[k] === c ? ' o-on' : ''}" style="background:${c}"></button>`).join('');
+      const sel = (k, list) => `<select data-k="${k}">${list.map(v => `<option value="${v}"${cur[k] === v ? ' selected' : ''}>${esc(L.lookNames[v] || v)}</option>`).join('')}</select>`;
+      el.innerHTML = `<h3>👤 ${esc(L.look)}</h3>
+        <div class="o-meta">${esc(L.lookSkin)}</div><div class="o-sws">${sw('skin', opts.skins)}</div>
+        <div class="o-meta">${esc(L.lookHair)}</div><div class="o-sws">${sw('hair', opts.hairs)}</div>
+        <div class="o-reqrow">${sel('style', opts.styles)} ${sel('outfit', opts.outfits)}</div>
+        <div class="o-reqrow"><label>${esc(L.lookTop)} <input type="color" data-k="top" value="${cur.top}"></label>
+          <label>${esc(L.lookPants)} <input type="color" data-k="pants" value="${cur.pants}"></label></div>
+        <div class="o-reqrow"><label><input type="checkbox" data-k="glasses"${cur.glasses ? ' checked' : ''}> 👓</label>
+          <label><input type="checkbox" data-k="headphones"${cur.headphones ? ' checked' : ''}> 🎧</label></div>
+        <div class="o-reqrow"><button data-act="save">💾 ${esc(L.save)}</button> <button data-act="close">${esc(L.close)}</button></div>`;
+      const changed = () => onChange({...cur}, false);
+      el.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        if (b.dataset.act === 'save') { onChange({...cur}, true); el.remove(); return; }
+        if (b.dataset.act === 'close') { onChange(look, false); el.remove(); return; }
+        if (b.dataset.k) { cur[b.dataset.k] = b.dataset.v; el.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.classList.toggle('o-on', x === b)); changed(); }
+      });
+      el.addEventListener('input', e => { const k = e.target.dataset.k; if (!k) return; cur[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; changed(); });
+      el.addEventListener('pointerdown', e => e.stopPropagation());
+      root.appendChild(el);
     },
     /** the quick commands, sitting at your desk: arrows to pick, Enter to send, Esc to close; null closes it */
     palette(list, onPick) {

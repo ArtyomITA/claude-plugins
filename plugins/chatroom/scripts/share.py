@@ -464,6 +464,19 @@ def clean_line(m):
     return out
 
 
+AVATAR = {'style': ('short', 'spiky', 'bob', 'bun', 'long', 'cap', 'beanie', 'bald'), 'outfit': ('suit', 'cardigan', 'hoodie', 'polo')}
+
+
+def clean_avatar(a):
+    """a figure's look: colours, a hair style, an outfit, glasses and headphones; nothing else"""
+    if not isinstance(a, dict):
+        return None
+    out = {k: a[k] for k in ('skin', 'hair', 'top', 'pants') if COLOR.match(str(a.get(k, '')))}
+    out.update({k: a[k] for k, opts in AVATAR.items() if a.get(k) in opts})
+    out.update({k: a[k] for k in ('glasses', 'headphones') if isinstance(a.get(k), bool)})
+    return out or None
+
+
 def clean_pos(d):
     """where a figure is: a point of the floor plan, its height (a seat), a heading, a pose, and whose office it is in
     ('home', or 'visit:NAME' while visiting NAME); anything else is dropped"""
@@ -477,7 +490,8 @@ def clean_pos(d):
     if where != 'home' and not re.fullmatch(r'visit:[A-Za-z0-9_-]{1,24}', where):
         return None
     return {'x': round(x, 2), 'y': round(min(2.0, max(-0.5, y)), 2), 'z': round(z, 2), 'rot': round(rot, 3),
-            'pose': d.get('pose') if d.get('pose') in ('walk', 'stand', 'sit', 'sofa') else 'stand', 'where': where}
+            'pose': d.get('pose') if d.get('pose') in ('walk', 'stand', 'sit', 'sofa') else 'stand', 'where': where,
+            'look': clean_avatar(d.get('look'))}
 
 
 def clean_name(name):

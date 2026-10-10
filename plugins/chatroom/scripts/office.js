@@ -107,7 +107,8 @@ let saved = null;                                                           // t
 try { const r = await fetch('office.json', {cache: 'no-store'}); if (r.ok) saved = await r.json(); } catch (e) {}
 const VISIT = new URLSearchParams(location.search).has('visit');            // visiting the friend whose common room you joined
 const VISIT_URL = 'visit.json' + (new URLSearchParams(location.search).get('visit') ? '?who=' + encodeURIComponent(new URLSearchParams(location.search).get('visit')) : '');
-let visit = null;
+let visit = null, myLook = null;
+try { const r = await fetch('settings.json', {cache: 'no-store'}); if (r.ok) myLook = (await r.json()).avatar || null; } catch (e) {}
 if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
 const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: visit.items || DEFAULT_LAYOUT.items}
   : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: saved.items} : DEFAULT_LAYOUT;
@@ -454,9 +455,10 @@ function deskLayout(names) {
 }
 
 class Person {
-  constructor(name, kind, spot, spawn, shirt = null) {
+  constructor(name, kind, spot, spawn, shirt = null, look = null) {
     const p = DATA.profile(name);
-    const built = V.person({name, shirt: shirt || p.color, kind, scale: kind === 'intern' ? 0.62 : 1});
+    const built = V.person({name, shirt: shirt || p.color, kind, scale: kind === 'intern' ? 0.62 : 1, look});
+    this.lookKey = JSON.stringify(look);
     Object.assign(this, built, {name, kind, spot, pos: spot.pos.clone(), rot: spot.rot, path: [], act: 'idle', t: Math.random() * 10,
                                 look: null, spawn: spawn ? 0 : 1, bubbleUntil: 0, pose: spot.pose});
     this.root.position.copy(this.pos); this.root.rotation.y = this.rot;
@@ -801,7 +803,7 @@ function breakSpot(p, desk, list, now) {
 function sync() {
   deskLayout(D.names);
   if (!boss) {
-    boss = new Person(D.user, 'boss', BOSS_SEAT, false);
+    boss = new Person(D.user, 'boss', BOSS_SEAT, false, null, myLook);
     me.cup = V.mug('#f5f5f5'); me.cup.position.set(0, -0.5, 0.12); me.cup.visible = false; boss.parts.armR.add(me.cup);
   }
   const mySeat = NEIGH.rank === 1 ? LEAD2_SEAT : LEAD_SEAT, theirSeat = mySeat === LEAD_SEAT ? LEAD2_SEAT : LEAD_SEAT;
@@ -1027,6 +1029,7 @@ renderer.domElement.addEventListener('pointermove', e => {                    //
 const ui = createUI(root, {
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
   onPov: () => setPov(!pov),
+  onLook: () => ui.lookPanel(myLook, V.LOOK, setMyLook),
   onRun: () => { running = !running; setPref('run', running); },
   onEdit: () => { if (VISIT) return; if (pov) setPov(false); ui.commonPanel(null); select(null); editor.toggle(); },
   onCommonOpen: () => ui.commonOpen() ? ui.commonPanel(null) : openCommon(),
@@ -1099,11 +1102,13 @@ function syncRemote() {
     if (!remote.has(p.name)) {
       const seat = person(p) && p.pos ? {pos: new THREE.Vector3(p.pos.x, p.pos.y || 0, p.pos.z), rot: p.pos.rot, pose: p.pos.pose === 'walk' ? 'stand' : p.pos.pose}
         : free[k % Math.max(1, free.length)] || BOSS_SEAT;
-      const r = new Person(p.name, 'guest', seat, true, p.color || '#888888'); r.remoteEmoji = p.emoji; r.act = 'idle'; r.home = seat;
+      const r = new Person(p.name, person(p) ? 'boss' : 'guest', seat, true, p.color || '#888888', person(p) ? p.pos?.look || null : null);
+      r.remoteEmoji = p.emoji; r.act = 'idle'; r.home = seat;
       remote.set(p.name, r);
     }
     k++;
-    const r = remote.get(p.name);
+    let r = remote.get(p.name);
+    if (person(p) && JSON.stringify(p.pos?.look || null) !== r.lookKey) r = rebuild(r, p.pos?.look || null, rr => remote.set(p.name, rr));
     r.act = r.follow ? 'idle' : p.state === 'work' ? 'think' : 'coffee';
   }
   // new lines in the common room: a bubble over whoever said it
@@ -1120,7 +1125,7 @@ const linked = () => VISIT || !!(commonState?.share?.sharing || commonState?.bri
 let presenceSent = '', presence = null, oldServerSaid = false;
 setInterval(() => {
   if (!boss || !linked()) return;
-  const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home'};
+  const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home', look: myLook};
   const key = JSON.stringify(pos, (k, v) => typeof v === 'number' ? Math.round(v * 20) / 20 : v);
   if (key !== presenceSent) {
     presenceSent = key;
@@ -1136,8 +1141,10 @@ function placeOthers() {
   for (const p of presence.people || []) {
     if (p.name === meName) continue;
     const owner = visit && p.name === visit.host, fig = owner ? hostFigure : remote.get(p.name);
+    if (owner && hostFigure && JSON.stringify(p.pos?.look || null) !== hostFigure.lookKey) rebuild(hostFigure, p.pos?.look || null, rr => { hostFigure = rr; });
     if (owner && hostFigure) hostFigure.root.visible = !!(p.pos && p.pos.where === 'home');
-    if (fig) walkWhere(fig, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos : null);
+    const now = owner ? hostFigure : fig;                                       // a new look may have rebuilt it
+    if (now) walkWhere(now, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos : null);
   }
 }
 /** a figure of the other side walks to where its person really is (a long way: it appears there) */
@@ -1150,6 +1157,18 @@ function walkWhere(fig, pos) {
   fig.spot = spot;
   if (far < 0.05) { if (!fig.path.length) { fig.pose = spot.pose; fig.pos.y = to.y; } return; }
   fig.path = [to.clone().setY(0)]; fig.pose = 'walk'; fig.speed = 1.4;
+}
+/** a figure again with another look, where the old one was */
+function rebuild(old, look, put) {
+  const p = new Person(old.name, old.kind, {pos: old.pos.clone(), rot: old.rot, pose: old.pose}, false, null, look);
+  Object.assign(p, {spot: old.spot, path: old.path, act: old.act, home: old.home, follow: old.follow, remoteEmoji: old.remoteEmoji, speed: old.speed});
+  p.root.visible = old.root.visible; old.dispose(); put(p); return p;
+}
+/** your own look, from the editor: tried on at once, kept when saved */
+function setMyLook(look, save) {
+  myLook = look;
+  if (boss) { const cup = me.cup; boss = rebuild(boss, look, () => {}); if (cup) boss.parts.armR.add(cup); }
+  if (save) post('settings', {avatar: look});
 }
 function openCommon() {
   const r = commonRoom();
