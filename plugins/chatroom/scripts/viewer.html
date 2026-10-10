@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chat room</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --accent: #00a884;
@@ -179,8 +180,10 @@
                                       -webkit-box-orient: vertical; }
                                 #feed { padding: 10px 8px 18px; } .bubble { max-width: 92%; } #search.open { width: 120px; } }
 </style>
+<script type="importmap">{"imports": {"three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/"}}</script>
 </head>
 <body data-wall="dots">
+<div id="office"></div>
 <header>
   <div class="group-icon" id="gicon">💬</div>
   <div class="head-text">
@@ -475,7 +478,7 @@ async function loadConfig(force) {
       const changed = text !== configText;
       configText = text;
       config = Object.assign({}, config, JSON.parse(text));
-      if (changed || force) { applyLook(); rerender(); }
+      if (changed || force) { applyLook(); rerender(); window.dispatchEvent(new CustomEvent('chatroom:data', {detail: {all, config}})); }
     }
   } catch (e) {}
 }
@@ -486,10 +489,11 @@ async function poll() {
       const next = [];
       for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { next.push(JSON.parse(l)); } catch (e) {} } }
       all = next;
+      window.dispatchEvent(new CustomEvent('chatroom:data', {detail: {all, config}}));
       const fresh = all.slice(shown);
       for (const m of fresh) add(m);
       if (fresh.length && shown && sound && fresh.some(m => !SELF.has(m.from))) beep();
-      if (fresh.length) document.title = `(${all.length}) ${config.title || config.topic || 'Chat room'}`;
+      if (fresh.length && !window.officeOwnsTitle) document.title = `(${all.length}) ${config.title || config.topic || 'Chat room'}`;
       shown = Math.max(shown, all.length);
     }
   } catch (e) {}
@@ -701,7 +705,13 @@ if ($('optCompact').checked) document.body.style.fontSize = '13px';
 setSound(pref('sound', false));
 applyLook();
 loadCommands().then(() => { COMMANDS._lang = config.lang; });
+/* the 3D office (office.js) reads the chat through these */
+window.chatroom = {
+  jumpTo, snapshot: () => ({all, config}),
+  tag(name) { box.value = (box.value && !/\s$/.test(box.value) ? box.value + ' ' : box.value) + '@' + name + ' '; box.focus(); },
+};
 loadConfig(true).then(() => { poll(); setInterval(poll, 1500); setInterval(() => loadConfig(false), 5000); setInterval(header, 5000); });
 </script>
+<script type="module" src="office.js"></script>
 </body>
 </html>

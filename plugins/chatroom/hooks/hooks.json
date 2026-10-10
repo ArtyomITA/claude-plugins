@@ -1,0 +1,4 @@
+{
+  "description": "Chatroom mod: forwards what each room agent does to the room's viewer, writes the roster by itself, and adds /stanza, a pane with the room in the terminal.",
+  "modules": ["./register.ts"]
+}

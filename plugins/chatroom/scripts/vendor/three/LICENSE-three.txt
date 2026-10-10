@@ -1,0 +1,2 @@
+three.js 0.186.1 (https://threejs.org), MIT License, Copyright 2010-2026 three.js authors.
+Files copied unchanged from https://cdn.jsdelivr.net/npm/three@0.186.1/ (build/ and examples/jsm/).

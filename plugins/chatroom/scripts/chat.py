@@ -244,6 +244,9 @@ def clean_profile(profile):
         out['color'] = str(profile['color'])
     if 'role' in profile:
         out['role'] = str(profile['role']).strip()[:120]
+    for key in ('model', 'effort'):           # what the agent runs on, shown in the viewer and the office
+        if key in profile:
+            out[key] = str(profile[key]).strip()[:24]
     return out
 
 
@@ -257,10 +260,10 @@ def tags_everyone(text):
 
 
 def parse_profile(text):
-    """'NAME|emoji|#color|role' (trailing fields optional) to (name, profile)"""
+    """'NAME|emoji|#color|role|model|effort' (trailing fields optional) to (name, profile)"""
     parts = [p.strip() for p in text.split('|')]
     name, profile = parts[0], {}
-    for key, value in zip(('emoji', 'color', 'role'), parts[1:]):
+    for key, value in zip(('emoji', 'color', 'role', 'model', 'effort'), parts[1:]):
         if value:
             profile[key] = value
     return name, clean_profile(profile)
@@ -623,15 +626,29 @@ def alert_lines(room, items, users):
     return out
 
 
+def watch_line(m, users):
+    """one compact line per real message, for a lead that watches the room on a budget: no statuses, no tools"""
+    text = ' '.join(m.get('text', '').split())
+    kind = ('PLAN' if re.match(r'(PLAN|PIANO)\s*v\d+', text, re.IGNORECASE) else 'VOTE' if re.search(r'\b(VOTE|VOTO)\s*v?\d+\s*:', text, re.IGNORECASE)
+            else 'CLOSED' if re.match(r'(CLOSED|CHIUSO)\b', text, re.IGNORECASE) else 'USER' if m.get('from') in users else 'MSG')
+    return f"WATCH #{m['n']} {kind} {m['from']}: {text[:220]}" + (' [...]' if len(text) > 220 else '')
+
+
 def cmd_alerts(room, a):
-    """the lead's relay: print a ping line for each new message of the user (--follow keeps watching)"""
+    """the lead's relay: print a ping line for each new message of the user (--follow keeps watching);
+    with --messages also one WATCH line per real message, so the lead follows the room without reading it all"""
     name = '_alerts'
     while True:
         items = room.messages()
         new = [m for m in items if m['n'] > room.cursor(name)]
         if new:
-            for line in alert_lines(room, [*new], room.user_names()):
+            users = room.user_names()
+            for line in alert_lines(room, [*new], users):
                 print(line, flush=True)
+            if a.messages:
+                for m in new:
+                    if not m.get('kind') and m.get('from') not in room.config().get('self_names', []):
+                        print(watch_line(m, users), flush=True)
             room.set_cursor(name, new[-1]['n'])
         if not a.follow:
             return
@@ -676,7 +693,13 @@ def cmd_transcript(room, a):
 
 
 def cmd_serve(room, a):
+    import threading
+    from activity import Activity, register_room
     viewer = HERE / 'viewer.html'
+    vendor = (HERE / 'vendor').resolve()
+    activity = Activity(room)
+    lock = threading.Lock()
+    hosts = {f'{h}:{a.port}' for h in (a.host, '127.0.0.1', 'localhost')}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -694,10 +717,46 @@ def cmd_serve(room, a):
         def body(self):
             return json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))).decode('utf-8'))
 
+        def trusted(self):
+            """only this page and local programs may talk to the server: a Host of ours (against DNS rebinding) and,
+            when a browser sends an Origin, one of ours (any web page could otherwise write to the agents). Browsers
+            always send Origin on a POST; the chatroom mod and chat.py send none."""
+            if self.headers.get('Host') not in hosts:
+                return False
+            origin = self.headers.get('Origin')
+            return origin is None or origin.removeprefix('http://') in hosts
+
         def do_GET(self):
+            if not self.trusted():
+                return self.send(403, 'forbidden', 'text/plain')
             path = self.path.split('?')[0]
             if path in ('/', '/index.html'):
                 return self.send(200, viewer.read_bytes(), 'text/html; charset=utf-8')
+            if re.fullmatch(r'/office(-[a-z]+)?\.js', path):
+                return self.send(200, (HERE / path[1:]).read_bytes(), 'text/javascript; charset=utf-8')
+            if path.startswith('/vendor/'):
+                target = (vendor / path[len('/vendor/'):]).resolve()
+                if target.suffix != '.js' or vendor not in target.parents or not target.is_file():
+                    return self.send(404, 'not found', 'text/plain')
+                return self.send(200, target.read_bytes(), 'text/javascript; charset=utf-8')
+            if path == '/state.json':
+                with lock:
+                    state = activity.state()
+                return self.send(200, json.dumps(state, ensure_ascii=False), 'application/json; charset=utf-8')
+            if path == '/summary.json':               # what the /stanza pane of the mod shows
+                with lock:
+                    state = activity.state()
+                items, c = room.messages(), room.config()
+                body = {'title': c.get('title') or c.get('topic', ''), 'user': c.get('user_name', 'USER'),
+                        'participants': c.get('participants', []), 'heartbeat': room.heartbeat(),
+                        'n': items[-1]['n'] if items else 0, 'last': items[-12:], 'state': state,
+                        'idle': [k for k in c.get('participants', []) if room.idle_entry(k, items)],
+                        'lang': c.get('lang', 'en'), 'pct': {}}
+                for m in items:                       # each participant's latest percentage (the lowest it states)
+                    nums = [int(x) for x in re.findall(r'(\d{1,3})[^\S\n]?%', m.get('text', '')) if int(x) <= 100]
+                    if nums:
+                        body['pct'][m['from']] = min(nums)
+                return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/chat.jsonl':
                 body = room.chat.read_bytes() if room.chat.exists() else b''
                 return self.send(200, body, 'application/x-ndjson; charset=utf-8')
@@ -717,10 +776,18 @@ def cmd_serve(room, a):
 
         def do_POST(self):
             path = self.path.split('?')[0]
+            if not self.trusted():
+                return self.send(403, 'forbidden', 'text/plain')
             try:
                 body = self.body()
             except (ValueError, json.JSONDecodeError):
                 return self.send(400, 'bad request', 'text/plain')
+            if path == '/hook':                    # an event from the chatroom mod inside Claude Code
+                with lock:
+                    for ev in body if isinstance(body, list) else [body]:
+                        if isinstance(ev, dict):
+                            activity.hook(ev)
+                return self.send(200, '{}', 'application/json')
             if path == '/post':
                 text = str(body.get('text', '')).strip()
                 images = []
@@ -753,8 +820,21 @@ def cmd_serve(room, a):
             self.send(404, 'not found', 'text/plain')
 
     server = ThreadingHTTPServer((a.host, a.port), Handler)
+    unregister = register_room(room, a.port, a.host)
+
+    def heartbeat():                          # the registry stamp tells the mod this room is alive, and its roster
+        while True:
+            time.sleep(5)
+            try:
+                register_room(room, a.port, a.host)
+            except OSError:
+                pass
+    threading.Thread(target=heartbeat, daemon=True).start()
     print(f'viewer on http://{a.host}:{a.port}/  (room {room.dir})', flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        unregister()
 
 
 def main():
@@ -771,6 +851,8 @@ def main():
                    help='an idle status, once: what you wait for and from whom, with your percentage; afterwards '
                         'only a tag wakes you')
     p.add_argument('--follow', action='store_true', help='alerts: keep watching and print each new ping line')
+    p.add_argument('--messages', action='store_true',
+                   help='alerts: also one WATCH line per real message (not statuses), for a lead that coordinates')
     p.add_argument('--timeout', type=int, default=100,
                    help=f'wait: at most {WAIT_MAX} s, or {IDLE_WAIT_MAX} s while you are idle')
     p.add_argument('--topic')
@@ -784,7 +866,7 @@ def main():
     p.add_argument('--lang')
     p.add_argument('--heartbeat', type=int)
     p.add_argument('--user-name')
-    p.add_argument('--profile', action='append', help='"NAME|emoji|#color|role", once per participant')
+    p.add_argument('--profile', action='append', help='"NAME|emoji|#color|role|model|effort", once per participant')
     p.add_argument('--image', action='append', help='post: attach a picture (png, jpg, webp, gif); repeat for more')
     p.add_argument('--out')
     p.add_argument('--port', type=int, default=8765)

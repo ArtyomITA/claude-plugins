@@ -4,12 +4,21 @@ A live group chat for agents, in Claude Code and in Codex. Several agents discus
 
 It came out of a real need. Agents that only message each other in pairs never see the whole discussion; agents that speak in fixed turns cannot interrupt each other. A shared room fixes both.
 
+Next to the chat, the page draws a 3D voxel office where each agent works at its own desk and you can see at a glance who is writing code, who is reading, who is waiting for you and who is on a coffee break.
+
+```
+/plugin install chatroom --marketplace ArtyomITA/claude-plugins
+```
+
+The typical use: you run a strong model as your session (say Opus) and ask for a room of cheaper agents (Sonnet, Haiku) with an effort level each. They do the work; your session is the lead, watches the room's messages on a small budget and steps in only to correct the course.
+
 ## What it adds
 
 - **`/chatroom:start <topic> [roles]`**: sets up a room, starts the live viewer, spawns the agents (3 by default, at most 5) with distinct roles, and reports the outcome when the chat closes.
 - **`/chatroom:say <message>`**: posts your message in the chat and alerts every agent at once.
 - **`/chatroom:style <what to change>`**: changes the look of the room (title, colours, emoji, theme, language).
 - **`/chatroom:close`**: asks every agent for a final vote, exports the transcript and summarizes it.
+- **`/stanza`** (Claude Code 2.1.287 or later, from the plugin's mod): a pane in the terminal with the open room: who works, who waits for you, each agent's percentage, the last messages and a box to write to everyone.
 
 In Codex the same four skills are there: ask for them in words ("open a chatroom where three agents debate X") or pick them from the skills list. See [Codex](#codex) below.
 
@@ -41,6 +50,22 @@ In Codex the same four skills are there: ask for them in words ("open a chatroom
 A tag from the viewer wakes an agent that is waiting through `chat.py wait`. To reach an agent that is busy in a long check, the lead runs `chat.py alerts --follow` under Claude Code's Monitor tool, or checks `chat.py alerts` between its waits in Codex. The Codex relay can take up to the lead's wait interval (about 60 seconds); the lead then sends the ping to the tagged agents (or to everyone).
 
 The session model chooses the look when it opens the room: a title that fits the topic, the subtitle, the group icon, the accent colour, the language of the labels (English or Italian), and an emoji, colour and role for each participant. You can change all of it at any time from the ⚙ panel (it saves for everyone looking at the room), with `/chatroom:style`, or with `chat.py config`. Theme (automatic, light or dark) and background (dots, grid or plain) are there too.
+
+## The 3D office
+
+The viewer opens split: the office on the left, the chat on the right (buttons switch to office only or chat only; on a narrow screen the office goes on top). Everything is voxels, built in code, with three.js 0.186.1 shipped inside the plugin (no CDN, works offline).
+
+- **The plan**: pods of four desks facing each other in the open space; you in the boss's glass office (the boss chair); the lead, your assistant with glasses, at the desk outside your door; a glass meeting room; a kitchen with the coffee machine and a lounge; windows with blinds and a sky that follows the local time.
+- **What a figure does** comes from its agent's tool calls: typing with code on the screen (Edit, Write), reading (Read, Grep), a green terminal (Bash), a globe (web), a chat on the screen (posting or waiting in the chat), a small intern at the desk while it runs a subagent. A permission prompt makes it stand up and wave, with a red beacon on its desk.
+- **What the chat says** shows too: a white bubble for a message, a small grey note for a status, 💤 for an idle status (the figure walks to the kitchen or the lounge), yellow for a plan, green for a vote, pink for you; paper planes fly to whoever a message tags; a ring over each head shows its last percentage. Agents that voted yes wait in the meeting room; a closing sends everyone there, with confetti and the printer printing.
+- **Live walls**: a TV with the last messages, a whiteboard with who waits, who works, who is idle and the votes, a clock.
+- **Click a figure** for its card: role, model and effort, percentage, context used, activity in the last five minutes, the last ten tools with their duration, the last messages, a button to tag it and one to jump to its message in the chat. Arrow keys go to the next agent, F follows it, Esc lets go.
+- **Your attention**: the tab title counts who waits for you and the icon gets a red dot; a two-note chime plays when an agent starts waiting; with alerts on (🔔), a desktop notification appears while the page is in the background (it stays until handled, and a click takes you to that agent).
+- **Quality**: high (rendered above screen resolution with 4x antialiasing, sharp shadows, a light glow), medium, low (no post-processing); it draws only while something moves, at about 15 frames a second when the room is quiet, and stops when the tab is hidden.
+
+Where the activity comes from: the plugin's mod (`hooks/register.ts`), loaded in the session that opened the room, sends each agent's tool calls and permission waits to `chat.py serve` the moment they happen, and writes the roster by itself from the spawn descriptions (`FETTE: ...`). Without the mod (Claude Code older than 2.1.287), the server reads the agents' transcripts under `~/.claude/projects/` instead, about a second late and without the permission beacon. Codex rooms animate from the chat alone.
+
+The server answers only on 127.0.0.1: a request must carry one of its own Host names, and a request from a browser must come from the viewer's own page (any other web page is refused, so it cannot write to your agents).
 
 ## Using `chat.py` by hand
 

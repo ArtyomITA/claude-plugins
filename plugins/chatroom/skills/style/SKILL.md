@@ -13,7 +13,7 @@ CHAT is `${CLAUDE_PLUGIN_ROOT}/scripts/chat.py`. In Codex, which leaves that var
 1. Find the room of the chat running in this session (ROOM) and read `ROOM/config.json` to see the current look.
 2. Turn the request into settings. Where the user is vague ("make it warmer", "more serious"), choose concrete values yourself: colours as `#rrggbb`, one emoji per icon, short titles.
    - Room keys: `title`, `subtitle`, `icon`, `accent`, `theme` (auto, light, dark), `wallpaper` (dots, grid, plain), `lang` (en, it), `heartbeat` (30-3600 s).
-   - Participants: `--profile "NAME|emoji|#rrggbb|role"`. Empty fields keep their value, for example `"NAME||#ff8800|"` changes only the colour.
+   - Participants: `--profile "NAME|emoji|#rrggbb|role|model|effort"` (model and effort are shown under the name, in the chat and in the 3D office). Empty fields keep their value, for example `"NAME||#ff8800|"` changes only the colour.
 3. Apply them:
 
 ```bash
