@@ -61,7 +61,7 @@ def person(d):
 
 
 GONE = 15                                                   # seconds without a word: a guest (or the host) is gone
-GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play',),
+GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play', 'pause', 'seek'),
          'pool': ('new', 'join', 'shot', 'quit')}
 POOL_W, POOL_H = 800, 440                                   # the pool table's canvas (office-games.js)
 
@@ -115,6 +115,10 @@ def _clean_game(g):
         if not 1e9 <= out['t'] < 4e9:                 # seconds since 1970; also false for NaN and infinity, which would break the JSON
             raise ValueError('the start time is seconds since 1970')
         out['title'] = re.sub(r'[\x00-\x1f<>]', '', str(g.get('title', '')))[:120]
+        if g.get('pos') is not None:                  # the second the video is at, when it was there, and whether it is paused
+            out['pos'] = round(num(g.get('pos'), 0, 864000), 2)
+            out['at'] = round(num(g.get('at'), 1e9, 4e9), 3)
+            out['paused'] = bool(g.get('paused'))
     if op == 'shot':                                  # pool: the angle and power of the shot, where the 16 balls ended, whose turn, the winner
         end = g.get('end')
         if not isinstance(end, list) or len(end) != 16:
@@ -1103,7 +1107,10 @@ def _prova():
         g['seen'] = heard
         tv = {'type': 'tv', 'op': 'play', 'id': 'ab12', 'v': 'dQw4w9WgXcQ', 't': time.time(), 'title': 'x<y>'}
         assert clean_game(tv)['title'] == 'xy'
-        for bad in ({**tv, 't': float('nan')}, {**tv, 't': 10 ** 400}, {**tv, 't': 0}, {**tv, 'v': 'dQw4w9WgXcé'}):
+        pause = clean_game({**tv, 'op': 'pause', 'pos': 61.256, 'at': time.time(), 'paused': 1})
+        assert pause['pos'] == 61.26 and pause['paused'] is True, pause
+        for bad in ({**tv, 't': float('nan')}, {**tv, 't': 10 ** 400}, {**tv, 't': 0}, {**tv, 'v': 'dQw4w9WgXcé'}, {**tv, 'op': 'stop'},
+                    {**tv, 'pos': -1, 'at': time.time()}, {**tv, 'pos': float('nan'), 'at': time.time()}, {**tv, 'pos': 5, 'at': 0}):
             try:
                 clean_game(bad)
             except ValueError:

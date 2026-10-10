@@ -1494,8 +1494,9 @@ const itemOf = m => (LAYOUT.items || [])[m.userData.src];
 const tvMesh = ITEM_MESHES.find(m => itemOf(m)?.type === 'tvStand');
 const tvTable = tvMesh && ITEM_MESHES.filter(m => itemOf(m)?.type === 'lowTable').sort((a, b) => a.position.distanceTo(tvMesh.position) - b.position.distanceTo(tvMesh.position))[0];
 const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: tvTable, raycastables, say: t => ui.placeName(t), t: ui.t, linked,
-  onTogether: (v, title, at) => post('common/post', {text: `📺 ${commonState?.me || D.user} ${ui.t().tvPuts}: ${title || v}`,
-                                                  game: {type: 'tv', op: 'play', id: Math.random().toString(16).slice(2, 10), v, t: at, title}})});
+  onTogether: g => post('common/post', {text: `📺 ${commonState?.me || D.user} ${g.op === 'pause' ? '⏸' : g.op === 'seek' ? '⏩ ' + Math.floor(g.pos / 60) + ':' + String(Math.floor(g.pos % 60)).padStart(2, '0') : ui.t().tvPuts + ': ' + (g.title || g.v)}`,
+                                       game: {type: 'tv', id: Math.random().toString(16).slice(2, 10), ...g}})});
+if (FORCE) window.__officeTv = loungeTv;
 let lastTvN = null;
 /** a friend chose a video to watch together: our TV plays it from the same second */
 function tvFromFriends() {
@@ -1503,7 +1504,7 @@ function tvFromFriends() {
   if (lastTvN === null) {
     lastTvN = top;
     const last = lines[lines.length - 1];
-    if (last && Date.now() / 1000 - (last.game.t || 0) < 6 * 3600) loungeTv.together(last.game, last.from);
+    if (last && Date.now() / 1000 - (last.game.at || last.game.t || 0) < 6 * 3600) loungeTv.together(last.game, last.from);
     return;
   }
   for (const m of lines) if (m.n > lastTvN && m.from !== commonState.me) loungeTv.together(m.game, m.from);

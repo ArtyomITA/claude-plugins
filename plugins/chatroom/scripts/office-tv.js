@@ -47,6 +47,11 @@ const CSS = `
 .o-tvsearch { display: flex; gap: 8px; margin-bottom: 10px; }
 .o-tvsearch input { flex: 1; background: #0b0e15; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 7px 10px; font: inherit; }
 .o-tvtogether { display: flex; align-items: center; gap: 6px; opacity: .9; }
+.o-tvctl { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; flex-wrap: wrap; }
+.o-tvctl button { background: #222a3a; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; min-width: 44px; }
+.o-tvctl button:hover { background: #2f3a52; }
+.o-tvctl input[type=range] { width: 120px; accent-color: #e53935; }
+.o-tvtime { opacity: .75; font-variant-numeric: tabular-nums; margin-left: auto; }
 .o-tvfull { position: fixed; inset: 0; background: #000; z-index: 60; display: flex; align-items: center; justify-content: center; }
 .o-tvfull iframe, .o-tvfull video { width: 100%; height: 100%; border: 0; background: #000; }
 .o-tvfull button { position: absolute; top: 12px; right: 12px; z-index: 1; background: #000a; color: #fff; border: 1px solid #fff6; border-radius: 8px;
@@ -90,10 +95,70 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   root.appendChild(frame);
   let channels = [], now = {kind: 'off'}, file = 0, seenAt = 0, hidden = true, menuEl = null, playing = null, fullEl = null, sound = false;
   try { sound = localStorage.getItem('chatroom.tv.sound') === '1'; } catch (e) {}
+  let vol = 80, ytTime = 0, ytDur = 0, ytState = -1, ytSeen = 0, holdPause = false;
+  try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.tv.vol') ?? 80))); } catch (e) {}
+  // YouTube's iframe API: commands go in by postMessage, the time and state come back the same way
+  const yt = (func, args = []) => frame.contentWindow?.postMessage(JSON.stringify({event: 'command', func, args}), '*');
+  let hello = 0;                                     // ask the player for its news until it answers (it may not be ready at load)
+  frame.addEventListener('load', () => {
+    clearInterval(hello);
+    let tries = 0;
+    hello = setInterval(() => { if (++tries > 20) clearInterval(hello); else frame.contentWindow?.postMessage(JSON.stringify({event: 'listening', id: 'tv', channel: 'widget'}), '*'); }, 250);
+  });
+  const canSound = () => sound && navigator.userActivation?.hasBeenActive !== false;
+  addEventListener('message', e => {
+    if (e.source !== frame.contentWindow) return;
+    let d; try { d = JSON.parse(e.data); } catch (err) { return; }
+    const info = d && d.info;
+    if (d?.event === 'onReady' || d?.event === 'initialDelivery') { clearInterval(hello); audio(); }
+    if (!info || typeof info !== 'object') return;
+    if (typeof info.currentTime === 'number') { ytTime = info.currentTime; ytSeen = Date.now() / 1000; }
+    if (typeof info.duration === 'number') ytDur = info.duration;
+    if (typeof info.playerState === 'number') {
+      ytState = info.playerState;
+      if (ytState === 1 && holdPause) { holdPause = false; yt('pauseVideo'); }   // a friend's pause arrived before the video started
+    }
+  });
+  /** sound as chosen, as soon as the browser allows it (after the first click or key on the page) */
+  function audio() {
+    if (isLocal()) { video.volume = vol / 100; video.muted = !canSound(); return; }
+    yt('setVolume', [vol]);
+    yt(canSound() ? 'unMute' : 'mute');
+  }
+  for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (sound) setTimeout(audio, 0); }, {capture: true, once: true});
+  /** where the video is now, in seconds, and whether it is paused */
+  const position = () => isLocal() ? video.currentTime : ytSeen ? ytTime + (ytState === 1 ? Date.now() / 1000 - ytSeen : 0) : playing ? Date.now() / 1000 - playing.at : 0;
+  const paused = () => isLocal() ? video.paused : ytState === 2 || holdPause;
+  function seek(pos) {
+    pos = Math.max(0, pos);
+    if (isLocal()) video.currentTime = pos;
+    else { yt('seekTo', [pos, true]); ytTime = pos; ytSeen = Date.now() / 1000; if (playing) playing.at = Date.now() / 1000 - pos; }
+  }
+  /** play or pause; the player's own news corrects the state a moment later */
+  function run(on) {
+    if (isLocal()) { if (on) video.play().catch(() => {}); else video.pause(); return; }
+    ytTime = position(); ytSeen = Date.now() / 1000; ytState = on ? 1 : 2;
+    holdPause = !on;                                 // a pause sent while the video is still loading would be lost
+    yt(on ? 'playVideo' : 'pauseVideo');
+  }
+  /** the remote: every action also goes to friends watching together */
+  function control(what) {
+    const p = position();
+    if (what === 'play') { const on = paused(); run(on); share(on ? 'play' : 'pause', p, !on); }
+    else {
+      const to = what === 'start' ? 0 : p + (what === 'back' ? -10 : 10);
+      seek(to); share('seek', Math.max(0, to), paused());
+    }
+  }
+  function share(op, pos, isPaused) {
+    if (now.kind !== 'video' || !together || !linked()) return;
+    const at = Date.now() / 1000;
+    onTogether?.({op, v: now.v, title: now.title, t: at - pos, pos, at, paused: isPaused});
+  }
 
   function local(c) {
     frame.style.display = 'none'; frame.src = 'about:blank';
-    video.loop = c.files.length === 1; video.muted = !sound;
+    video.loop = c.files.length === 1; video.muted = !canSound(); video.volume = vol / 100;
     video.src = `tv/${encodeURIComponent(c.name)}/${encodeURIComponent(c.files[file % c.files.length])}`;
     video.play().catch(() => {});
     screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
@@ -102,8 +167,10 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     video.pause(); video.removeAttribute('src'); video.load();
     screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
     playing = {ids, at: Date.now() / 1000 - start};
-    frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=${sound ? 0 : 1}&controls=0&loop=1&playlist=${ids.join(',')}`
-              + `&playsinline=1&rel=0&modestbranding=1&vq=hd720${start > 0 ? '&start=' + Math.floor(start) : ''}`;
+    ytTime = start; ytSeen = 0; ytState = -1;
+    frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=1&controls=0&loop=1&playlist=${ids.join(',')}`
+              + `&playsinline=1&rel=0&modestbranding=1&vq=hd720&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`
+              + `${start > 0 ? '&start=' + Math.floor(start) : ''}`;
   }
   function channel(i) {
     const c = channels[i];
@@ -117,7 +184,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     now = {kind: 'video', v, title};
     youtube([v], Math.max(0, Date.now() / 1000 - at));
     say(`📺 ${title || v}`);
-    if (share) onTogether?.(v, title, at);
+    if (share) onTogether?.({op: 'play', v, title, t: at, pos: Math.max(0, Date.now() / 1000 - at), at: Date.now() / 1000, paused: false});
   }
   video.addEventListener('ended', () => { const c = channels[now.i]; if (now.kind === 'channel' && c?.files?.length > 1) { file++; local(c); } });
   fetch('tv.json', {cache: 'no-store'}).then(r => {
@@ -182,7 +249,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     sound = on;
     try { localStorage.setItem('chatroom.tv.sound', on ? '1' : '0'); } catch (e) {}
     if (isLocal()) { video.muted = !on; video.play().catch(() => {}); }
-    else if (playing) youtube(playing.ids, Date.now() / 1000 - playing.at);
+    else audio();
     say(on ? '🔊' : '🔇');
   }
   function menu() {
@@ -192,12 +259,27 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     menuEl.innerHTML = `<div class="o-tvbox"><div class="o-tvhead"><b>📺 ${esc(L.tvTitle)}</b>
         <label class="o-tvtogether"><input type="checkbox"> 👥 ${esc(L.tvTogether)}</label>
         <button data-full title="${esc(L.tvFull)}">⛶</button><button data-sound title="${esc(L.tvAudio)}">${sound ? '🔊' : '🔇'}</button><button data-x>✕</button></div>
+      <div class="o-tvctl"><button data-c="start" title="${esc(L.tvStart)}">⏮</button><button data-c="back">⏪ 10</button>
+        <button data-c="play" title="${esc(L.tvPlay)}">⏯</button><button data-c="fwd">10 ⏩</button>
+        <label>🔊 <input type="range" min="0" max="100" step="5" value="${vol}" data-vol></label><span class="o-tvtime"></span></div>
       <div class="o-tvtabs"><button data-tab="channels">${esc(L.tvChannels)}</button><button data-tab="search">🔎 ${esc(L.tvYoutube)}</button></div>
       <div class="o-tvbody"></div></div>`;
     menuEl.addEventListener('pointerdown', e => { e.stopPropagation(); if (e.target === menuEl) close(); });
     menuEl.addEventListener('wheel', e => e.stopPropagation());
     menuEl.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') close(); });
     menuEl.addEventListener('change', e => { if (e.target.closest('.o-tvtogether')) together = e.target.checked; });
+    menuEl.addEventListener('input', e => {
+      if (e.target.dataset.vol === undefined) return;
+      vol = +e.target.value;
+      try { localStorage.setItem('chatroom.tv.vol', String(vol)); } catch (err) {}
+      if (vol > 0 && !sound) { setSound(true); menuEl.querySelector('[data-sound]').textContent = '🔊'; } else audio();
+    });
+    const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    const tick = setInterval(() => {
+      if (!menuEl) return clearInterval(tick);
+      const el = menuEl.querySelector('.o-tvtime'), d = isLocal() ? video.duration : ytDur;
+      if (el) el.textContent = now.kind === 'off' ? '' : `${paused() ? '⏸' : '▶'} ${clock(position())}${d ? ' / ' + clock(d) : ''}`;
+    }, 500);
     menuEl.addEventListener('submit', async e => {
       e.preventDefault(); query = e.target.q.value.trim(); if (!query) return;
       results = []; menuEl.querySelector('.o-tvgrid').innerHTML = `<div class="o-meta">${esc(t().tvLooking)}</div>`;
@@ -213,6 +295,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
       if (b.dataset.x !== undefined) return close();
       if (b.dataset.full !== undefined) return fullscreen();
       if (b.dataset.sound !== undefined) { setSound(!sound); b.textContent = sound ? '🔊' : '🔇'; return; }
+      if (b.dataset.c) return control(b.dataset.c);
       if (b.dataset.tab) { tab = b.dataset.tab; return drawMenu(); }
       if (b.dataset.ch) { channel(+b.dataset.ch); return close(); }
       if (b.dataset.v) { watch(b.dataset.v, b.dataset.title, Date.now() / 1000, together && linked()); return close(); }
@@ -233,7 +316,19 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     /** how far a point is from the remote (for E in first person) */
     near: p => remote ? Math.hypot(p.x - remote.position.x, p.z - remote.position.z) : Infinity,
     /** a friend chose a video to watch together */
-    together(line, who) { if (line.v && line.v !== now.v) { watch(line.v, line.title, line.t, false); say(`📺 ${who}: ${line.title || line.v}`); } },
+    together(line, who) {
+      if (!line.v) return;
+      const nowS = Date.now() / 1000, stop = line.op === 'pause' || line.paused;
+      const pos = Math.max(0, line.pos !== undefined ? line.pos + (stop ? 0 : nowS - (line.at || nowS)) : nowS - (line.t || nowS));
+      if (line.v !== now.v) {
+        now = {kind: 'video', v: line.v, title: line.title};
+        youtube([line.v], pos); holdPause = stop; if (stop) ytState = 2;
+        say(`📺 ${who}: ${line.title || line.v}`);
+        return;
+      }
+      seek(pos); run(!stop);
+      say(`📺 ${who} ${stop ? '⏸' : line.op === 'seek' ? '⏩' : '▶'}`);
+    },
     /** each frame: YouTube's player follows the screen on the page, and hides when the screen cannot be seen */
     update(time) {
       if (now.kind === 'off' || (now.kind === 'channel' && channels[now.i]?.files)) return;

@@ -9,7 +9,7 @@
       "name": "chatroom",
       "source": "./plugins/chatroom",
       "description": "Live group chat for agents, with instant alerts, a silence timer with progress percentages, idle agents woken by tags, pictures, quick commands, a WhatsApp-style live viewer where you can write, tag and send pictures to everyone, a 3D voxel office that shows what each agent is doing, and a /stanza pane in the terminal.",
-      "version": "0.8.3"
+      "version": "0.8.4"
     }
   ]
 }
