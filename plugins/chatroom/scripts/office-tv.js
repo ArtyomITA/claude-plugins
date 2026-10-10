@@ -1,6 +1,7 @@
 // The lounge TV with real videos. A channel is a folder of the user's own videos (~/.claude/chatroom/tv/<channel>/,
 // served by the viewer) played on the screen as a texture, or a list of YouTube videos played by YouTube's own player
-// laid over the screen. Every channel loops forever; the remote control on the low table zaps to the next one.
+// laid over the screen. The remote opens a menu: the channels, and a search on YouTube. With a friend linked, a YouTube
+// video can be watched together: the choice goes through the common room and both TVs play it from the same second.
 
 /** the projective transform taking the rectangle w x h onto the quad q (4 points, clockwise from top left), as CSS */
 function quadMatrix(w, h, q) {
@@ -25,8 +26,32 @@ function quadMatrix(w, h, q) {
   return `matrix3d(${[a, d, 0, g, bb, e, 0, hh, 0, 0, 1, 0, c, f, 0, 1].join(',')})`;
 }
 
-export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, raycastables, say}) {
-  if (!tvMesh) return {update() {}, next() {}, near: () => Infinity, remote: null};
+const CSS = `
+.o-tvmenu { position: absolute; inset: 0; background: rgba(6,8,14,.66); display: flex; align-items: center; justify-content: center; z-index: 30; }
+.o-tvbox { width: min(760px, 94vw); max-height: 86%; display: flex; flex-direction: column; background: #10131b; color: #e8eaf0; border-radius: 14px;
+           box-shadow: 0 18px 50px rgba(0,0,0,.55); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+.o-tvhead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: linear-gradient(90deg, #1d2333, #151a26); }
+.o-tvhead b { font-size: 16px; flex: 1; }
+.o-tvtabs { display: flex; gap: 6px; padding: 10px 14px 0; }
+.o-tvtabs button, .o-tvhead button, .o-tvsearch button { background: #222a3a; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; }
+.o-tvtabs button.o-on { background: #e53935; border-color: #e53935; }
+.o-tvbody { padding: 12px 14px 14px; overflow: auto; }
+.o-tvgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.o-tvcard { background: #1a2030; border: 1px solid #263048; border-radius: 10px; overflow: hidden; cursor: pointer; text-align: left; color: inherit; font: inherit; padding: 0; }
+.o-tvcard:hover, .o-tvcard:focus-visible { border-color: #e53935; outline: none; }
+.o-tvcard.o-on { border-color: #ffd54f; }
+.o-tvcard img, .o-tvcard .o-tvicon { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #0b0e15; }
+.o-tvcard .o-tvicon { display: flex; align-items: center; justify-content: center; font-size: 34px; }
+.o-tvcard div { padding: 6px 8px 8px; }
+.o-tvcard small { display: block; opacity: .6; margin-top: 2px; }
+.o-tvsearch { display: flex; gap: 8px; margin-bottom: 10px; }
+.o-tvsearch input { flex: 1; background: #0b0e15; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 7px 10px; font: inherit; }
+.o-tvtogether { display: flex; align-items: center; gap: 6px; opacity: .9; }
+`;
+
+export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, raycastables, say, t, linked, onTogether}) {
+  if (!tvMesh) return {update() {}, menu() {}, near: () => Infinity, remote: null, together() {}, open: () => false};
+  const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   // the screen: on the TV's front, near its top, 16:9
   tvMesh.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(tvMesh), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
@@ -51,56 +76,122 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     scene.add(remote);
   }
 
-  // what plays: a video element for the user's files, YouTube's player for the YouTube lists
+  // what plays: a video element for the user's files, YouTube's player (big, so it sends high quality) for YouTube
   const video = Object.assign(document.createElement('video'), {muted: true, playsInline: true, preload: 'auto'});
   const tex = new THREE.VideoTexture(video); tex.colorSpace = THREE.SRGBColorSpace;
   const frame = Object.assign(document.createElement('iframe'), {allow: 'autoplay; encrypted-media', title: 'TV', tabIndex: -1});
-  const FW = 640, FH = 360;
+  const FW = 1280, FH = 720;
   Object.assign(frame.style, {position: 'absolute', left: '0', top: '0', width: FW + 'px', height: FH + 'px', border: '0', transformOrigin: '0 0',
                               pointerEvents: 'none', display: 'none', zIndex: '1', background: '#000'});
   root.appendChild(frame);
-  let channels = [], ch = -1, file = 0, seenAt = 0, hidden = true;
+  let channels = [], now = {kind: 'off'}, file = 0, seenAt = 0, hidden = true, menuEl = null;
 
-  function play() {
-    const c = channels[ch];
-    if (!c) return;
-    if (c.files) {
-      frame.style.display = 'none'; frame.src = 'about:blank';
-      video.loop = c.files.length === 1;
-      video.src = `tv/${encodeURIComponent(c.name)}/${encodeURIComponent(c.files[file % c.files.length])}`;
-      video.play().catch(() => {});
-      screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
-    } else {
-      video.pause(); video.removeAttribute('src'); video.load();
-      screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
-      const ids = c.youtube;
-      frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=1&controls=0&loop=1&playlist=${ids.join(',')}&playsinline=1&rel=0&modestbranding=1`;
-    }
+  function local(c) {
+    frame.style.display = 'none'; frame.src = 'about:blank';
+    video.loop = c.files.length === 1;
+    video.src = `tv/${encodeURIComponent(c.name)}/${encodeURIComponent(c.files[file % c.files.length])}`;
+    video.play().catch(() => {});
+    screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
   }
-  video.addEventListener('ended', () => { const c = channels[ch]; if (c?.files?.length > 1) { file++; play(); } });
-  fetch('tv.json', {cache: 'no-store'}).then(r => r.ok ? r.json() : {channels: []}).then(d => { channels = d.channels || []; if (channels.length) { ch = 0; play(); } }).catch(() => {});
+  function youtube(ids, start = 0) {
+    video.pause(); video.removeAttribute('src'); video.load();
+    screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
+    frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=1&controls=0&loop=1&playlist=${ids.join(',')}`
+              + `&playsinline=1&rel=0&modestbranding=1&vq=hd720${start > 0 ? '&start=' + Math.floor(start) : ''}`;
+  }
+  function channel(i) {
+    const c = channels[i];
+    if (!c) return;
+    now = {kind: 'channel', i, name: c.name}; file = 0;
+    if (c.files) local(c); else youtube(c.youtube);
+    say(`📺 ${c.name}`);
+  }
+  /** a YouTube video; `at` is when it started (seconds since 1970), so a friend joins at the same second */
+  function watch(v, title, at = Date.now() / 1000, share = false) {
+    now = {kind: 'video', v, title};
+    youtube([v], Math.max(0, Date.now() / 1000 - at));
+    say(`📺 ${title || v}`);
+    if (share) onTogether?.(v, title, at);
+  }
+  video.addEventListener('ended', () => { const c = channels[now.i]; if (now.kind === 'channel' && c?.files?.length > 1) { file++; local(c); } });
+  fetch('tv.json', {cache: 'no-store'}).then(r => {
+    if (!r.ok) { say(t().oldServer); return {channels: []}; }                // the viewer server predates the TV
+    return r.json();
+  }).then(d => { channels = d.channels || []; if (channels.length && now.kind === 'off') channel(0); }).catch(() => {});
+
+  // the menu: channels and a YouTube search, with "watch together" when a friend is linked
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const dur = s => s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '';
+  let tab = 'channels', results = [], query = '', together = true;
+  function drawMenu() {
+    if (!menuEl) return;
+    const L = t();
+    const cards = tab === 'channels'
+      ? channels.map((c, i) => `<button class="o-tvcard${now.kind === 'channel' && now.i === i ? ' o-on' : ''}" data-ch="${i}">${c.youtube
+          ? `<img alt="" src="https://i.ytimg.com/vi/${c.youtube[0]}/mqdefault.jpg">` : '<span class="o-tvicon">🎞️</span>'}<div>${esc(c.name)}<small>${c.youtube ? 'YouTube' : L.tvLocal(c.files.length)}</small></div></button>`).join('')
+        || `<div class="o-meta">${esc(L.tvNoChannels)}</div>`
+      : results.map(r => `<button class="o-tvcard${now.v === r.id ? ' o-on' : ''}" data-v="${r.id}" data-title="${esc(r.title)}"><img alt="" src="https://i.ytimg.com/vi/${r.id}/mqdefault.jpg">`
+          + `<div>${esc(r.title)}<small>${esc(r.channel)} ${dur(r.duration)}</small></div></button>`).join('') || `<div class="o-meta">${esc(query ? L.tvNothing : L.tvSearchHint)}</div>`;
+    menuEl.querySelector('.o-tvbody').innerHTML = (tab === 'search'
+      ? `<form class="o-tvsearch"><input name="q" value="${esc(query)}" placeholder="${esc(L.tvSearchPh)}" autocomplete="off"><button>🔎 ${esc(L.tvSearch)}</button></form>` : '')
+      + `<div class="o-tvgrid">${cards}</div>`;
+    menuEl.querySelectorAll('.o-tvtabs button').forEach(b => b.classList.toggle('o-on', b.dataset.tab === tab));
+    const tg = menuEl.querySelector('.o-tvtogether'); tg.style.display = linked() ? '' : 'none'; tg.querySelector('input').checked = together;
+    const input = menuEl.querySelector('.o-tvsearch input'); if (input && !query) input.focus();
+  }
+  function menu() {
+    if (menuEl) { menuEl.remove(); menuEl = null; return; }
+    const L = t();
+    menuEl = document.createElement('div'); menuEl.className = 'o-tvmenu';
+    menuEl.innerHTML = `<div class="o-tvbox"><div class="o-tvhead"><b>📺 ${esc(L.tvTitle)}</b>
+        <label class="o-tvtogether"><input type="checkbox"> 👥 ${esc(L.tvTogether)}</label><button data-x>✕</button></div>
+      <div class="o-tvtabs"><button data-tab="channels">${esc(L.tvChannels)}</button><button data-tab="search">🔎 ${esc(L.tvYoutube)}</button></div>
+      <div class="o-tvbody"></div></div>`;
+    menuEl.addEventListener('pointerdown', e => { e.stopPropagation(); if (e.target === menuEl) close(); });
+    menuEl.addEventListener('wheel', e => e.stopPropagation());
+    menuEl.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') close(); });
+    menuEl.addEventListener('change', e => { if (e.target.closest('.o-tvtogether')) together = e.target.checked; });
+    menuEl.addEventListener('submit', async e => {
+      e.preventDefault(); query = e.target.q.value.trim(); if (!query) return;
+      results = []; menuEl.querySelector('.o-tvgrid').innerHTML = `<div class="o-meta">${esc(t().tvLooking)}</div>`;
+      try {
+        const r = await fetch('tv/search?q=' + encodeURIComponent(query), {cache: 'no-store'});
+        results = r.ok ? (await r.json()).results : [];
+        if (!r.ok) say(r.status === 404 ? t().oldServer : await r.text());
+      } catch (err) { results = []; }
+      drawMenu();
+    });
+    menuEl.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.x !== undefined) return close();
+      if (b.dataset.tab) { tab = b.dataset.tab; return drawMenu(); }
+      if (b.dataset.ch) { channel(+b.dataset.ch); return close(); }
+      if (b.dataset.v) { watch(b.dataset.v, b.dataset.title, Date.now() / 1000, together && linked()); return close(); }
+    });
+    root.appendChild(menuEl);
+    drawMenu();
+  }
+  const close = () => { if (menuEl) { menuEl.remove(); menuEl = null; } };
 
   const _p = new THREE.Vector3(), _ray = new THREE.Raycaster(), corners = [[-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2], [-w / 2, -h / 2]];
   return {
     remote,
+    menu,
+    open: () => !!menuEl,
     /** how far a point is from the remote (for E in first person) */
     near: p => remote ? Math.hypot(p.x - remote.position.x, p.z - remote.position.z) : Infinity,
-    next() {
-      if (!channels.length) return say('📺 —');
-      ch = (ch + 1) % channels.length; file = 0; play();
-      say(`📺 ${ch + 1}/${channels.length} · ${channels[ch].name}`);
-    },
+    /** a friend chose a video to watch together */
+    together(line, who) { if (line.v && line.v !== now.v) { watch(line.v, line.title, line.t, false); say(`📺 ${who}: ${line.title || line.v}`); } },
     /** each frame: YouTube's player follows the screen on the page, and hides when the screen cannot be seen */
-    update(now) {
-      const c = channels[ch];
-      if (!c || c.files) return;
+    update(time) {
+      if (now.kind === 'off' || (now.kind === 'channel' && channels[now.i]?.files)) return;
       const rect = renderer.domElement.getBoundingClientRect(), rr = root.getBoundingClientRect();
       const facing = _p.copy(camera.position).sub(at).dot(n) > 0.05;
       const q = corners.map(([x, y]) => { _p.set(x, y, 0); screen.localToWorld(_p); _p.project(camera);
                                           return [(_p.x * 0.5 + 0.5) * rect.width + rect.left - rr.left, (-_p.y * 0.5 + 0.5) * rect.height + rect.top - rr.top, _p.z]; });
       let show = facing && q.every(p => p[2] < 1) && q.some(p => p[0] > 0 && p[0] < rect.width && p[1] > 0 && p[1] < rect.height);
-      if (show && now - seenAt > 0.25) {                                     // something in front of the screen hides it
-        seenAt = now;
+      if (show && time - seenAt > 0.25) {                                    // something in front of the screen hides it
+        seenAt = time;
         const dist = camera.position.distanceTo(at);
         _ray.set(camera.position, _p.copy(at).sub(camera.position).normalize());
         const hit = _ray.intersectObjects(scene.children, true).find(x => x.object.visible && x.object !== screen && !x.object.isSprite && !x.object.userData.person

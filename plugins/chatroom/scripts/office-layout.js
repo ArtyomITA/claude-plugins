@@ -34,7 +34,7 @@ export const CATALOG = {
   printer: {model: 'printer', foot: [1.0, 0.8], fx: {paper: [0, 1.1, 0.2]}},
   planter: {model: 'planter', args: ['seed'], foot: [0.5, 0.5]},
   floorLamp: {model: 'floorLamp', foot: [0.35, 0.35], fx: {light: [0, 1.85, 0]}},
-  foosball: {model: 'foosball', foot: [1.4, 0.8],
+  foosball: {model: 'foosball', foot: [1.4, 0.8], game: true,
              spots: [{x: 0, z: -0.75, rot: 0, tag: 'play'}, {x: 0, z: 0.75, rot: PI, tag: 'play'}]},
 };
 
@@ -67,8 +67,10 @@ Object.assign(CATALOG, {
   barCounter: {model: 'barCounter', args: ['len'], foot: [3.0, 0.65]},
   vending: {model: 'vendingMachine', foot: [0.9, 0.8]},
   lockers: {model: 'lockers', args: ['n', 'color'], foot: [1.6, 0.5]},
-  pingPong: {model: 'pingPong', foot: [2.7, 1.5],
+  pingPong: {model: 'pingPong', foot: [2.7, 1.5], game: true,
              spots: [{x: -1.6, z: 0, rot: PI / 2, tag: 'play'}, {x: 1.6, z: 0, rot: -PI / 2, tag: 'play'}]},
+  poolTable: {model: 'poolTable', foot: [2.4, 1.4], game: true,
+              spots: [{x: -0.6, z: 1.0, rot: PI, tag: 'play'}, {x: 0.6, z: 1.0, rot: PI, tag: 'play'}, {x: -1.5, z: 0, rot: -PI / 2, tag: 'play'}]},
   beanBag: {model: 'beanBag', args: ['color'], foot: [0.7, 0.7], seats: [{x: 0, z: 0.05, y: -0.15, rot: 0, pose: 'sofa', tag: 'coffee'}]},
   reception: {model: 'receptionDesk', foot: [2.4, 0.8]},
   binders: {model: 'binderShelf', args: ['seed'], foot: [1.1, 0.5]},
@@ -157,7 +159,7 @@ export const DEFAULT_LAYOUT = {
     {type: 'console', x: -12.2, y: 0.45, z: 0.45, rot: PI}, {type: 'armchair', x: -12.2, z: -3.8, rot: 0, color: '#6d5d8a'},
     {type: 'floorLamp', x: -14.5, z: -4.1}, {type: 'plantTall', x: -8.6, z: 0.6},
     // games corner
-    {type: 'foosball', x: -13.2, z: -8.4}, {type: 'pingPong', x: -10.4, z: -6.4},
+    {type: 'foosball', x: -13.2, z: -8.4}, {type: 'pingPong', x: -10.4, z: -6.4}, {type: 'poolTable', x: -10.6, z: -8.85},
     {type: 'beanBag', x: -14.2, z: -5.4, rot: 0.6, color: '#43a047'}, {type: 'beanBag', x: -13.0, z: -5.2, rot: 0.2, color: '#e53935'},
     {type: 'tvWall', x: -14.82, y: 1.0, z: -7.4, rot: PI / 2, pack: 'Misc/Electronics/Office_Misc_TV_Wall_03'},
     {type: 'plantTall', x: -8.6, z: -9.4},

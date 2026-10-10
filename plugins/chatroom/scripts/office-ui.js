@@ -1,6 +1,8 @@
 // The HTML layer over the 3D office: name tags, speech bubbles, progress rings, the top bar, the inspector,
 // and what gets your attention when an agent waits for you (tab title, favicon, chime, desktop notification).
 
+import {poolRack} from './office-games.js';
+
 const CSS = `
 #office { position: fixed; inset: 0 auto 0 0; width: 100vw; background: #1b1d27; z-index: 1; overflow: hidden;
   font: 13px/1.3 "Segoe UI", system-ui, sans-serif; color: #f4f1ea; display: none; }
@@ -145,13 +147,21 @@ export const L = {
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
        quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first',
+       askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
+       pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
+       turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
+       joinPool: n => `Play pool with ${n}`, newPool: 'Play pool with a friend, in turns', poolFriends: 'Link with a friend to play pool together',
+       poolShot: 'takes a shot', poolOpens: 'sets up the pool table', poolJoins: 'joins the pool table', hint_game: 'play at this table',
        run: 'Run', lendFull: 'Full help: a lent agent works for real in its own folder (commands, a venv, tests)',
        lendSafe: 'Cautious help: a lent agent only talks and writes drafts', lendSwitch: 'change', roomChatOn: 'Friends read the room chat and write to everyone in it', roomChatOff: 'The room chat stays yours (friends only see the common room)',
        chosenWait: 'chosen: waiting for the other', pick: {sasso: 'rock', carta: 'paper', forbici: 'scissors'}, oldServer: 'This viewer server started before the update: restart it (and your friend restarts theirs) to see each other move.', friendDoor: 'Your friend opens this door when you are their guest',
        helpTitle: 'Ask for help', askPlaceholder: 'What do you need? (some research, a plan, a change to your files)', askGo: 'Ask',
        visit: h => `Visit ${h}'s office`, requestsTitle: 'Help requests', lend: 'Lend an agent', decline: 'Decline',
        lent: h => `${h} is on it`, declined: 'declined', pending: 'waiting for an answer', visiting: h => `Visiting ${h}'s office`, back: 'Back to my office',
-       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'change channel (remote)', look: 'Look', lookSkin: 'Skin', lookHair: 'Hair', lookTop: 'Top', lookPants: 'Trousers', save: 'Save', close: 'Close',
+       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'remote: channels and YouTube', tvTitle: 'TV', tvTogether: 'Watch together', tvChannels: 'Channels', tvYoutube: 'YouTube',
+       tvLocal: n => `your videos · ${n}`, tvNoChannels: 'No channels yet: put videos in ~/.claude/chatroom/tv/<channel>/', tvNothing: 'Nothing found.',
+       tvSearchHint: 'Search any video on YouTube: it plays in high quality on the TV.', tvSearchPh: 'Search YouTube…', tvSearch: 'Search',
+       tvLooking: 'Looking…', tvPuts: 'puts on the TV', look: 'Look', lookSkin: 'Skin', lookHair: 'Hair', lookTop: 'Top', lookPants: 'Trousers', save: 'Save', close: 'Close',
        lookNames: {short: 'short', spiky: 'spiky', bob: 'bob', bun: 'bun', long: 'long', cap: 'cap', beanie: 'beanie', bald: 'bald', suit: 'suit', cardigan: 'cardigan', hoodie: 'hoodie', polo: 'polo'},
        hint_board: 'look at the whiteboard', hintStop: 'stop looking', go: 'Walk over', edit: 'Furnish', cmdTitle: 'quick commands for the room',
        hint_cmds: 'quick commands', cmdSent: c => `${c} sent to the room`,
@@ -179,13 +189,21 @@ export const L = {
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
        quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita',
+       askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
+       pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
+       turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
+       joinPool: n => `Gioca a biliardo con ${n}`, newPool: 'Gioca a biliardo con un amico, a turni', poolFriends: 'Collegati a un amico per giocare a biliardo insieme',
+       poolShot: 'tira', poolOpens: 'prepara il tavolo da biliardo', poolJoins: 'entra al tavolo da biliardo', hint_game: 'gioca a questo tavolo',
        run: 'Corri', lendFull: "Aiuto completo: l'agente prestato lavora davvero nella sua cartella (comandi, venv, test)",
        lendSafe: "Aiuto prudente: l'agente prestato parla e scrive solo bozze", lendSwitch: 'cambia', roomChatOn: 'Gli amici leggono la chat della stanza e scrivono a tutti', roomChatOff: 'La chat della stanza resta tua (gli amici vedono solo la sala comune)',
        chosenWait: 'scelto: aspetta l\'altro', pick: {sasso: 'sasso', carta: 'carta', forbici: 'forbici'}, oldServer: 'Il server del viewer e\' partito prima dell\'aggiornamento: riavvialo (e il tuo amico il suo) per vedervi muovere.', friendDoor: 'Questa porta si apre quando sei tu l\'ospite del tuo amico',
        helpTitle: 'Chiedi aiuto', askPlaceholder: 'Cosa ti serve? (una ricerca, un piano, una modifica ai tuoi file)', askGo: 'Chiedi',
        visit: h => `Visita l'ufficio di ${h}`, requestsTitle: 'Richieste di aiuto', lend: 'Presta un agente', decline: 'Rifiuta',
        lent: h => `${h} è al lavoro`, declined: 'rifiutata', pending: 'in attesa di risposta', visiting: h => `Sei in visita da ${h}`, back: 'Torna nel tuo ufficio',
-       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'cambia canale (telecomando)', look: 'Aspetto', lookSkin: 'Pelle', lookHair: 'Capelli', lookTop: 'Maglia', lookPants: 'Pantaloni', save: 'Salva', close: 'Chiudi',
+       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'telecomando: canali e YouTube', tvTitle: 'TV', tvTogether: 'Guarda insieme', tvChannels: 'Canali', tvYoutube: 'YouTube',
+       tvLocal: n => `video tuoi · ${n}`, tvNoChannels: 'Ancora nessun canale: metti dei video in ~/.claude/chatroom/tv/<canale>/', tvNothing: 'Nessun risultato.',
+       tvSearchHint: 'Cerca qualsiasi video su YouTube: parte in alta qualità sulla TV.', tvSearchPh: 'Cerca su YouTube…', tvSearch: 'Cerca',
+       tvLooking: 'Cerco…', tvPuts: 'mette in TV', look: 'Aspetto', lookSkin: 'Pelle', lookHair: 'Capelli', lookTop: 'Maglia', lookPants: 'Pantaloni', save: 'Salva', close: 'Chiudi',
        lookNames: {short: 'corti', spiky: 'a punta', bob: 'caschetto', bun: 'chignon', long: 'lunghi', cap: 'cappellino', beanie: 'berretto', bald: 'calvo', suit: 'giacca', cardigan: 'cardigan', hoodie: 'felpa', polo: 'polo'},
        hint_board: 'guarda la lavagna', hintStop: 'smetti di guardare', go: 'Vai da lui', edit: 'Arreda', cmdTitle: 'comandi rapidi per la stanza',
        hint_cmds: 'comandi rapidi', cmdSent: c => `${c} mandato alla stanza`,
@@ -210,12 +228,20 @@ export function replayGames(lines) {
     if (g.type === 'dadi') { dice.push({by: who, roll: g.roll, n: m.n}); continue; }
     let x = games.get(g.id);
     const busy = p => [...games.values()].some(y => !y.done && y.players.includes(p));   // one open game at a time
-    if (g.op === 'new') { if (!x && !busy(who)) games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {}}); continue; }
+    if (g.op === 'new') {
+      if (!x && !busy(who)) games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {},
+                                            ...(g.type === 'pool' ? {balls: poolRack(), groups: [null, null], shots: []} : {})});
+      continue;
+    }
     if (!x || x.done) continue;
     x.n = m.n;
     if (g.op === 'join') { if (x.players.length === 1 && x.players[0] !== who && !busy(who)) x.players.push(who); continue; }
     if (g.op === 'quit') { if (x.players.includes(who)) x.done = {quit: who, winner: x.players.find(p => p !== who) || null}; continue; }
     if (x.players.length < 2 || !x.players.includes(who)) continue;
+    if (x.type === 'pool' && g.op === 'shot' && who === x.players[x.turn] && Array.isArray(g.end) && (g.turn === 0 || g.turn === 1)) {
+      x.balls = g.end; x.groups = g.groups; x.turn = g.turn; x.shots.push({...g, n: m.n, by: who});      // the shooter's result is the truth
+      if (g.win === 0 || g.win === 1) x.done = {winner: x.players[g.win]};
+    }
     if (x.type === 'tris' && g.op === 'move' && who === x.players[x.turn] && !x.board[g.cell]) {
       x.board[g.cell] = x.turn ? 'O' : 'X'; x.turn = 1 - x.turn;
       const w = TRIS.find(([a, b, c]) => x.board[a] && x.board[a] === x.board[b] && x.board[a] === x.board[c]);
@@ -240,7 +266,7 @@ const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b
 const revealed = new Set();
 
 export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
-                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame}) {
+                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onAnswer}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   root.insertAdjacentHTML('beforeend', `<div class="o-tags"></div>
@@ -356,7 +382,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
           <h4>🙋 ${esc(L.helpTitle)}</h4><textarea data-ask maxlength="1500" placeholder="${esc(L.askPlaceholder)}"></textarea>
           <button data-j="ask">${esc(L.askGo)}</button><div class="o-c-gstat o-meta"></div></div>
         <hr><h4>🎮 ${esc(L.games)}</h4><div class="o-grid"><button data-g="tris">⭕ ${esc(L.tris)}</button><button data-g="morra">✊ ${esc(L.morra)}</button>
-          <button data-g="dadi">🎲 ${esc(L.dice)}</button></div><div class="o-c-games"></div>
+          <button data-g="pool">🎱 ${esc(L.pool)}</button><button data-g="dadi">🎲 ${esc(L.dice)}</button></div><div class="o-c-games"></div>
         <hr><h4>💬 ${esc(L.commonChat)}</h4><div class="o-c-msgs"></div>
         <div class="o-write"><input type="text" data-w="text" placeholder="${esc(L.commonWrite)}" maxlength="32000">
           <label class="o-attach" title="${esc(L.attach)}">📎<input type="file" data-w="file" accept=".md,.txt,.json,.diff,.patch,.py,.js,.ts,.csv,.yaml,.yml,.toml,.sh,.ps1" hidden></label></div>`;
@@ -373,6 +399,10 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         r.readAsDataURL(f);
       };
       write.onkeydown = e => { if (e.key === 'Enter' && write.value.trim()) { onCommonWrite(write.value.trim()); write.value = ''; } };
+      cp.onchange = e => {                                                   // new defaults of the automatic lending, while it is on
+        if (e.target.matches('[data-am], [data-ae], [data-amin]') && lastCommon?.lend_auto?.on) onShare('lend_auto', {on: true, model: cp.querySelector('[data-am]').value,
+                                                                effort: cp.querySelector('[data-ae]').value, minutes: +cp.querySelector('[data-amin]').value});
+      };
       cp.onclick = e => {
         const b = e.target.closest('button');
         if (!b) return;
@@ -383,6 +413,15 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         else if (b.dataset.s === 'lend') { const c = b.closest('.o-req'); onShare('lend', {id: +c.dataset.id, model: c.querySelector('[data-m]').value,
                                              effort: c.querySelector('[data-e]').value, minutes: +c.querySelector('[data-min]').value}); }
         else if (b.dataset.s === 'decline') onShare('decline', {id: +b.closest('.o-req').dataset.id});
+        else if (b.dataset.s === 'askguest') {
+          const t = cp.querySelector('[data-agt]');
+          if (t.value.trim()) { onShare('ask_guest', {name: cp.querySelector('[data-ag]').value, text: t.value.trim()}); t.value = ''; }
+        }
+        else if (b.dataset.s === 'lendin') { const c = b.closest('.o-req'); onAnswer(c.dataset.id, true, {model: c.querySelector('[data-m]').value,
+                                              effort: c.querySelector('[data-e]').value, minutes: +c.querySelector('[data-min]').value}); }
+        else if (b.dataset.s === 'declinein') onAnswer(b.closest('.o-req').dataset.id, false, {});
+        else if (b.dataset.s === 'autotoggle') onShare('lend_auto', {on: b.dataset.on === '1', model: cp.querySelector('[data-am]').value,
+                                                      effort: cp.querySelector('[data-ae]').value, minutes: +cp.querySelector('[data-amin]').value});
         else if (b.dataset.s === 'start') onShare('start', {via: cp.querySelector('[data-s="via"]').value});
         else if (b.dataset.s === 'lendmode') onShare('lend_mode', {mode: b.dataset.mode});
         else if (b.dataset.s === 'friendschat') onShare('friends_chat', {on: !!b.dataset.on});
@@ -393,9 +432,10 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
           if (b.dataset.g === 'dadi') {
             const roll = [...crypto.getRandomValues(new Uint8Array(2))].map(v => 1 + v % 6);
             onGame({type: 'dadi', op: 'roll', id, roll}, `🎲 ${me} ${L.rolls}: ${roll.join(' + ')} = ${roll[0] + roll[1]}`);
-          } else onGame({type: b.dataset.g, op: 'new', id}, `🎮 ${me} ${L.opens(b.dataset.g === 'tris' ? L.tris : L.morra)} (#${id})`);
+          } else onGame({type: b.dataset.g, op: 'new', id}, `🎮 ${me} ${L.opens(L[b.dataset.g])} (#${id})`);
         }
         else if (b.dataset.gm === 'join') onGame({type: b.dataset.type, op: 'join', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.joins} #${b.dataset.id}`);
+        else if (b.dataset.gm === 'openpool') onOpenPool();
         else if (b.dataset.gm === 'quit') onGame({type: b.dataset.type, op: 'quit', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.quits} #${b.dataset.id}`);
         else if (b.dataset.gm === 'move') onGame({type: 'tris', op: 'move', id: b.dataset.id, cell: +b.dataset.cell},
                                                  `🎮 ${lastCommon?.me} ${L.puts(b.dataset.mark, +b.dataset.cell + 1)}`);
@@ -423,6 +463,9 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         html += sh.guests.length ? sh.guests.map(g => `<div class="o-guest"><b style="background:${esc(g.color)}"></b>${esc(g.emoji)} ${esc(g.name)}
             <span class="o-meta">${g.agents ? '+' + g.agents : ''}</span><button data-s="kick" data-name="${esc(g.name)}">${esc(L.kick)}</button></div>`).join('')
           : `<div class="o-meta">${esc(L.noGuests)}</div>`;
+        if (sh.guests.length) html += `<div class="o-ask"><h4>🙋 ${esc(L.askFriend)}</h4><select data-ag>${sh.guests.map(g => `<option>${esc(g.name)}</option>`).join('')}</select>
+            <input data-agt placeholder="${esc(L.askPlaceholder)}" maxlength="1500"><button data-s="askguest">${esc(L.askGo)}</button></div>`;
+        html += (sh.asks || []).slice(-4).reverse().map(a => `<div class="o-meta">🙋 ${esc(a.to)}: ${esc(a.text.slice(0, 60))} · ${esc(a.status === 'approved' ? L.lent(a.helper) : a.status === 'declined' ? L.declined : L.pending)}</div>`).join('');
         const reqs = sh.requests || [];
         if (reqs.length) html += `<h4>🙋 ${esc(L.requestsTitle)}</h4>` + reqs.slice(-6).reverse().map(r => r.status === 'pending'
           ? `<div class="o-req" data-id="${r.id}"><b>${esc(r.guest)}</b>: ${esc(r.text)}<div class="o-reqrow">
@@ -443,6 +486,11 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         if (sh.sharing) html += `<div class="o-meta">💬 ${esc(s.friends_chat ? L.roomChatOn : L.roomChatOff)} <button data-s="friendschat" data-on="${s.friends_chat ? '' : '1'}">${esc(L.lendSwitch)}</button></div>`;
         html += `<div class="o-meta">🤝 ${esc(full ? L.lendFull : L.lendSafe)} <button data-s="lendmode" data-mode="${full ? 'safe' : 'full'}">${esc(L.lendSwitch)}</button></div>`;
       }
+      const au = s.lend_auto || {on: false, model: 'sonnet', effort: 'medium', minutes: 30}, opt = (list, v) => list.map(x => `<option${String(x) === String(v) ? ' selected' : ''}>${x}</option>`).join('');
+      html += `<div class="o-meta o-auto">⚡ ${esc(L.autoLend)} <button data-s="autotoggle" data-on="${au.on ? 0 : 1}">${esc(au.on ? L.autoOn : L.autoOff)}</button>
+        <select data-am>${opt(s.codex ? CODEX_MODELS : ['sonnet', 'haiku', 'opus'], au.model)}</select>
+        <select data-ae>${opt(s.codex ? ['medium', 'low', 'high', 'xhigh'] : ['medium', 'low', 'high', 'xhigh', 'max'], au.effort)}</select>
+        <select data-amin>${opt([15, 30, 60], au.minutes)}</select></div>`;
       if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
       const js = cp.querySelector('.o-c-jstat'), jhtml = br && br.joined
         ? `${esc(L.joinedAt(br.host || '?'))} <button data-j="leave">${esc(L.leave)}</button>${br.error ? '<br>' + esc(br.error) : ''}` : '';
@@ -452,13 +500,19 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       gb.style.display = br && br.joined ? '' : 'none';
       if (br && br.joined) {
         gb.querySelector('.o-visitbtn').textContent = '🚶 ' + L.visit(br.host || '?');
-        const gs = gb.querySelector('.o-c-gstat'), ghtml = (br.requests || []).map(r => `<div>${esc(r.text.slice(0, 70))} · ${esc(r.status === 'approved' ? L.lent(r.helper) : r.status === 'declined' ? L.declined : L.pending)}</div>`).join('');
+        const gs = gb.querySelector('.o-c-gstat'), ghtml = (br.asks || []).map(a => a.status === 'pending'
+          ? `<div class="o-req" data-id="${esc(a.id)}"><b>${esc(br.host || '?')}</b>: ${esc(a.text)}<div class="o-reqrow">
+              <select data-m>${(s.codex ? CODEX_MODELS : ['sonnet', 'haiku', 'opus']).map(m => `<option>${m}</option>`).join('')}</select>
+              <select data-e>${(s.codex ? ['medium', 'low', 'high', 'xhigh'] : ['medium', 'low', 'high', 'xhigh', 'max']).map(e => `<option>${e}</option>`).join('')}</select>
+              <select data-min><option value="30">30 min</option><option value="15">15 min</option><option value="60">60 min</option></select></div>
+              <button data-s="lendin" class="o-lend">🤝 ${esc(L.lend)}</button> <button data-s="declinein">${esc(L.decline)}</button></div>`
+          : `<div class="o-meta">${esc(br.host || '?')}: ${esc(a.text.slice(0, 60))} · ${esc(a.status === 'approved' ? L.lent(a.helper) : L.declined)}</div>`).join('') + (br.requests || []).map(r => `<div>${esc(r.text.slice(0, 70))} · ${esc(r.status === 'approved' ? L.lent(r.helper) : r.status === 'declined' ? L.declined : L.pending)}</div>`).join('');
         if (gs.dataset.html !== ghtml) { gs.innerHTML = ghtml; gs.dataset.html = ghtml; }
       }
       // the games: the latest ones first, with what you can do now
       const {games, dice} = replayGames(s.games || []), me = s.me, gbox = cp.querySelector('.o-c-games');
       const busy = games.some(x => !x.done && x.players.includes(me));
-      for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
+      for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"], [data-g="pool"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
       const ghtml = games.slice(0, 4).map(x => {
         const vs = x.players.map(esc).join(' – ') || '?', mine = x.players.includes(me), status = x.done
           ? (x.done.quit ? L.quitBy(x.done.quit) : x.done.draw ? L.draw : L.won(x.done.winner)) : x.players.length < 2 ? L.waitingPlayer : '';
@@ -469,6 +523,12 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
           const cells = x.board.map((v, i) => `<button class="o-cell${x.done?.line?.includes(i) ? ' o-win' : ''}" ${myTurn && !v ? `data-gm="move" data-id="${esc(x.id)}" data-cell="${i}" data-mark="${mark}"` : 'disabled'}>${v || ''}</button>`).join('');
           const turn = !x.done && x.players.length === 2 ? (myTurn ? L.yourTurn : L.theirTurn(x.players[x.turn])) : '';
           return `<div class="o-game"><b>⭕ ${esc(L.tris)}</b> <span class="o-meta">${vs}</span><div class="o-tris">${cells}</div><div class="o-meta">${esc(status || turn)}</div>${join}</div>`;
+        }
+        if (x.type === 'pool') {
+          const myTurn = !x.done && x.players.length === 2 && x.players[x.turn] === me;
+          const turn = !x.done && x.players.length === 2 ? (myTurn ? L.yourTurn : L.theirTurn(x.players[x.turn])) : '';
+          const open = !x.done && mine && x.players.length === 2 ? `<button data-gm="openpool">🎱 ${esc(L.openTable)}</button> ` : '';
+          return `<div class="o-game"><b>🎱 ${esc(L.pool)}</b> <span class="o-meta">${vs}</span><div class="o-meta">${esc(status || turn)}</div>${open}${join}</div>`;
         }
         const chosen = !!x.commits[me], picks = x.done ? x.players.map(p => `${esc(p)} ${PICK[x.reveals[p]] || '?'}`).join(' · ') : '';
         const buttons = mine && x.players.length === 2 && !chosen && !x.done

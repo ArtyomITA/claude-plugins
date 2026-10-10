@@ -59,11 +59,32 @@ def person(d):
             'state': 'break' if d.get('state') == 'break' else 'work'}
 
 
-GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',)}
+GONE = 15                                                   # seconds without a word: a guest (or the host) is gone
+GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play',),
+         'pool': ('new', 'join', 'shot', 'quit')}
+POOL_W, POOL_H = 800, 440                                   # the pool table's canvas (office-games.js)
+
+
+def num(x, lo, hi):
+    """a number in lo..hi (NaN and infinity are out: they would break the JSON of the room)"""
+    try:
+        v = float(x)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError('a number was expected')
+    if not lo <= v <= hi:
+        raise ValueError('a number out of its range')
+    return v
 
 
 def clean_game(g):
     """a game move, checked: the game and its id, the kind of move, and only the fields that move needs"""
+    try:
+        return _clean_game(g)
+    except (OverflowError, TypeError):                 # int(infinity), int([]): a bad number is a bad move, not a crash
+        raise ValueError('a game move has a bad number')
+
+
+def _clean_game(g):
     if not isinstance(g, dict):
         raise ValueError('a game move must be an object')
     kind, op, gid = str(g.get('type', '')), str(g.get('op', '')), re.sub(r'[^a-z0-9]', '', str(g.get('id', '')))[:12]
@@ -82,6 +103,33 @@ def clean_game(g):
         out['pick'], out['salt'] = str(g.get('pick', '')), str(g.get('salt', ''))
         if out['pick'] not in ('sasso', 'carta', 'forbici') or not re.fullmatch(r'[0-9a-f]{8,32}', out['salt']):
             raise ValueError('a reveal is sasso, carta or forbici with its salt')
+    if kind == 'tv':                                  # watch together: a YouTube video, from when it started
+        out['v'] = str(g.get('v', ''))
+        try:
+            out['t'] = float(g.get('t') or 0)
+        except OverflowError:
+            out['t'] = 0.0
+        if not re.fullmatch(r'[A-Za-z0-9_-]{11}', out['v']):
+            raise ValueError('a YouTube video id has 11 letters, digits, - or _')
+        if not 1e9 <= out['t'] < 4e9:                 # seconds since 1970; also false for NaN and infinity, which would break the JSON
+            raise ValueError('the start time is seconds since 1970')
+        out['title'] = re.sub(r'[\x00-\x1f<>]', '', str(g.get('title', '')))[:120]
+    if op == 'shot':                                  # pool: the angle and power of the shot, where the 16 balls ended, whose turn, the winner
+        end = g.get('end')
+        if not isinstance(end, list) or len(end) != 16:
+            raise ValueError('a pool shot ends with 16 balls')
+        out['a'], out['p'] = round(num(g.get('a'), -10, 10), 5), round(num(g.get('p'), 0, 1), 4)
+        try:
+            out['end'] = [None if b is None else [round(num(b[0], 0, POOL_W), 1), round(num(b[1], 0, POOL_H), 1)] for b in end]
+        except (IndexError, KeyError, TypeError):
+            raise ValueError('a ball is null or [x, y]')
+        groups = g.get('groups')
+        if not isinstance(groups, list) or len(groups) != 2 or any(x not in (None, 'solids', 'stripes') for x in groups):
+            raise ValueError('pool groups are solids, stripes or nothing, for the two players')
+        out['groups'] = groups
+        out['turn'] = int(num(g.get('turn'), 0, 1))
+        if g.get('win') is not None:
+            out['win'] = int(num(g.get('win'), 0, 1))
     if op == 'roll':
         out['roll'] = [int(x) for x in (g.get('roll') or [])][:5]
         if not out['roll'] or not all(1 <= x <= 6 for x in out['roll']):
@@ -130,6 +178,8 @@ class Share:
         self.common, self.title, self.host, self.people_fn, self.office_fn = common, title, host, people, office
         self.room = room                                     # the room's own chat for friends: allowed(), read(since), config(), post(name, text)
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
+        self.asks = []                                       # help the host asks a guest for: {id, to, text, ts, status, helper, ...}
+        self.on_ask = self.on_line = None                    # chat.py hooks: a request came in (lend it by itself?), a guest line came in
         self.me_pos = None                                   # where the host's own figure is, from the viewer
         self.lock = threading.Lock()
         self.fails = deque()
@@ -140,6 +190,7 @@ class Share:
         self.pin = self.via = self.url = self.error = None
         self.guests = {}                                    # token -> {name, emoji, color, agents, seen, posts}
         self.requests = []
+        self.asks = []
 
     def start(self, via):
         if via not in VIAS:
@@ -217,7 +268,16 @@ class Share:
         n = self.common.append(name, str(text).strip()[:LINE_MAX], game=clean_game(game) if game else None)
         if cid:
             g['cids'].append(cid)
+        self._line({'from': name, 'text': str(text).strip()[:LINE_MAX]})
         return n
+
+    def _line(self, line):
+        """tell chat.py about a line a guest side wrote (a lent helper's words go to the main chat); never breaks the post"""
+        if self.on_line:
+            try:
+                self.on_line(line)
+            except Exception:
+                pass
 
     def doc(self, g, author, name, data, cid=None):
         """a document from a guest's side: at most 10 an hour per guest (taken once per cid)"""
@@ -236,6 +296,9 @@ class Share:
         n = add_doc(self.common, who, name, data)
         if cid:
             g['cids'].append(cid)
+        line = next((m for m in self.common.messages() if m['n'] == n), None)
+        if line:
+            self._line({'from': who, 'text': line['text'], 'doc': line.get('doc')})
         return n
 
     def room_post(self, g, text, cid=None):
@@ -267,7 +330,43 @@ class Share:
                 raise ValueError('wait for the host to answer the requests already sent')
             r = {'id': len(self.requests) + 1, 'guest': g['name'], 'text': text, 'ts': time.time(), 'status': 'pending'}
             self.requests.append(r)
-            return {'id': r['id']}
+        if self.on_ask:                                       # the host may have said: lend by yourself
+            try:
+                self.on_ask(r)
+            except Exception:
+                pass
+        return {'id': r['id']}
+
+    def ask_guest(self, name, text):
+        """the host asks a guest to lend one of their agents: the guest decides on their side, nothing runs before"""
+        text = str(text).strip()[:1500]
+        if not text:
+            raise ValueError('say what you need')
+        with self.lock:
+            if not any(g['name'] == name for g in self.guests.values()):
+                raise ValueError('that friend is not in the room')
+            if sum(1 for a in self.asks if a['to'] == name and a['status'] == 'pending') >= 2:
+                raise ValueError('wait for the friend to answer the asks already sent')
+            a = {'id': len(self.asks) + 1, 'to': name, 'text': text, 'ts': time.time(), 'status': 'pending'}
+            self.asks.append(a)
+            return {'id': a['id']}
+
+    def ask_answer(self, g, rid, ok, helper=None, model=None, minutes=None):
+        """a guest answers an ask of the host; the helper they lend is seen here as GUEST·HELPER"""
+        with self.lock:
+            a = next((a for a in self.asks if a['id'] == rid and a['to'] == g['name']), None)
+            if not a or a['status'] != 'pending':
+                raise ValueError('no such pending ask')
+            if ok:
+                minutes = int(num(minutes or 30, 5, 120))
+                a.update(helper=f"{g['name']}·{person({'name': helper})['name']}", model=str(model or '')[:24], minutes=minutes, until=time.time() + minutes * 60)
+            a['status'] = 'approved' if ok else 'declined'
+            return {}
+
+    def taken(self):
+        """the agents guests lend to the host right now, still within their time"""
+        now = time.time()
+        return [a for a in self.asks if a['status'] == 'approved' and a.get('until', 0) > now]
 
     def answer(self, rid, ok, helper=None, model=None, effort=None, minutes=None):
         with self.lock:
@@ -287,9 +386,12 @@ class Share:
     def people(self):
         """everyone in the common room from the outside: the guests and their agents, the host's agents"""
         with self.lock:
-            out = [{**{k: g[k] for k in ('name', 'emoji', 'color')}, 'state': 'break', 'guest': g['name'], 'pos': g.get('me')} for g in self.guests.values()]
-            for g in self.guests.values():
+            here = [g for g in self.guests.values() if time.time() - g.get('seen', 0) < GONE]
+            out = [{**{k: g[k] for k in ('name', 'emoji', 'color')}, 'state': 'break', 'guest': g['name'], 'pos': g.get('me')} for g in here]
+            for g in here:
                 out += [{**a, 'name': f"{g['name']}·{a['name']}", 'guest': g['name']} for a in g['agents']]
+        out += [{'name': a['helper'], 'emoji': '🤝', 'color': '#26a69a', 'state': 'work', 'guest': a['to']} for a in self.taken()
+                if not any(p['name'] == a['helper'] for p in out)]
         host = {'name': self.host, 'emoji': '👑', 'color': '#f5b400', 'state': 'break', 'guest': None, 'host': True, 'pos': self.me_pos}
         lent = [{'name': r['helper'], 'emoji': '🤝', 'color': '#26a69a', 'state': 'work', 'guest': None, 'helper_for': r['guest']} for r in self.helpers()]
         return out + [host] + [{**p, 'guest': None} for p in self.people_fn()] + lent
@@ -304,6 +406,7 @@ class Share:
         with self.lock:
             return {'sharing': bool(self.pin), 'via': self.via, 'url': self.url, 'pin': self.pin, 'error': self.error,
                     'requests': [{k: r[k] for k in ('id', 'guest', 'text', 'status', 'helper', 'model', 'effort', 'minutes') if k in r} for r in self.requests],
+                    'asks': [{k: a[k] for k in ('id', 'to', 'text', 'status', 'helper', 'model', 'minutes') if k in a} for a in self.asks],
                     'guests': [{k: g[k] for k in ('name', 'emoji', 'color')} | {'agents': len(g['agents'])} for g in self.guests.values()]}
 
 
@@ -354,7 +457,8 @@ def make_handler(share):
             since = int((re.search(r'(?:^|&)since=(\d+)', query) or [0, 0])[1])
             msgs = [{k: m[k] for k in ('n', 'time', 'from', 'text', 'doc', 'game') if k in m} for m in share.common.messages() if m['n'] > since][:200]
             mine = [{k: r[k] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes') if k in r} for r in share.requests if r['guest'] == g['name']]
-            self.send(200, {'title': share.title, 'host': share.host, 'messages': msgs, 'people': share.people(), 'requests': mine})
+            asks = [{k: a[k] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes') if k in a} for a in share.asks if a['to'] == g['name']]
+            self.send(200, {'title': share.title, 'host': share.host, 'messages': msgs, 'people': share.people(), 'requests': mine, 'asks': asks})
 
         def do_POST(self):
             path = self.path.split('?')[0]
@@ -386,7 +490,8 @@ def make_handler(share):
                     if isinstance(body.get('office'), dict):    # the guest's plan, for a visit by the host (checked when it is drawn)
                         o = body['office']
                         g['office'] = {'items': o.get('items') if isinstance(o.get('items'), list) else None,
-                                       'people': [p for p in (o.get('people') or [])[:40] if isinstance(p, dict)], 'title': str(o.get('title') or '')[:120]}
+                                       'people': [p for p in (o.get('people') or [])[:40] if isinstance(p, dict)], 'title': str(o.get('title') or '')[:120],
+                                       'common': clean_common(o.get('common'))}
                     return self.send(200, {})
                 if path == '/share/doc':              # a guest shares a document
                     try:
@@ -396,6 +501,8 @@ def make_handler(share):
                     return self.send(200, {'n': share.doc(g, body.get('from'), body.get('name'), data, body.get('cid'))})
                 if path == '/share/request':          # a guest asks the host to lend an agent
                     return self.send(200, share.ask(g, body.get('text', '')))
+                if path == '/share/askanswer':        # a guest answers an ask of the host
+                    return self.send(200, share.ask_answer(g, int(num(body.get('id'), 0, 1e6)), bool(body.get('ok')), body.get('helper'), body.get('model'), body.get('minutes')))
                 if path == '/share/leave':
                     share.kick(g['name'])
                     return self.send(200, {})
@@ -533,6 +640,12 @@ def clean_room_line(m):
             'text': str(m.get('text') or '')[:LINE_MAX], **({'kind': m['kind']} if m.get('kind') in ('status', 'idle') else {})}
 
 
+def clean_common(c):
+    """who of an office may spend a break in its common room (the visitor needs it to put the agents where the owner sees them)"""
+    c = c if isinstance(c, dict) else {}
+    return {'all': c.get('all') is True, 'who': [clean_name(x) for x in (c.get('who') if isinstance(c.get('who'), list) else [])[:40]]}
+
+
 def clean_room_config(c):
     """the host room's look, for drawing its chat: title, colours, who is who; nothing else"""
     c = c if isinstance(c, dict) else {}
@@ -583,8 +696,10 @@ class Bridge:
         self.dir, self.url, self.pin, self.me, self.people_fn = Path(common_dir), url.strip(), str(pin).strip(), me, people
         self.office_fn, self.outgoing, self.arrived, self.me_pos = office, outgoing, arrived, None
         self.room_lines, self.room_n, self.room_cfg, self.room_ok, self.room_next = [], 0, None, False, 0
+        self.heard = time.time()
         self.token = self.title = self.host = self.error = None
         self.n, self.people, self.requests, self.stopped = 0, [], [], threading.Event()
+        self.asks, self.on_asks, self.asks_seen = [], None, set()         # the host's asks for help; on_asks(new pending ones)
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def start(self):
@@ -648,14 +763,26 @@ class Bridge:
                     except (PermissionError, ValueError):
                         self.room_ok, self.room_next = False, time.time() + 5
                 self.people = [clean_person(p) for p in (feed.get('people') or [])[:60] if isinstance(p, dict)]
+                self.heard = time.time()
                 self.requests = [{k: str(r.get(k, ''))[:300] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes')}
                                  for r in (feed.get('requests') or [])[:20] if isinstance(r, dict)]
+                self.asks = [{k: str(a.get(k, ''))[:1500] for k in ('id', 'text', 'status', 'helper', 'model', 'minutes')}
+                             for a in (feed.get('asks') or [])[:20] if isinstance(a, dict)]
+                fresh = [a for a in self.asks if a['status'] == 'pending' and a['id'] not in self.asks_seen]
+                self.asks_seen.update(a['id'] for a in fresh)
+                if fresh and self.on_asks:
+                    try:
+                        self.on_asks(fresh)
+                    except Exception:
+                        pass
                 self.error = None
             except PermissionError as exc:
                 self.error = f'closed by the host: {exc}'
                 break
             except (ValueError, OSError) as exc:
                 self.error = str(exc)
+                if time.time() - self.heard > GONE:
+                    self.people = []
             self.stopped.wait(0.3)                             # often enough for the figures to walk smoothly
         (self.dir / 'link.json').unlink(missing_ok=True)
 
@@ -693,6 +820,14 @@ class Bridge:
     def ask(self, text):
         return call(self.url, '/share/request', self.token, {'text': text})
 
+    def answer_ask(self, rid, ok, helper=None, model=None, minutes=None):
+        """tell the host what we do with its ask for help"""
+        r = call(self.url, '/share/askanswer', self.token, {'id': int(rid), 'ok': bool(ok), 'helper': helper, 'model': model, 'minutes': minutes})
+        for a in self.asks:
+            if str(a['id']) == str(rid):
+                a['status'] = 'approved' if ok else 'declined'
+        return r
+
     def office(self):
         return call(self.url, '/share/office', self.token, timeout=15)
 
@@ -706,7 +841,7 @@ class Bridge:
 
     def status(self):
         return {'joined': bool(self.token) and not self.stopped.is_set(), 'url': self.url, 'host': self.host,
-                'title': self.title, 'error': self.error, 'requests': self.requests}
+                'title': self.title, 'error': self.error, 'requests': self.requests, 'asks': self.asks}
 
 
 def guest_link(common_dir):
@@ -749,6 +884,35 @@ def _prova():
         mirror = [json.loads(x) for x in (Path(tmp) / 'chat.jsonl').read_text(encoding='utf-8').splitlines()]
         assert [m['text'] for m in mirror] == ['benvenuti', 'ciao a tutti'], mirror
         assert any(p['name'] == 'MOTORE' for p in b.people) and any(p['name'] == 'BOB·RICERCA' for p in host.people())
+        g = next(iter(host.guests.values())); heard, g['seen'] = g['seen'], 0         # a guest silent for GONE seconds is gone
+        assert not any(p.get('guest') == 'BOB' for p in host.people())
+        g['seen'] = heard
+        tv = {'type': 'tv', 'op': 'play', 'id': 'ab12', 'v': 'dQw4w9WgXcQ', 't': time.time(), 'title': 'x<y>'}
+        assert clean_game(tv)['title'] == 'xy'
+        for bad in ({**tv, 't': float('nan')}, {**tv, 't': 10 ** 400}, {**tv, 't': 0}, {**tv, 'v': 'dQw4w9WgXcé'}):
+            try:
+                clean_game(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'a bad tv move got in: {bad}')
+        shot = {'type': 'pool', 'op': 'shot', 'id': 'p1', 'a': 1.5, 'p': 0.5, 'end': [[100, 200]] + [None] * 15, 'groups': [None, 'solids'], 'turn': 1}
+        assert clean_game(shot)['end'][0] == [100.0, 200.0] and clean_game({**shot, 'win': 0})['win'] == 0
+        for bad in ({**shot, 'a': float('nan')}, {**shot, 'p': 2}, {**shot, 'end': shot['end'][:15]}, {**shot, 'end': [[1e9, 5]] + [None] * 15},
+                    {**shot, 'end': [[1]] + [None] * 15}, {**shot, 'end': [5] + [None] * 15}, {**shot, 'groups': ['evens', None]}, {**shot, 'turn': 2}):
+            try:
+                clean_game(bad)
+            except (ValueError, TypeError):
+                continue
+            raise AssertionError(f'a bad pool shot got in: {bad}')
+        assert host.ask_guest('BOB', 'cerca')['id'] == 1                             # the host asks a guest; only that guest answers, with a clean name
+        for who, helper in (({'name': 'EVE'}, 'AIUTO1'), (g, 'AI UTO')):
+            try:
+                host.ask_answer(who, 1, True, helper, 'haiku', 20)
+            except ValueError:
+                continue
+            raise AssertionError('a wrong answer to an ask got in')
+        host.ask_answer(g, 1, True, 'AIUTO1', 'haiku', 20)
+        assert any(p['name'] == 'BOB·AIUTO1' and p['guest'] == 'BOB' for p in host.people())
         host.kick('BOB')
         for _ in range(40):
             time.sleep(0.15)

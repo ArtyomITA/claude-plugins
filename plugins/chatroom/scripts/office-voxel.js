@@ -551,6 +551,23 @@ export function pingPong() {
   for (const [x, z] of [[2, 2], [24, 2], [2, 12], [24, 12]]) v.box(x, 0, z, x, 6, z, '#37474f');
   return mesh(v, {pivot: [13.5, 0, 7.5]});
 }
+/** pool table, 2.4 x 1.4 m: wooden rails and legs, green cloth, six pockets, a racked triangle and the cue ball */
+export function poolTable() {
+  const v = new Vox(), wood = '#5d3a1a', felt = '#1b7a3a', hole = '#0c0c0c';
+  for (const [x, z] of [[1, 1], [43, 1], [1, 23], [43, 23]]) v.box(x, 0, z, x + 3, 11, z + 3, '#3e2723');
+  v.box(0, 12, 0, 47, 15, 27, '#4a2c14');
+  v.box(3, 16, 3, 44, 16, 24, (x, y, z) => x === 3 || x === 44 || z === 3 || z === 24 ? '#14572b' : felt);
+  v.box(0, 16, 0, 47, 17, 2, wood).box(0, 16, 25, 47, 17, 27, wood).box(0, 16, 3, 2, 17, 24, wood).box(45, 16, 3, 47, 17, 24, wood);
+  for (const x of [8, 15, 31, 38]) v.set(x, 17, 1, '#e8d8b0').set(x, 17, 26, '#e8d8b0');         // the diamonds on the long rails
+  for (const z of [8, 13, 19]) v.set(1, 17, z, '#e8d8b0').set(46, 17, z, '#e8d8b0');
+  for (const [x, z] of [[0, 0], [45, 0], [0, 25], [45, 25]]) v.box(x, 16, z, x + 2, 17, z + 2, hole);   // corner pockets
+  for (const z of [0, 25]) v.box(22, 16, z, 25, 17, z + 2, hole);                                  // side pockets
+  const balls = ['#f9a825', '#1565c0', '#c62828', '#111111', '#6a1b9a', '#ef6c00', '#2e7d32', '#6d1b1b'];
+  let k = 0;
+  for (let row = 0; row < 4; row++) for (let i = 0; i <= row; i++) v.set(33 + row * 2, 17, 13 - row + i * 2, balls[k++ % balls.length]);
+  v.set(12, 17, 14, '#fafafa');
+  return fine(v, [24, 0, 14]);
+}
 /** a bean bag: a soft lump with a dent to sit in */
 export function beanBag(color = '#ef6c00') {
   const v = new Vox();

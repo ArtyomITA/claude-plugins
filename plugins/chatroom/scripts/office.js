@@ -10,10 +10,11 @@ import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
-import {DEFAULT_LAYOUT, resolve, floorPlan, workstation} from './office-layout.js';
+import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
 import {createTV} from './office-tv.js';
-import {createUI, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
+import {createGames} from './office-games.js';
+import {createUI, replayGames, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
 
 const pref = (k, d) => { try { const v = localStorage.getItem('chatroom.office.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem('chatroom.office.' + k, JSON.stringify(v)); } catch (e) {} };
@@ -546,7 +547,8 @@ let localUser = 'USER';
 function deriveVisit() {
   const now = Date.now() / 1000, ppl = visit.people || [];
   DATA.config = {...DATA.config, participants: ppl.map(p => p.name), profiles: Object.fromEntries(ppl.map(p => [p.name, {emoji: p.emoji, color: p.color}])),
-                 user_name: localUser, self_names: [], title: visit.title, heartbeat: 3600};
+                 user_name: localUser, self_names: [], title: visit.title, heartbeat: 3600,
+                 common: {...DATA.config.common, all: !!visit.common?.all, who: visit.common?.who || []}};   // the owner's rule for the common room, not ours
   DATA.all = ppl.filter(p => p.state === 'break').map((p, i) => ({n: i + 1, from: p.name, kind: 'idle', text: '', ts: now}));
   DATA.state = {agents: {}}; DATA.loaded = true;
   derive();
@@ -700,6 +702,7 @@ function nearby() {
   if (d(BREW.pos) < 1.3) opts.push({kind: 'coffee', k: d(BREW.pos)});
   for (const s of sitSpots()) { const k = Math.min(d(s.pos), d(outOf(s))); if (k < 1.3) opts.push({kind: 'sit', seat: s, k: k + 0.2}); }
   if (loungeTv.near(boss.pos) < 1.4) opts.push({kind: 'zap', k: loungeTv.near(boss.pos)});
+  for (const g of GAME_TABLES) { const k = g.near(boss.pos); if (k < 0.8) opts.push({kind: 'game', game: g.type, k: k + 0.3}); }
   for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
   return opts.sort((a, b) => a.k - b.k)[0] || null;
 }
@@ -710,7 +713,8 @@ function interact() {
   if (t.kind === 'coffee') return walkTo(BREW.pos, BREW, brew);
   if (t.kind === 'sit') return walkTo(outOf(t.seat), t.seat);
   if (t.kind === 'talk') return talkTo(t.name);
-  if (t.kind === 'zap') return loungeTv.next();
+  if (t.kind === 'zap') return loungeTv.menu();
+  if (t.kind === 'game') return openGame(t.game);
   watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
 }
 let watching = null;
@@ -790,14 +794,19 @@ function tendMe(dt, t) {
   if (me.cup.visible && t > me.cupUntil) { me.cup.visible = false; if (me.act === 'coffee') me.act = 'idle'; }
   me.cup.rotation.x = -boss.parts.armR.rotation.x;                             // the cup stays upright in the hand
 }
-// a break place for an idle agent: one at random among the free ones (or its own desk), kept for 40 to 130 s,
-// then another at random; never the user's seat, never one another agent is heading to
+// a break place for an idle agent, the same for everyone who looks at this office (you, a friend visiting): chosen by a hash
+// of the agent's name and of the clock, not at random. It keeps the place 40 to 130 s, each agent on its own beat, then
+// takes another; never the user's seat, never one another agent is heading to
+const hash32 = str => { let h = 2166136261; for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619); return h >>> 0; };
 function breakSpot(p, desk, list, now) {
   if (p.breakAt && now < p.breakUntil && p.breakAt !== boss?.spot) return p.breakAt;
+  const span = 40 + hash32(p.name + '/span') % 90, wall = Date.now() / 1000 + hash32(p.name + '/phase') % span, slot = Math.floor(wall / span);
   const taken = new Set([...people.values()].filter(q => q !== p).map(q => q.breakAt));
-  const free = [desk.seat, ...list.filter(s => !taken.has(s) && s !== boss?.spot)];
-  p.breakAt = free[Math.floor(Math.random() * free.length)];
-  p.breakUntil = now + 40 + Math.random() * 90;
+  const free = [desk.seat, ...list.filter(s => s !== boss?.spot)];
+  let i = hash32(p.name + '/' + slot) % free.length;
+  for (let k = 0; k < free.length && taken.has(free[i]); k++) i = (i + 1) % free.length;
+  p.breakAt = free[i];
+  p.breakUntil = now + (slot + 1) * span - wall;
   return p.breakAt;
 }
 function sync() {
@@ -1009,7 +1018,7 @@ document.addEventListener('keydown', e => {
 }, true);
 document.addEventListener('keydown', e => {
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
-  if (!pov || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || (typing && typing.offsetParent !== null)) return;
+  if (!pov || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || (typing && typing.offsetParent !== null) || games.active()) return;
   if (typing) typing.blur();                                                // a hidden chat box must not eat the keys
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd'].includes(k)) { keys.add(k); e.preventDefault(); }
@@ -1037,6 +1046,8 @@ const ui = createUI(root, {
   onJoin: async (url, pin) => { const r = await post('join', url === null ? {leave: true} : {url, pin}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
   onCommonWrite: async text => { await post('common/post', {text}); pollCommon(); },
   onGame: async (game, text) => { const r = await post('common/post', {text, game}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onAnswer: async (id, ok, extra) => { const r = await post('join/answer', {id: +id, ok, ...extra}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
+  onOpenPool: () => { const g = myPool(); if (g?.players.length === 2) games.openPool(g); },
   onCommonDoc: async (name, data, error) => {
     if (error) return ui.roomTip(error, 20, 120);
     const r = await post('common/doc', {name, data}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon();
@@ -1079,6 +1090,8 @@ async function pollCommon() {
     }
     window.dispatchEvent(new CustomEvent('chatroom:common', {detail: commonState}));
     syncRemote();
+    if (typeof loungeTv !== 'undefined') tvFromFriends();
+    if (typeof games !== 'undefined') poolFromFriends();
   } catch (e) {}
 }
 setInterval(pollCommon, 2000);
@@ -1228,7 +1241,8 @@ renderer.domElement.addEventListener('click', e => {
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
-  if (hit?.object.userData.remote) return loungeTv.next();                       // the TV's remote: next channel
+  if (hit?.object.userData.remote) return loungeTv.menu();                       // the TV's remote: its menu
+  if (hit?.object.userData.game) return openGame(hit.object.userData.game);       // a games table: play
   const name = hit?.object.userData.person;
   if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
   select(null);
@@ -1410,7 +1424,59 @@ window.addEventListener('chatroom:data', () => ui.setLang(DATA.config.lang));
 const itemOf = m => (LAYOUT.items || [])[m.userData.src];
 const tvMesh = ITEM_MESHES.find(m => itemOf(m)?.type === 'tvStand');
 const tvTable = tvMesh && ITEM_MESHES.filter(m => itemOf(m)?.type === 'lowTable').sort((a, b) => a.position.distanceTo(tvMesh.position) - b.position.distanceTo(tvMesh.position))[0];
-const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: tvTable, raycastables, say: t => ui.placeName(t)});
+const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: tvTable, raycastables, say: t => ui.placeName(t), t: ui.t, linked,
+  onTogether: (v, title, at) => post('common/post', {text: `📺 ${commonState?.me || D.user} ${ui.t().tvPuts}: ${title || v}`,
+                                                  game: {type: 'tv', op: 'play', id: Math.random().toString(16).slice(2, 10), v, t: at, title}})});
+let lastTvN = null;
+/** a friend chose a video to watch together: our TV plays it from the same second */
+function tvFromFriends() {
+  const lines = (commonState?.games || []).filter(m => m.game?.type === 'tv'), top = lines.length ? lines[lines.length - 1].n : 0;
+  if (lastTvN === null) { lastTvN = top; return; }
+  for (const m of lines) if (m.n > lastTvN && m.from !== commonState.me) loungeTv.together(m.game, m.from);
+  lastTvN = Math.max(lastTvN, top);
+}
+
+// ------------------------------------------------------------------ the games corner: ping pong, foosball and pool tables
+// E next to a table in first person, or a click on it, opens its game (office-games.js). Pool with a friend goes through
+// the common room: a shot line carries where every ball ended, replayGames (office-ui.js) keeps the accepted ones.
+const myName = () => commonState?.me || D.user;
+const games = createGames({root, t: ui.t, me: myName,
+  sendShot: (id, s) => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolShot}`, game: {type: 'pool', op: 'shot', id, ...s}}).then(() => pollCommon())});
+const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(m => {
+  const type = itemOf(m).type, [w, d] = CATALOG[type].foot, c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
+  m.userData.game = type; raycastables.push(m);
+  /** metres from a point on the floor to the table's edge (0 on top of it) */
+  const near = p => { const x = p.x - m.position.x, z = p.z - m.position.z; return Math.hypot(Math.max(Math.abs(x * c - z * s) - w / 2, 0), Math.max(Math.abs(x * s + z * c) - d / 2, 0)); };
+  return {type, near};
+});
+const myPool = () => replayGames(commonState?.games || []).games.find(x => x.type === 'pool' && !x.done && x.players.includes(myName()));
+function openGame(type) {
+  if (type === 'pingPong') return games.pingPong();
+  if (type === 'foosball') return games.foosball();
+  const me = myName(), all = replayGames(commonState?.games || []).games, mine = myPool(), busy = all.some(x => !x.done && x.players.includes(me));
+  const join = !busy && all.find(x => x.type === 'pool' && !x.done && x.players.length === 1);
+  const act = async (op, id) => {
+    if (op === 'open') return games.openPool(mine);
+    const id2 = id || Math.random().toString(16).slice(2, 10);
+    const r = await post('common/post', {text: `🎱 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: 'pool', op, id: id2}});
+    if (r && !r.ok) ui.roomTip(await r.text(), 20, 120);
+    await pollCommon();
+    const g = myPool(); if (g?.players.length === 2) games.openPool(g);
+  };
+  games.poolMenu({friends: linked() && (!busy || !!mine), open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null,
+                  waiting: mine?.players.length === 1, join: join?.players[0] || null,
+                  start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open', join?.id)});
+}
+let poolSeen = 0;
+/** a friend shot at an open pool table: it plays the shot out (only the shots the replay accepted) */
+function poolFromFriends() {
+  let top = poolSeen;
+  for (const x of replayGames(commonState?.games || []).games) if (x.type === 'pool') for (const s of x.shots) {
+    if (s.n > poolSeen && s.by !== myName()) games.shot(x.id, s);
+    top = Math.max(top, s.n);
+  }
+  poolSeen = top;
+}
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();
 pollState();
