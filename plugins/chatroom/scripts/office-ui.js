@@ -389,6 +389,8 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
       if (lastCommon) this.commonState(lastCommon);
     },
     commonState(s) {
+      // a Codex host lends a Codex agent: 'default' is the session's own model, the others are the ones Codex documents
+      const CODEX_MODELS = ['default', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'];
       lastCommon = s;
       if (!cp.classList.contains('o-open') || !s) return;
       const L = t(), sh = s.share || {}, br = s.bridge, box = cp.querySelector('.o-c-share');
@@ -405,8 +407,8 @@ export function createUI(root, {onMode, onPov, onReset, onFollow, onQuality, onS
         const reqs = sh.requests || [];
         if (reqs.length) html += `<h4>🙋 ${esc(L.requestsTitle)}</h4>` + reqs.slice(-6).reverse().map(r => r.status === 'pending'
           ? `<div class="o-req" data-id="${r.id}"><b>${esc(r.guest)}</b>: ${esc(r.text)}<div class="o-reqrow">
-              <select data-m><option>sonnet</option><option>haiku</option><option>opus</option></select>
-              <select data-e><option>medium</option><option>low</option><option>high</option></select>
+              <select data-m>${(s.codex ? CODEX_MODELS : ['sonnet', 'haiku', 'opus']).map(m => `<option>${m}</option>`).join('')}</select>
+              <select data-e>${(s.codex ? ['medium', 'low', 'high', 'xhigh'] : ['medium', 'low', 'high']).map(e => `<option>${e}</option>`).join('')}</select>
               <select data-min><option value="30">30 min</option><option value="15">15 min</option><option value="60">60 min</option></select></div>
               <button data-s="lend" class="o-lend">🤝 ${esc(L.lend)}</button> <button data-s="decline">${esc(L.decline)}</button></div>`
           : `<div class="o-meta">${esc(r.guest)}: ${esc(r.text.slice(0, 60))} · ${esc(r.status === 'approved' ? L.lent(r.helper) : L.declined)}</div>`).join('');

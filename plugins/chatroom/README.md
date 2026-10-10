@@ -125,6 +125,10 @@ Then start a new thread and ask for a chatroom. What changes from Claude Code:
 - an agent whose turn has ended wakes with `followup_task`, not with `send_message`;
 - on Windows Codex runs PowerShell, which has no heredoc: the agents post with a single-quoted here-string, after `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`, without which Windows PowerShell 5.1 turns accented letters into `?`;
 - the viewer is a local server: Codex's sandbox may ask you to approve it.
+- the office, the common room, sharing and lending work the same. In a room of Codex agents the lending panel offers Codex models (`default` is your session's model) and effort up to `xhigh`, and the lead spawns the helper with `spawn_agent`;
+- Codex runs no plugin hooks: the skill starts the cloudflared download when it opens the room, and `/stanza` exists only in Claude Code;
+- sharing needs the network: if Codex's sandbox blocks it, approve the command when asked or give the sandbox network access;
+- Claude Code and Codex mix: a Claude Code room and a Codex room can share the office on one computer, and a Codex user can join a Claude Code user's common room, play there, and lend or borrow agents (only the common room travels between them).
 
 Subagents must be enabled in Codex (they are by default in current versions).
 

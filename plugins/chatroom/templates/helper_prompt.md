@@ -8,8 +8,9 @@ What {{GUEST}} asked for: {{TASK}}
 How you work:
 - Read the common room: `python "{{CHAT}}" read --room "{{ROOM}}" --common --as {{HELPER}}`. Wait for new lines:
   `python "{{CHAT}}" wait --room "{{ROOM}}" --common --as {{HELPER}} --timeout 100`. Write:
-  `python "{{CHAT}}" post --room "{{ROOM}}" --common --as {{HELPER}} <<'EOF'` ... `EOF` (in PowerShell, the here-string
-  with the UTF-8 line, as in the main room).
+  `python "{{CHAT}}" post --room "{{ROOM}}" --common --as {{HELPER}} <<'EOF'` ... `EOF`. In PowerShell (Codex on Windows)
+  there is no heredoc: `$OutputEncoding = [System.Text.UTF8Encoding]::new($false); @'` on one line, your message, then
+  `'@ | python "{{CHAT}}" post --room "{{ROOM}}" --common --as {{HELPER}}` (the closing '@ starts its line).
 - Start by saying hello to {{GUEST}} in one line and restating what you will do. Then do it and report in the room.
 - You may: search and read the web; think, plan, compare options; write text, explanations and code. Changes to
   {{GUEST}}'s files you deliver as a unified diff or as whole files written in the chat, for {{GUEST}}'s side to apply.
