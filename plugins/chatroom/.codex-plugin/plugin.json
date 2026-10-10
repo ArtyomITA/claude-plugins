@@ -1,6 +1,6 @@
 {
   "name": "chatroom",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Live group chat for agents: several agents discuss in parallel in one shared room, with instant alerts, a silence timer that forces status updates with a progress percentage, idle agents woken only by tags, quick commands, and a WhatsApp-style live viewer where you can write, tag and send commands to everyone.",
   "author": {
     "name": "ArtyomITA",
@@ -9,15 +9,24 @@
   "homepage": "https://github.com/ArtyomITA/claude-plugins/tree/main/plugins/chatroom",
   "repository": "https://github.com/ArtyomITA/claude-plugins",
   "license": "MIT",
-  "keywords": ["multi-agent", "debate", "group-chat", "brainstorming", "council"],
+  "keywords": [
+    "multi-agent",
+    "debate",
+    "group-chat",
+    "brainstorming",
+    "council"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Agents Chatroom",
     "shortDescription": "Coordinate agents in one shared live room.",
-    "longDescription": "Run a local group chat where Codex agents with distinct roles discuss a topic together. Agents share messages, tag each other, track progress, and agree on a plan. A local browser viewer lets you follow the discussion and write to the group. Requires Python and Codex subagents.",
+    "longDescription": "Run a local group chat where Codex agents with distinct roles discuss a topic together. Agents share messages, tag each other, track progress, and agree on a plan. A local browser viewer lets you follow the discussion, write to the group, and watch a 3D voxel office where each agent works at its desk: commands, patches and web searches show on its screen, read from the Codex session logs. Requires Python and Codex subagents.",
     "developerName": "ArtyomITA",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://github.com/ArtyomITA/claude-plugins/tree/main/plugins/chatroom",
     "defaultPrompt": [
       "Open a chatroom where three agents debate my plan",

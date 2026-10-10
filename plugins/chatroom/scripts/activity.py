@@ -3,10 +3,11 @@
 Two sources, merged by time:
 - the chatroom mod (hooks/register.ts) POSTs an event to `serve` for every tool call of a roster agent, for every
   permission it waits for, and for every agent spawned: instant and exact;
-- the Claude Code transcripts of the roster's agents (`~/.claude/projects/*/*/subagents/agent-<id>.jsonl`), tailed
-  by offset with the half-written last line kept aside: the fallback when the mod is not loaded, and the only
-  source of context usage.
-Codex agents have neither: their room animates from the chat alone.
+- the transcripts of the roster's agents, tailed by offset with the half-written last line kept aside: Claude Code
+  subagents in `~/.claude/projects/*/*/subagents/agent-<id>.jsonl` (the fallback when the mod is not loaded, and
+  the only source of context usage), Codex subagents in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, found by the
+  `agent_path` (`/root/<name>`) their first line carries, the same address the roster holds. Codex records no
+  permission wait, so its agents never show the beacon.
 """
 import json
 import os
@@ -17,8 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 CLAUDE_DIR = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
+CODEX_DIR = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
 REGISTRY = CLAUDE_DIR / 'chatroom' / 'rooms.json'
-AGENT_ID = re.compile(r'^a[0-9a-f]{8,40}$')
+AGENT_ID = re.compile(r'^(a[0-9a-f]{8,40}|/root/[\w-]+)$')        # a Claude Code agent id, or a Codex agent path
 RECENT, PULSE_SECONDS, FIND_EVERY, READ_MAX = 12, 300, 10.0, 4 * 1024 * 1024
 
 
@@ -53,6 +55,44 @@ def target_of(tool, inp):
     return ''
 
 
+def codex_call(p):
+    """a Codex tool call (function_call or custom_tool_call payload) as the Claude Code tool it is closest to, and its
+    input, so the office animates both alike: exec_command -> Bash, apply_patch -> Edit, web__run -> WebSearch"""
+    if p.get('type') == 'function_call':
+        name = p.get('name', '')
+        try:
+            args = json.loads(p.get('arguments') or '{}')
+        except ValueError:
+            args = {}
+        args = args if isinstance(args, dict) else {}
+        if name in ('wait_agent', 'wait'):
+            return 'Bash', {'command': 'chat.py wait'}
+        if name in ('send_message', 'followup_task'):
+            return 'SendMessage', {'to': args.get('target') or args.get('agent_path') or ''}
+        if name == 'spawn_agent':
+            return 'Agent', {'description': args.get('task_name', '')}
+        if name in ('shell', 'shell_command', 'local_shell', 'exec_command'):
+            cmd = args.get('cmd') or args.get('command') or ''
+            return 'Bash', {'command': ' '.join(cmd) if isinstance(cmd, list) else str(cmd)}
+        return name, {}
+    code = str(p.get('input') or '')                       # custom 'exec': JavaScript calling tools.<name>(...)
+    used = re.search(r'tools\.(\w+)\(', code)
+    name = used.group(1) if used else str(p.get('name') or '')
+    if name in ('exec_command', 'shell_command', 'shell'):
+        cmd = re.search(r'(?:cmd|command)\s*:\s*"((?:[^"\\]|\\.)*)"', code)
+        if cmd:
+            return 'Bash', {'command': cmd.group(1).replace('\\\\', '\\').replace('\\"', '"')}
+        cmd = re.search(r'(?:cmd|command)\s*:\s*(?:@\'|`|\')([\s\S]{0,400})', code)     # here-strings, templates
+        return 'Bash', {'command': cmd.group(1) if cmd else ''}
+    if name == 'apply_patch' or '*** Begin Patch' in code:
+        f = re.search(r'\*\*\* (?:Update|Add|Delete) File: ([^\n\\]+)', code)
+        return 'Edit', {'file_path': f.group(1).strip() if f else ''}
+    if name.startswith('web'):
+        q = re.search(r'(?:q|query|ref_id)"?\s*:\s*"([^"]+)"', code)
+        return 'WebSearch', {'query': q.group(1) if q else ''}
+    return name or 'exec', {}
+
+
 def ts_of(rec):
     try:
         return datetime.fromisoformat(str(rec.get('timestamp')).replace('Z', '+00:00')).timestamp()
@@ -67,7 +107,7 @@ class Agent:
         self.calls = {}                                            # tool_use_id -> (tool, target, start)
         self.waiting = None                                        # since when it waits for a permission
         self.error_at = self.done_at = self.text_at = self.seen = None
-        self.ctx = self.model = None
+        self.ctx = self.model = self.win = None                    # win: a window the transcript states (Codex)
         self.subagents = 0
         self.recent = deque(maxlen=RECENT)
         self.pulse = deque(maxlen=400)
@@ -100,7 +140,7 @@ class Agent:
             self.tool, self.target, self.since = None, '', None
 
     def view(self, now):
-        win = window_of(self.model)
+        win = self.win or window_of(self.model)
         if self.ctx and self.ctx > win:
             win = self.ctx                                         # never read a context fuller than it can be
         return {'id': self.id, 'tool': self.tool, 'target': self.target, 'since': self.since,
@@ -120,7 +160,7 @@ class Activity:
 
     # ------------------------------------------------------------------ roster
     def ids(self):
-        """name -> agent id for the roster's Claude Code agents (Codex paths have no transcript here)"""
+        """name -> address for the roster's agents: Claude Code agent ids and Codex agent paths"""
         return {n: v for n, v in self.room.roster().items() if AGENT_ID.match(str(v))}
 
     def agent(self, agent_id):
@@ -166,8 +206,24 @@ class Activity:
 
     # ------------------------------------------------------------------ the transcripts
     def find(self, agent_id):
+        if agent_id.startswith('/root/'):
+            return self.find_codex(agent_id)
         hits = list((CLAUDE_DIR / 'projects').glob(f'*/*/subagents/agent-{agent_id}.jsonl'))
         return max(hits, key=lambda p: p.stat().st_mtime) if hits else None
+
+    def find_codex(self, path):
+        """the newest Codex rollout of the last two days whose first line names this agent path"""
+        best = None
+        for day in sorted((CODEX_DIR / 'sessions').glob('*/*/*'))[-2:]:
+            for f in day.glob('rollout-*.jsonl'):
+                try:
+                    with f.open(encoding='utf-8') as fh:
+                        meta = json.loads(fh.readline()).get('payload') or {}
+                except (OSError, ValueError):
+                    continue
+                if meta.get('agent_path') == path and (best is None or f.stat().st_mtime > best.stat().st_mtime):
+                    best = f
+        return best
 
     def poll(self):
         now = time.time()
@@ -203,6 +259,8 @@ class Activity:
                     pass
 
     def record(self, a, rec):
+        if 'payload' in rec:
+            return self.record_codex(a, rec)
         ts, msg = ts_of(rec), rec.get('message') or {}
         content = msg.get('content') if isinstance(msg.get('content'), list) else []
         if rec.get('type') == 'assistant':
@@ -220,6 +278,27 @@ class Activity:
             for c in content:
                 if c.get('type') == 'tool_result':
                     a.finish(str(c.get('tool_use_id')), not c.get('is_error'), ts)
+
+    def record_codex(self, a, rec):
+        ts, p, kind = ts_of(rec), rec.get('payload') or {}, rec.get('type')
+        t = p.get('type')
+        if kind == 'response_item' and t in ('function_call', 'custom_tool_call'):
+            tool, inp = codex_call(p)
+            a.start(str(p.get('call_id')), tool, target_of(tool, inp), ts)
+        elif kind == 'response_item' and t in ('function_call_output', 'custom_tool_call_output'):
+            out = json.dumps(p.get('output'))[:600]
+            a.finish(str(p.get('call_id')), not re.search(r'Exit code: [1-9]|exited with code [1-9]|"status": ?"rejected"', out), ts)
+        elif kind == 'response_item' and (t == 'agent_message' or (t == 'message' and p.get('role') == 'assistant')):
+            a.text_at = a.seen = ts
+        elif kind == 'event_msg' and t == 'token_count':
+            last = ((p.get('info') or {}).get('last_token_usage') or {})
+            ctx = int(last.get('input_tokens') or 0) + int(last.get('output_tokens') or 0)
+            if ctx:
+                a.ctx = ctx
+        elif kind == 'event_msg' and t == 'task_started' and p.get('model_context_window'):
+            a.win = int(p['model_context_window'])
+        elif kind == 'event_msg' and t == 'thread_settings_applied':
+            a.model = (p.get('thread_settings') or {}).get('model') or a.model
 
     def state(self):
         self.poll()
@@ -257,7 +336,7 @@ def register_room(room, port, host):
 def _prova():
     """self-check: tool start/end from the mod and from a transcript, permission wait, auto roster, partial lines"""
     import tempfile
-    global CLAUDE_DIR
+    global CLAUDE_DIR, CODEX_DIR
 
     class FakeRoom:
         def __init__(self, d):
@@ -273,7 +352,7 @@ def _prova():
     with tempfile.TemporaryDirectory() as tmp:
         room = FakeRoom(tmp)
         act = Activity(room)
-        assert set(act.ids()) == {'FETTE'}                                        # Codex paths have no transcript
+        assert set(act.ids()) == {'FETTE', 'CODEX'}                               # Claude ids and Codex paths
         assert target_of('Bash', {'command': 'python "C:/x/chat.py" post --as A'}) == 'chat:post'
         assert target_of('Read', {'file_path': 'D:/a/b/parser.py'}) == 'parser.py'
         act.hook({'kind': 'tool', 'agentId': 'a1111111111111111', 'id': 't1', 'tool': 'Edit', 'input': {'file_path': 'x/y.py'}})
@@ -304,6 +383,22 @@ def _prova():
         act.last_poll = 0
         v = act.state()['agents']['LUCE']
         assert v['tool'] is None and v['recent'][0]['ms'] == 3000
+        # a Codex subagent, found by the agent path in its rollout's first line
+        CODEX_DIR = Path(tmp, 'codex')
+        day = CODEX_DIR / 'sessions' / '2026' / '10' / '10'; day.mkdir(parents=True)
+        rows = [
+            {'timestamp': '2026-10-10T10:00:00Z', 'type': 'session_meta', 'payload': {'agent_path': '/root/x'}},
+            {'timestamp': '2026-10-10T10:00:00Z', 'type': 'event_msg', 'payload': {'type': 'task_started', 'model_context_window': 258400}},
+            {'timestamp': '2026-10-10T10:00:01Z', 'type': 'response_item', 'payload': {'type': 'custom_tool_call', 'call_id': 'c1', 'name': 'exec',
+             'input': 'await tools.exec_command({cmd:"python \\"E:/x/chat.py\\" post --as CODEX"})'}},
+            {'timestamp': '2026-10-10T10:00:02Z', 'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {'last_token_usage': {'input_tokens': 9000, 'output_tokens': 120}}}},
+        ]
+        (day / 'rollout-2026-10-10T10-00-00-abc.jsonl').write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        act.last_poll = 0
+        act.tails.pop('/root/x', None)                       # an earlier miss waits 10 s before searching again
+        v = act.state()['agents']['CODEX']
+        assert v['tool'] == 'Bash' and v['target'] == 'chat:post' and v['ctx'] == 9120 and v['window'] == 258400
+        assert codex_call({'type': 'custom_tool_call', 'input': 'tools.apply_patch("*** Begin Patch\\n*** Update File: src/a.py\\n")'}) == ('Edit', {'file_path': 'src/a.py'})
     print('activity.py: prova ok')
 
 
