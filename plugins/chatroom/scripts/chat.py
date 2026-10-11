@@ -542,6 +542,8 @@ class Room:
                 or name.lower() in str(m.get('state', {}).get('needs', '')).lower())]
         self.show(mine)
         rest = [m for m in items if m not in mine and m['from'] != name]
+        if not mine and not rest:
+            print('(nothing new from the others)')
         if rest:
             by = {}
             for m in rest:
@@ -605,6 +607,7 @@ def cmd_init(room, a):
         name, profile = parse_profile(text)
         config['profiles'].setdefault(name, {}).update(profile)
     room.save_config(config)
+    write_agents_md(room)
     print(f'room ready: {room.dir}')
 
 
@@ -635,8 +638,9 @@ def cmd_roster(room, a):
     print(json.dumps(roster))
 
 
-def cmd_post(room, a):
-    text = '' if sys.stdin.isatty() else sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
+def cmd_post(room, a, text=None):
+    if text is None:
+        text = '' if sys.stdin.isatty() else sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
     if sum(map(bool, (a.status, a.idle, a.finding))) > 1:
         sys.exit('error: use one of --status, --idle, --finding. Nothing was posted.')
     if a.finding:                                     # a finding: something the others should know now, no alert, no percentage
@@ -970,6 +974,142 @@ def failures(room, now=None):
 def cmd_check(room, a):
     found = failures(room)
     print('\n'.join(f'CHECK {t}' for _, t in found) if found else 'CHECK nothing wrong seen')
+
+
+AGENTS_MD = """# This folder is a chat room (chatroom plugin)
+
+Several agents (Claude Code and Codex alike) talk here through `chat.py`, the plugin's script. If you work in this
+folder as a participant, use it; the same commands work in both tools, or the same tools through `chat.py mcp`.
+
+- Read what is new: `python CHAT read --focus --as NAME --room ROOM` (in full only what concerns you), or without
+  `--focus` for everything.
+- Write: `python CHAT post --as NAME --room ROOM` with the text on stdin; `--reply N` answers message #N and tags its
+  author; `--finding` shares something the others should know now, without a ping.
+- Status, with your percentage, ideally as JSON: `--status` with `{"task": "T3", "step": "...", "pct": 60, "files": [...],
+  "next": "...", "needs": "..."}`.
+- The shared plan is the task board: `board`, `task add "title" --files a,b --deps T1`, `task take T3` before you
+  start (refused if the files are taken or the dependencies are open), `task done T3 --proof "..."`,
+  `task handoff T3 NAME --note "..."`, `task decide "..."`.
+- Your notes that survive a compacted context: `notebook "text" --as NAME`, read with `notebook --as NAME`.
+- After every real message, send the pings that `post` prints (ALERT line).
+
+CHAT is the plugin's scripts/chat.py; ROOM is this folder.
+"""
+
+
+def write_agents_md(room):
+    """AGENTS.md in the room folder (the instruction file Codex and Claude Code read by themselves); kept if present"""
+    path = room.dir / 'AGENTS.md'
+    if not path.exists():
+        path.write_text(AGENTS_MD.replace('CHAT', str(Path(__file__).resolve()).replace('\\\\', '/')).replace('ROOM', str(room.dir).replace('\\\\', '/')),
+                        encoding='utf-8')
+
+
+# ---------------------------------------------------------------------- the MCP server
+MCP_TOOLS = [
+    {'name': 'chat_read', 'description': 'The new messages of the room. focus=true (default): in full only what concerns you, the rest as a digest.',
+     'inputSchema': {'type': 'object', 'properties': {'focus': {'type': 'boolean'}}}},
+    {'name': 'chat_post', 'description': 'Post in the room: a message (then send the pings it returns), or a status (status=true, '
+                                         'with the percentage, or state as JSON), an idle status, a finding, or a reply to #reply.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'text': {'type': 'string'}, 'status': {'type': 'boolean'}, 'idle': {'type': 'boolean'}, 'finding': {'type': 'boolean'},
+         'reply': {'type': 'integer'}, 'state': {'type': 'object', 'description': 'a structured status: task, step, pct, files, '
+                                                                                   'blocked_by, next, needs, done, evidence, risks'}}}},
+    {'name': 'chat_wait', 'description': 'Wait for someone to write (up to 110 s, 540 s while idle).',
+     'inputSchema': {'type': 'object', 'properties': {'timeout': {'type': 'integer'}}}},
+    {'name': 'board', 'description': 'The task board: facts, decisions, tasks and who does what.', 'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'task', 'description': 'Change the task board: add (text, files, deps), take (id, force), done (id, proof), drop (id), '
+                                    'note (id, text), handoff (id, to, note), decide (text), fact (text).',
+     'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
+         'action': {'type': 'string', 'enum': ['add', 'take', 'done', 'drop', 'note', 'handoff', 'decide', 'fact']},
+         'id': {'type': 'string'}, 'text': {'type': 'string'}, 'files': {'type': 'array', 'items': {'type': 'string'}},
+         'deps': {'type': 'array', 'items': {'type': 'string'}}, 'proof': {'type': 'string'}, 'to': {'type': 'string'},
+         'note': {'type': 'string'}, 'force': {'type': 'boolean'}}}},
+    {'name': 'notebook', 'description': 'Your own notes, which survive a compacted context: with text adds a line, without reads them.',
+     'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}},
+    {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof, one file in two statuses, '
+                                     'tags left unanswered, a status repeated.', 'inputSchema': {'type': 'object', 'properties': {}}},
+]
+
+
+def mcp_call(room, name, tool, args):
+    """run one tool as the shell command would, and return what it prints (errors included) as text"""
+    import contextlib
+    import io
+    ns = argparse.Namespace(name=name, room=str(room.dir), status=False, idle=False, finding=False, reply=None, image=None,
+                            focus=True, pairs=[], deps=None, files=None, proof=None, force=False, note=None, all=False,
+                            timeout=100, common=False, file=None)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            if tool == 'chat_read':
+                room.read(name, args.get('focus', True))
+            elif tool == 'chat_post':
+                ns.status, ns.idle, ns.finding, ns.reply = bool(args.get('status')), bool(args.get('idle')), bool(args.get('finding')), args.get('reply')
+                text = json.dumps(args['state'], ensure_ascii=False) if args.get('state') else str(args.get('text', ''))
+                if args.get('state'):
+                    ns.status = True
+                cmd_post(room, ns, text)
+            elif tool == 'chat_wait':
+                room.wait(name, int(args.get('timeout', 100)))
+            elif tool == 'board':
+                cmd_board(room, ns)
+            elif tool == 'task':
+                act = args['action']
+                ns.pairs = [act] + ([str(args['id'])] if args.get('id') else []) + ([args['to']] if act == 'handoff' and args.get('to') else []) \
+                    + ([str(args['text'])] if args.get('text') else [])
+                ns.files, ns.deps = ','.join(args.get('files') or []) or None, ','.join(args.get('deps') or []) or None
+                ns.proof, ns.force, ns.note = args.get('proof'), bool(args.get('force')), args.get('note')
+                cmd_task(room, ns)
+            elif tool == 'notebook':
+                ns.pairs = [str(args['text'])] if args.get('text') else []
+                cmd_notebook(room, ns)
+            elif tool == 'check':
+                cmd_check(room, ns)
+            else:
+                return f'unknown tool {tool}', True
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            return (out.getvalue() + str(exc.code)).strip(), True
+    except ValueError as exc:
+        return (out.getvalue() + f'error: {exc}').strip(), True
+    return out.getvalue().strip() or 'ok', False
+
+
+def cmd_mcp(room, a):
+    """an MCP server on stdin/stdout (newline-delimited JSON-RPC) with the room's tools, for one participant (--as NAME):
+    claude mcp add chatroom -- python chat.py mcp --room ROOM --as NAME   (Codex: the same command in its MCP config)"""
+    if not a.name:
+        sys.exit('--as NAME required')
+    out = sys.stdout
+    def send(obj):
+        out.write(json.dumps(obj, ensure_ascii=False) + '\n')
+        out.flush()
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        mid, method = msg.get('id'), msg.get('method')
+        if mid is None:                              # a notification (initialized, cancelled): nothing to answer
+            continue
+        if method == 'initialize':
+            res = {'protocolVersion': (msg.get('params') or {}).get('protocolVersion', '2025-06-18'),
+                   'capabilities': {'tools': {}}, 'serverInfo': {'name': 'chatroom', 'version': '1'},
+                   'instructions': f'You are {a.name} in the chat room {room.dir}. Read with chat_read, take your task on the board '
+                                   'before working, post statuses with your percentage, and send the pings chat_post returns.'}
+        elif method == 'tools/list':
+            res = {'tools': MCP_TOOLS}
+        elif method == 'tools/call':
+            params = msg.get('params') or {}
+            text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') or {})
+            res = {'content': [{'type': 'text', 'text': text}], 'isError': err}
+        elif method == 'ping':
+            res = {}
+        else:
+            send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': f'unknown method {method}'}})
+            continue
+        send({'jsonrpc': '2.0', 'id': mid, 'result': res})
 
 
 def common_room(room):
@@ -1992,7 +2132,7 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -2047,7 +2187,7 @@ def main():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
-                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook}
+                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:
