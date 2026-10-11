@@ -5,14 +5,14 @@
 export const ZOMBIES = {hp: 40, speed: 0.9, bite: 10, biteEvery: 1, reach: 1.75, first: 3, more: 2, max: 11, pause: 3, spawnMin: 7, safeAbove: 0.75, headMul: 2, bossEvery: 4, hpPerWave: 0.05};
 
 /** the kinds. scale: width, height, depth of the whole body. tint: multiplies the colours of the limbs and the head (the torso has its own).
- * depth: how far the front of the torso is from its centre (where the paint sticks). spit/slam: the special attacks. */
+ * near: the least distance to the camera (or to a friend) it keeps, in metres (a bigger body needs more). depth: how far the front of the torso is from its centre (where the paint sticks). spit/slam: the special attacks. */
 export const ZT = {
-  walker:  {id: 0, hp: 40,  speed: 0.9,  bite: 10, biteEvery: 1.0, reach: 1.75, scale: [1, 1, 1],          tint: null,      depth: 0.14, arms: -0.75, torso: 'torso'},
-  runner:  {id: 1, hp: 22,  speed: 2.1,  bite: 7,  biteEvery: 0.8, reach: 1.65, scale: [0.82, 0.94, 0.82], tint: '#ffc2a8', depth: 0.12, arms: -0.55,  torso: 'torsoR'},
-  brute:   {id: 2, hp: 130, speed: 0.62, bite: 20, biteEvery: 1.4, reach: 2.05, scale: [1.4, 1.18, 1.35],  tint: '#b8c4d8', depth: 0.30, arms: -0.4,  torso: 'torsoB'},
-  spitter: {id: 3, hp: 30,  speed: 0.8,  bite: 8,  biteEvery: 1.2, reach: 1.65, scale: [0.95, 1.02, 0.95], tint: '#e4f58a', depth: 0.14, arms: -0.7,  torso: 'torsoS',
+  walker:  {near: 1.4, id: 0, hp: 40,  speed: 0.9,  bite: 10, biteEvery: 1.0, reach: 1.75, scale: [1, 1, 1],          tint: null,      depth: 0.14, arms: -0.75, torso: 'torso'},
+  runner:  {near: 1.35, id: 1, hp: 22,  speed: 2.1,  bite: 7,  biteEvery: 0.8, reach: 1.65, scale: [0.82, 0.94, 0.82], tint: '#ffc2a8', depth: 0.12, arms: -0.55,  torso: 'torsoR'},
+  brute:   {near: 2.1, id: 2, hp: 130, speed: 0.62, bite: 20, biteEvery: 1.4, reach: 2.05, scale: [1.4, 1.18, 1.35],  tint: '#b8c4d8', depth: 0.30, arms: -0.4,  torso: 'torsoB'},
+  spitter: {near: 1.4, id: 3, hp: 30,  speed: 0.8,  bite: 8,  biteEvery: 1.2, reach: 1.65, scale: [0.95, 1.02, 0.95], tint: '#e4f58a', depth: 0.14, arms: -0.7,  torso: 'torsoS',
             spit: {range: 12, min: 4, hold: 7.5, every: 3.2, wind: 0.7, dmg: 12, speed: 13, area: 1.15}},
-  boss:    {id: 4, hp: 420, speed: 0.78, bite: 28, biteEvery: 1.3, reach: 2.6,  scale: [1.9, 1.7, 1.9],    tint: '#ff9a8a', depth: 0.18, arms: -0.6,  torso: 'torsoX', head: 'headX',
+  boss:    {near: 2.6, id: 4, hp: 420, speed: 0.78, bite: 28, biteEvery: 1.3, reach: 2.6,  scale: [1.9, 1.7, 1.9],    tint: '#ff9a8a', depth: 0.18, arms: -0.6,  torso: 'torsoX', head: 'headX',
             slam: {radius: 3.6, every: 5, wind: 0.9, dmg: 28}},
 };
 export const ZT_LIST = [ZT.walker, ZT.runner, ZT.brute, ZT.spitter, ZT.boss];

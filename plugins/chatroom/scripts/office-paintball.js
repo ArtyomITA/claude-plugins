@@ -65,10 +65,10 @@ const CSS = `
 .o-pnt .o-pnt-z div { display: flex; align-items: center; gap: 8px; } .o-pnt .o-pnt-z .o-big { font-size: 30px; font-weight: 800; line-height: 1; } .o-pnt .o-pnt-z small { display: block; font-size: 10px; letter-spacing: .14em; opacity: .75; }
 .o-pnt .o-pnt-boss { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); width: min(420px, 60vw); display: none; text-align: center; }
 .o-pnt .o-pnt-boss b { font-size: 13px; letter-spacing: .3em; color: #ff8a80; } .o-pnt .o-pnt-bbar { height: 14px; margin-top: 3px; background: #000a; border: 2px solid #ffffffcc; border-radius: 4px; overflow: hidden; } .o-pnt .o-pnt-bbar i { display: block; height: 100%; width: 100%; background: linear-gradient(#ff5252, #b71c1c); transition: width .15s; }
-.o-pnt .o-pnt-flash { position: absolute; inset: 0; background: radial-gradient(transparent 55%, #e5393590); opacity: 0; transition: opacity .5s; }
+.o-pnt .o-pnt-flash { position: absolute; inset: 0; background: radial-gradient(transparent 58%, #e5393560); opacity: 0; transition: opacity .5s; }
 .o-pnt .o-pnt-flash.o-on { opacity: 1; transition: none; }
-.o-pnt .o-pnt-vig { position: absolute; inset: 0; background: radial-gradient(transparent 36%, #000000a8); opacity: 0; transition: opacity 1.2s; }
-.o-pnt .o-pnt-vig.o-on { opacity: 1; } .o-pnt .o-pnt-vig.o-near { background: radial-gradient(transparent 36%, #5a0808a0); }
+.o-pnt .o-pnt-vig { position: absolute; inset: 0; background: radial-gradient(transparent 38%, #00000090); opacity: 0; transition: opacity 1.2s; }
+.o-pnt .o-pnt-vig.o-on { opacity: 1; } .o-pnt .o-pnt-vig.o-near { background: radial-gradient(transparent 38%, #4a080870); }
 .o-pnt.o-watch .o-pnt-hpbox, .o-pnt.o-watch .o-pnt-gunbox, .o-pnt.o-watch .o-pnt-cross, .o-pnt.o-watch .o-pnt-others, .o-pnt.o-watch .o-pnt-scope { display: none !important; }
 .o-pnt .o-pnt-wbadge { position: absolute; left: 50%; bottom: 74px; transform: translateX(-50%); display: none; pointer-events: auto; padding: 8px 14px; border-radius: 10px; background: #14151dcc; border: 1px solid #f5b400; white-space: nowrap; }
 .o-pnt.o-watch .o-pnt-wbadge { display: flex; gap: 14px; align-items: center; } .o-pnt .o-pnt-wbadge button, .o-pnt-ask button { font: inherit; color: #fff; background: #f5b40033; border: 1px solid #f5b400; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
@@ -553,7 +553,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
           if (tg && dist < T0.reach * 0.6 && dist > 1e-3) { wx -= (tg.x - z.x) / dist * 1.2; wz -= (tg.z - z.z) / dist * 1.2; }
           for (let j = 0; j < nz; j++) if (j !== i && zs[j].state !== 'dead') { const dx = z.x - zs[j].x, dz = z.z - zs[j].z, d2 = dx * dx + dz * dz, rr = 0.3 * z.sc[0] * zs[j].sc[0]; if (d2 < rr && d2 > 1e-6) { const d = Math.sqrt(d2); wx += dx / d * 0.5; wz += dz / d * 0.5; } }
           const k = 1 - Math.exp(-5 * dt); z.vx += (wx - z.vx) * k; z.vz += (wz - z.vz) * k; z.x += z.vx * dt; z.z += z.vz * dt;
-          const minD = Math.max(1.35, T0.reach * 0.62 + 0.3);                                   // never closer than this to anyone it hunts: a zombie inside the camera is a green wall
+          const minD = T0.near;                                   // never closer than this to anyone it hunts: a zombie inside the camera is a green wall
           for (let t = 0; t < tgN; t++) { const dx = z.x - tgs[t].x, dz = z.z - tgs[t].z, d = Math.hypot(dx, dz); if (d < minD) { if (d > 1e-3) { z.x = tgs[t].x + dx / d * minD; z.z = tgs[t].z + dz / d * minD; } else z.x += minD; } }
           const sp = Math.hypot(z.vx, z.vz);
           if (sp > 0.05 && !hold) z.yaw = shortAng(z.yaw, Math.atan2(z.vx, z.vz), 1 - Math.exp(-8 * dt)); else if (tg) z.yaw = shortAng(z.yaw, Math.atan2(tg.x - z.x, tg.z - z.z), 1 - Math.exp(-6 * dt));
