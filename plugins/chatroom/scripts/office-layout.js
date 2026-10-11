@@ -51,7 +51,7 @@ Object.assign(CATALOG, {
   lowTable: pk('Tables/Office_Table_Coffee_03_Brown'),
   table: pk('Tables/Office_Table_White_3x1_01'),
   cabinet: pk('Misc/Office_Misc_Cabinet_01'),
-  plantTall: pk('Misc/Office_Misc_Plant_03'), plantPot: pk('Misc/Office_Misc_Plant_02'),
+  plantTall: {model: 'plantTall', args: ['seed'], foot: [0.52, 0.52]}, plantPot: {model: 'plantBush', args: ['seed'], foot: [0.46, 0.46]},   // leaf by leaf (office-voxel.js)
   trash: pk('Misc/Trashcans/Office_Misc_Trashcan_Big_01'), recycle: pk('Misc/Trashcans/Office_Misc_Traschcan_Recycle_Blue'),
   tvWall: pk('Misc/Electronics/Office_Misc_TV_Wall_02', {block: false}), tvStand: pk('Misc/Electronics/Office_Misc_TV_Stand_03'),
   console: pk('Misc/Electronics/Office_Misc_Console_Woo_01', {block: false, scale: 0.03}),

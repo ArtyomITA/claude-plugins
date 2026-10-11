@@ -124,6 +124,8 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   root.appendChild(frame);
   let channels = [], now = {kind: 'off'}, file = 0, seenAt = 0, hidden = true, menuEl = null, playing = null, fullEl = null, sound = false;
   try { sound = localStorage.getItem('chatroom.tv.sound') === '1'; } catch (e) {}
+  let off = false;                                   // switched off by the user: stays off (also after a reload) until a channel or video is chosen
+  try { off = localStorage.getItem('chatroom.tv.off') === '1'; } catch (e) {}
   let vol = 80, ytTime = 0, ytDur = 0, ytState = -1, ytSeen = 0, holdPause = false;
   try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.tv.vol') ?? 80))); } catch (e) {}
   // the sound: the user's files through a placed speaker; YouTube's sound through the viewer, beside the muted picture
@@ -223,15 +225,29 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
               + `&playsinline=1&rel=0&modestbranding=1&vq=hd720&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`
               + `${start > 0 ? '&start=' + Math.floor(start) : ''}`;
   }
+  /** off: nothing plays, the screen goes black; on: the first channel */
+  function power(on) {
+    off = !on;
+    try { localStorage.setItem('chatroom.tv.off', off ? '1' : '0'); } catch (e) {}
+    if (on) return channel(0);
+    now = {kind: 'off'}; playing = null;
+    frame.src = 'about:blank'; frame.style.display = 'none';
+    video.pause(); video.removeAttribute('src'); video.load();
+    aud.pause(); aud.removeAttribute('src'); audId = '';
+    screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
+    say('📺 ⏻');
+  }
   function channel(i) {
     const c = channels[i];
     if (!c) return;
+    if (off) { off = false; try { localStorage.setItem('chatroom.tv.off', '0'); } catch (e) {} }
     now = {kind: 'channel', i, name: c.name}; file = 0;
     if (c.files) local(c); else youtube(c.youtube);
     say(`📺 ${c.name}`);
   }
   /** a YouTube video; `at` is when it started (seconds since 1970), so a friend joins at the same second */
   function watch(v, title, at = Date.now() / 1000, share = false) {
+    if (off) { off = false; try { localStorage.setItem('chatroom.tv.off', '0'); } catch (e) {} }
     now = {kind: 'video', v, title};
     youtube([v], Math.max(0, Date.now() / 1000 - at));
     say(`📺 ${title || v}`);
@@ -241,7 +257,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   fetch('tv.json', {cache: 'no-store'}).then(r => {
     if (!r.ok) { say(t().oldServer); return {channels: []}; }                // the viewer server predates the TV
     return r.json();
-  }).then(d => { channels = d.channels || []; if (channels.length && now.kind === 'off') channel(0); }).catch(() => {});
+  }).then(d => { channels = d.channels || []; if (channels.length && now.kind === 'off' && !off) channel(0); }).catch(() => {});
 
   // the menu: channels and a YouTube search, with "watch together" when a friend is linked
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
@@ -309,7 +325,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     menuEl = document.createElement('div'); menuEl.className = 'o-tvmenu';
     menuEl.innerHTML = `<div class="o-tvbox"><div class="o-tvhead"><b>📺 ${esc(L.tvTitle)}</b>
         <label class="o-tvtogether"><input type="checkbox"> 👥 ${esc(L.tvTogether)}</label>
-        <button data-full title="${esc(L.tvFull)}">⛶</button><button data-sound title="${esc(L.tvAudio)}">${sound ? '🔊' : '🔇'}</button><button data-x>✕</button></div>
+        <button data-power title="${esc(L.tvOff)}">⏻</button><button data-full title="${esc(L.tvFull)}">⛶</button><button data-sound title="${esc(L.tvAudio)}">${sound ? '🔊' : '🔇'}</button><button data-x>✕</button></div>
       <div class="o-tvctl"><button data-c="start" title="${esc(L.tvStart)}">⏮</button><button data-c="back">⏪ 10</button>
         <button data-c="play" title="${esc(L.tvPlay)}">⏯</button><button data-c="fwd">10 ⏩</button>
         <label>🔊 <input type="range" min="0" max="100" step="5" value="${vol}" data-vol></label><span class="o-tvtime"></span></div>
@@ -344,6 +360,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     menuEl.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.x !== undefined) return close();
+      if (b.dataset.power !== undefined) { power(now.kind === 'off'); return close(); }
       if (b.dataset.full !== undefined) return fullscreen();
       if (b.dataset.sound !== undefined) { setSound(!sound); b.textContent = sound ? '🔊' : '🔇'; return; }
       if (b.dataset.c) return control(b.dataset.c);
@@ -369,6 +386,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     /** a friend chose a video to watch together */
     together(line, who) {
       if (!line.v) return;
+      if (off) { if (line.op !== 'pause' && line.op !== 'seek' && line.v !== now.v) say(`📺 ${who}: ${line.title || line.v} (⏻ ${t().tvIsOff})`); return; }
       const nowS = Date.now() / 1000, stop = line.op === 'pause' || line.paused;
       const pos = Math.max(0, line.pos !== undefined ? line.pos + (stop ? 0 : nowS - (line.at || nowS)) : nowS - (line.t || nowS));
       if (line.v !== now.v) {

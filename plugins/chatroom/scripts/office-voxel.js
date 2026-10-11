@@ -438,26 +438,64 @@ export function planter(seed = 1) {
   }
   return mesh(v, {pivot: [2.5, 0, 2.5]});
 }
-/** floor of 0.5 m tiles coloured by zone: fn(x, z) -> colour, x and z tile indices */
-export function zoneFloor(w, d, fn) {
-  const v = new Vox();
-  for (let x = 0; x < w; x++) for (let z = 0; z < d; z++) v.set(x, 0, z, fn(x, z));
-  const m = mesh(v, {pivot: [w / 2, 1, d / 2], scale: 0.5, jitter: 0.05});
-  m.castShadow = false;
-  return m;
+// ------------------------------------------------------------------ potted plants at 4 cm, leaf cluster by leaf cluster
+const LEAF = ['#1f6b2a', '#2e7d32', '#388e3c', '#43a047', '#5cb84a', '#7cd04a'];
+let plantsMade = 0;                                    // no seed in the plan: each plant still grows its own way
+/** a round terracotta pot `R` voxels wide and `H` high, with soil on top */
+function pot(v, R, H) {
+  for (let x = -R; x <= R; x++) for (let z = -R; z <= R; z++) for (let y = 0; y < H; y++) {
+    const d = Math.hypot(x, z), rr = R - (H - 1 - y) * 0.15;           // narrower at the base
+    if (d > rr + 0.3) continue;
+    v.set(x, y, z, y === H - 1 ? (d > rr - 1.2 ? '#a85d44' : '#4e342e') : y === 0 ? '#8d4a35' : d > rr - 0.8 && y === H - 2 ? '#b8684d' : '#c8775a');
+  }
+}
+/** a cluster of leaves, lighter on top (lit from above) and higher up the plant */
+function leaves(v, r, cx, cy, cz, rad, top) {
+  for (let x = -rad; x <= rad; x++) for (let y = -rad; y <= rad; y++) for (let z = -rad; z <= rad; z++) {
+    if (x * x + y * y * 1.5 + z * z > rad * rad + 0.6) continue;
+    const k = Math.round((y + rad) / (2 * rad) * 2.4 + cy / top * 2 + r() * 1.4);
+    v.set(cx + x, cy + y, cz + z, LEAF[Math.max(0, Math.min(LEAF.length - 1, k))]);
+  }
+}
+/** a tall plant (about 1.5 m): a pot, a short trunk and a column of foliage in clusters */
+export function plantTall(seed) {
+  const r = rnd((seed ?? ++plantsMade) * 97 + 5), v = new Vox();
+  pot(v, 6, 9);
+  for (let y = 9; y < 16; y++) v.set(0, y, 0, '#5d4037');
+  for (let i = 0; i < 48; i++) {
+    const y = 14 + Math.floor(r() * 21), w = 3.4 * Math.sin(Math.PI * (y - 12) / 25) + 1, a = r() * Math.PI * 2, d = r() * w;
+    leaves(v, r, Math.round(Math.cos(a) * d), y, Math.round(Math.sin(a) * d), 2 + Math.floor(r() * 2), 38);
+  }
+  return mesh(v, {pivot: [0.5, 0, 0.5], scale: 0.04, jitter: 0.05});
+}
+/** a small potted bush (about 0.6 m) */
+export function plantBush(seed) {
+  const r = rnd((seed ?? ++plantsMade) * 97 + 11), v = new Vox();
+  pot(v, 5, 8);
+  for (let i = 0; i < 22; i++) {
+    const a = r() * Math.PI * 2, d = r() * 3, y = 9 + Math.floor(r() * 4);
+    leaves(v, r, Math.round(Math.cos(a) * d), y, Math.round(Math.sin(a) * d), 2 + Math.floor(r() * 2), 16);
+  }
+  return mesh(v, {pivot: [0.5, 0, 0.5], scale: 0.04, jitter: 0.05});
 }
 /** a wall like wall(), but its windows have venetian blinds: slats every other row; doors are 2.25 m openings */
 export function blindWall(length, height, holes = [], color = '#ece8e1', doors = []) {
-  const v = new Vox();
-  for (let x = 0; x < length; x++) for (let y = 0; y < height; y++) {
-    if (doors.some(([a, b]) => x >= a && x <= b && y <= 8)) continue;
-    const door = doors.some(([a, b]) => ((x === a - 1 || x === b + 1) && y <= 9) || (x >= a - 1 && x <= b + 1 && y === 9));
-    const inHole = holes.some(([a, b]) => x >= a && x <= b && y >= 3 && y <= 9);
-    const frame = holes.some(([a, b]) => (x === a - 1 || x === b + 1) && y >= 3 && y <= 9) || holes.some(([a, b]) => x >= a - 1 && x <= b + 1 && (y === 2 || y === 10));
-    if (inHole) { if (y % 2 === 0) v.set(x, y, 1, '#e3e6e8'); continue; }
-    v.set(x, y, 0, door ? '#8d6e63' : y === 0 ? '#5f6670' : frame ? '#f7f7f5' : y === height - 1 ? darker(color, 0.9) : color);
+  // the plan speaks in 25 cm cells (length, height, holes, doors); the wall is drawn at 12.5 cm, two voxels thick:
+  // thin frames standing out on both faces, sills, slim blinds, a baseboard and a cornice
+  const v = new Vox(), L = length * 2, H = height * 2;
+  for (let x = 0; x < L; x++) for (let y = 0; y < H; y++) {
+    const cx = x >> 1, cy = y >> 1;
+    if (doors.some(([a, b]) => cx >= a && cx <= b) && cy <= 8) continue;
+    if (holes.some(([a, b]) => cx >= a && cx <= b && cy >= 3 && cy <= 9)) { if (y % 2 === 0) v.set(x, y, 1, '#e3e6e8'); continue; }   // blinds
+    const doorFrame = doors.some(([a, b]) => ((x === a * 2 - 1 || x === b * 2 + 2) && y <= 18) || (x >= a * 2 - 1 && x <= b * 2 + 2 && y === 18));
+    const winFrame = holes.some(([a, b]) => ((x === a * 2 - 1 || x === b * 2 + 2) && y >= 5 && y <= 20) || (x >= a * 2 - 1 && x <= b * 2 + 2 && (y === 5 || y === 20)));
+    const c = doorFrame ? '#8d6e63' : winFrame ? '#f7f7f5' : y === 0 ? '#5f6670' : y === 1 ? '#d9d5ce'
+            : y === H - 1 ? darker(color, 0.86) : y === H - 2 ? darker(color, 0.95) : color;
+    v.set(x, y, 0, c).set(x, y, 1, c);
+    if (doorFrame || winFrame) v.set(x, y, -1, c).set(x, y, 2, c);
   }
-  return mesh(v, {pivot: [0, 0, 0.5], scale: 0.25, jitter: 0.03});
+  for (const [a, b] of holes) for (let x = a * 2 - 2; x <= b * 2 + 3; x++) v.set(x, 5, -2, '#f2f0ec').set(x, 5, 3, '#f2f0ec');   // sills
+  return mesh(v, {pivot: [0, 0, 1], scale: 0.125, jitter: 0.03});
 }
 
 // ------------------------------------------------------------------ models from the office pack (CC BY 4.0)
