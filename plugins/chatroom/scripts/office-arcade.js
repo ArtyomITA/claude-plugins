@@ -6,18 +6,24 @@
 // of the server serves it, nothing sends it anywhere. The emulator is jsnes (Apache-2.0, vendor/jsnes; it is the core only: the picture, the sound, the keys and the
 // timing are drawn here, so that a game can be stepped one frame at a time with the inputs it is given).
 
-/** where the cabinet stands: against the south wall of the common room, facing into it (hw, hd: half its width and depth, for the floor plan) */
-export const ARCADE_AT = {x: 4.1, z: 9.58, rot: Math.PI, hw: 0.42, hd: 0.38};
+import {createLockstep, delayFor} from './office-arcade-net.js';
+
+/** where the cabinet stands: in the north-west corner of the common room, against the wall and away from its doors (north wall x 3.4-4.6, west wall z 6.6-7.6, and the bridge door in the south wall), facing into the room (hw, hd: half its width and depth, for the floor plan) */
+export const ARCADE_AT = {x: 1.2, z: 5.52, rot: 0, hw: 0.42, hd: 0.38};
 
 const S = {
   en: {title: '9999 IN 1', menu: 'Menu', close: 'Close', ownGame: 'Play a .nes of your own', ownGameTip: 'the file stays on this computer', loading: 'Loading…', noList: 'The game list could not be read.',
        keys: 'Arrows move · X = A · Z = B · Enter = Start · Shift = Select · Esc = menu', saveScore: 'Save my score', scorePlaceholder: 'score', saved: 'Score saved', players: n => n > 1 ? `${n} players` : '1 player',
        crashed: 'This game stopped (the emulator hit something it cannot run).', badRom: 'This is not a NES game file (.nes).', pressStart: 'PRESS START', free: 'FREE GAMES · NO COIN NEEDED', hint: 'use the arcade',
-       sha: 'this copy differs from the one in the plugin: scores may not match'},
+       sha: 'this copy differs from the one in the plugin: scores may not match',
+       playWith: n => `Play with ${n}`, waitingFor: n => `Waiting for ${n} to join…`, cancel: 'Cancel', invites: (n, g) => `${n} invites you to play ${g}`, join: 'Join', friendLeft: 'Your friend left the game.',
+       desync: 'The two games went out of step. Leave and start again.', vs: n => `with ${n}`, waitingInputs: n => `Waiting for ${n}…`},
   it: {title: '9999 IN 1', menu: 'Menu', close: 'Chiudi', ownGame: 'Gioca un tuo .nes', ownGameTip: 'il file resta su questo computer', loading: 'Carico…', noList: 'Non riesco a leggere la lista dei giochi.',
        keys: 'Frecce muovi · X = A · Z = B · Invio = Start · Maiusc = Select · Esc = menu', saveScore: 'Salva il mio punteggio', scorePlaceholder: 'punti', saved: 'Punteggio salvato', players: n => n > 1 ? `${n} giocatori` : '1 giocatore',
        crashed: 'Il gioco si e fermato (l\'emulatore ha trovato qualcosa che non sa eseguire).', badRom: 'Questo non e un file di gioco NES (.nes).', pressStart: 'PREMI START', free: 'GIOCHI LIBERI · NIENTE GETTONI', hint: 'usa il videogioco',
-       sha: 'questa copia e diversa da quella del plugin: i punteggi potrebbero non combaciare'},
+       sha: 'questa copia e diversa da quella del plugin: i punteggi potrebbero non combaciare',
+       playWith: n => `Gioca con ${n}`, waitingFor: n => `Aspetto che ${n} entri…`, cancel: 'Annulla', invites: (n, g) => `${n} ti invita a giocare a ${g}`, join: 'Entra', friendLeft: 'Il tuo amico ha lasciato la partita.',
+       desync: 'Le due partite non sono piu allineate. Esci e ricomincia.', vs: n => `con ${n}`, waitingInputs: n => `Aspetto ${n}…`},
 };
 
 const CSS = `
@@ -47,10 +53,16 @@ const CSS = `
 .o-arc-bar .o-arc-keys { flex: 1; opacity: .75; }
 .o-arc-bar input { width: 80px; background: #0c0c20; color: #fff; border: 1px solid #5e35b1; border-radius: 6px; padding: 3px 6px; font: inherit; }
 .o-arc-bar button { background: #5e35b1; color: #fff; border: 0; border-radius: 6px; padding: 4px 9px; }
+.o-arc-banner { grid-column: 1 / -1; display: none; align-items: center; gap: 10px; background: #2a1f55; border: 1px solid #7c4dff; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; }
+.o-arc-banner button { background: #ffeb3b; color: #111; border: 0; border-radius: 6px; padding: 4px 10px; font-weight: 800; }
+.o-arc-two { display: inline-block; margin-top: 3px; background: #5e35b1; border-radius: 6px; padding: 2px 6px; font-size: 11px; }
+.o-arc-two:hover { background: #7e57c2; }
+.o-arc-note { position: absolute; left: 0; right: 0; top: 8px; z-index: 2; text-align: center; pointer-events: none; font: 700 14px "Courier New", monospace; color: #fff; text-shadow: 0 0 6px #000, 0 0 3px #000; }
 .o-arc-msg { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; background: #000c; color: #ffab91; font-size: 15px; }
 `;
 
 // ---------------------------------------------------------------- small drawings: the thumbnails, the attract screen, the marquee
+const esc = x => String(x).replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
 const hash = s => { let h = 2166136261; for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
 const NES_COLOURS = ['#fcfcfc', '#f83800', '#fcb800', '#00b800', '#0078f8', '#6844fc', '#d800cc', '#00e8d8', '#fc7460', '#a4e4fc'];
 /** a little symmetrical sprite for a game, the same on every computer (made from its id): a stand-in for the box art the games do not ship */
@@ -78,16 +90,16 @@ function drawAttract(g, t, L) {
   g.font = '700 9px "Courier New", monospace'; g.fillStyle = '#9fa8da'; g.fillText(L.free, 128, 214);
   g.textAlign = 'left'; g.textBaseline = 'alphabetic';
 }
-function drawMarquee(g, w, h) {
+function drawMarquee(g, w, h, text = '9999 IN 1') {
   const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#2a1055'); gr.addColorStop(1, '#14052e'); g.fillStyle = gr; g.fillRect(0, 0, w, h);
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#00e5ff'; g.shadowBlur = 22; g.fillStyle = '#e0ffff';
-  g.font = `900 ${h * 0.62}px "Courier New", monospace`; g.fillText('9999 IN 1', w / 2, h * 0.5);
-  g.shadowColor = '#ff00c8'; g.shadowBlur = 16; g.strokeStyle = '#ff40d8'; g.lineWidth = 3; g.strokeText('9999 IN 1', w / 2, h * 0.5);
+  g.font = `900 ${h * 0.62}px "Courier New", monospace`; g.fillText(text, w / 2, h * 0.5);
+  g.shadowColor = '#ff00c8'; g.shadowBlur = 16; g.strokeStyle = '#ff40d8'; g.lineWidth = 3; g.strokeText(text, w / 2, h * 0.5);
   g.shadowBlur = 0; g.fillStyle = '#ffeb3b'; for (let i = 0; i < 14; i++) g.fillRect(8 + i * (w - 16) / 13, 4, 6, 4), g.fillRect(8 + i * (w - 16) / 13, h - 8, 6, 4);
 }
 
 // ---------------------------------------------------------------- the player
-export function createArcade({THREE, scene, camera, raycastables, root, lang = () => 'en', say = () => {}, Vox, mesh, report = () => {}, at = ARCADE_AT, unlock = () => {}, onOpen = () => {}, volume = () => 1}) {
+export function createArcade({THREE, scene, camera, raycastables, root, lang = () => 'en', say = () => {}, Vox, mesh, report = () => {}, at = ARCADE_AT, unlock = () => {}, onOpen = () => {}, volume = () => 1, me = () => '', net = null}) {
   const L = () => S[lang()] || S.en;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
 
@@ -102,7 +114,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     v.box(0, 14, 0, 15, 16, 13, (x, y, z) => y === 16 && z > 9 ? '#3a3a6a' : (x < 2 || x > 13) ? ((y + z) % 6 < 3 ? '#d81b60' : '#00acc1') : body);   // control deck
     v.box(0, 14, 13, 15, 14, 13, '#cfd8dc');
     for (let y = 17; y <= 30; y++) v.box(0, y, 0, 15, y, zFront(y), (x, yy, z) => (x < 2 || x > 13) ? ((yy + z) % 6 < 3 ? '#d81b60' : '#00acc1') : body);   // housing
-    v.box(2, 19, zFront(19), 13, 29, zFront(29), (x, y, z) => z === zFront(y) ? '#0a0a14' : null);                                            // the bezel: only the front face is repainted
+    v.box(1, 19, zFront(19), 14, 30, zFront(30), (x, y, z) => z === zFront(y) ? '#06060c' : null);                                            // the bezel: only the front face is repainted
     v.box(0, 31, 0, 15, 35, 8, (x) => x < 2 || x > 13 ? '#d81b60' : '#2a1a4a');                                                                 // marquee box
     v.box(0, 35, 0, 15, 35, 8, dark);
     v.box(5, 5, 13, 10, 10, 13, '#455a64').box(6, 6, 14, 9, 9, 14, '#263238').box(7, 7, 14, 8, 8, 14, '#90a4ae');                           // coin door
@@ -118,9 +130,9 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
   // the screen and the marquee: canvases drawn live
   const scr = document.createElement('canvas'); scr.width = 256; scr.height = 240; const sg = scr.getContext('2d');
   const scrTex = new THREE.CanvasTexture(scr); scrTex.colorSpace = THREE.SRGBColorSpace; scrTex.magFilter = THREE.NearestFilter; scrTex.minFilter = THREE.LinearFilter; scrTex.generateMipmaps = false;
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.435), new THREE.MeshBasicMaterial({map: scrTex, toneMapped: false}));
-  screen.position.set(0, 24.5 * 0.05, (9 - 7) * 0.05 + 0.003); cab.add(screen);
-  const mq = document.createElement('canvas'); mq.width = 512; mq.height = 128; drawMarquee(mq.getContext('2d'), 512, 128);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.45), new THREE.MeshBasicMaterial({map: scrTex, toneMapped: false, color: new THREE.Color(1.3, 1.3, 1.3)}));
+  screen.position.set(0, 24.6 * 0.05, (9 - 7) * 0.05 + 0.003); cab.add(screen);
+  const mq = document.createElement('canvas'); mq.width = 512; mq.height = 128; drawMarquee(mq.getContext('2d'), 512, 128, L().title);
   const mqTex = new THREE.CanvasTexture(mq); mqTex.colorSpace = THREE.SRGBColorSpace;
   const marquee = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.18), new THREE.MeshBasicMaterial({map: mqTex, toneMapped: false}));
   marquee.position.set(0, 33.4 * 0.05, (9 - 7) * 0.05 + 0.004); cab.add(marquee);
@@ -134,6 +146,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
 
   // ------------------------------------------------ the emulator
   let ov = null, nes = null, jsnes = null, ac = null, node = null, raf = 0, playing = null, frames = 0, view = null, gamesList = null, keysDown = new Set(), pad = [0, 0], shaOk = true;
+  let session = null, poller = 0, starting = false, netKey = '';              // session: a game with a friend (lockstep, office-arcade-net.js)
   const emu = document.createElement('canvas'); emu.width = 256; emu.height = 240; const eg = emu.getContext('2d'), img = eg.createImageData(256, 240), px = new Uint32Array(img.data.buffer);
   const MASK = 16383, bufL = new Float32Array(MASK + 1), bufR = new Float32Array(MASK + 1); let wr = 0, rd = 0;
   const BTN = {A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7};
@@ -146,6 +159,8 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     if (b(1) || b(3)) m |= 1; if (b(0) || b(2)) m |= 2; if (b(8)) m |= 4; if (b(9)) m |= 8;
     return m;
   };
+  let tapMask = 0;                                                            // a key pressed and let go between two frames still counts for one frame
+  const takeMask = () => { const m = maskOfKeys() | maskOfGamepad() | tapMask; tapMask = 0; return m; };
   const setPad = (n, m) => { for (let i = 0; i < 8; i++) { const was = (pad[n - 1] >> i) & 1, is = (m >> i) & 1; if (was !== is) (is ? nes.buttonDown : nes.buttonUp)(n, i); } pad[n - 1] = m; };
 
   async function ensureJsnes() {
@@ -184,8 +199,42 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
       nes.loadROM(data);
     } catch (e) { nes = null; showMessage(String(e.message || e)); return; }
     playing = game; frames = 0; pad = [0, 0]; wr = rd = 0;
+    if (game.net && net) beginSession(game.net);
     ov.querySelector('.o-arc-menu').style.display = 'none'; ov.querySelector('.o-arc-game').textContent = game.title;
     drawBar(); run();
+  }
+  /** the lockstep game with a friend: the same game on both sides, a frame only runs when both players' buttons for it are known; the first player of the game is controller 1 */
+  function beginSession(n) {
+    const s = {id: n.id, role: n.role, friend: n.friend, go: false, theirReady: false, rtt: 120, ls: null, off: null, timer: 0, ping: 0, left: false};
+    s.ls = createLockstep({role: n.role, delay: delayFor(60), send: m => net.send(n.id, m), localMask: () => takeMask(),
+      run: (a, b) => { setPad(1, a); setPad(2, b); nes.frame(); },
+      checksum: () => { let h = 2166136261; for (let i = 0; i < 61440; i++) h = Math.imul(h ^ px[i], 16777619); return h >>> 0; },
+      onDesync: () => showNote(L().desync)});
+    s.off = net.on(n.id, (m) => {
+      if (m.k === 'q') net.send(n.id, {k: 'o', c: m.c});                                                   // a ping from the friend: answered at once
+      else if (m.k === 'o') {                                                                              // my ping came back: the delay follows the trip (up quickly, down slowly)
+        s.rtt = Math.max(5, Math.min(900, performance.now() - m.c)); const want = delayFor(s.rtt / 2), cur = s.ls.delay();
+        if (want > cur) s.ls.setDelay(want); else if (want < cur - 1) s.ls.setDelay(cur - 1);
+      } else if (m.k === 'y') { if (m.s === 1) { s.theirReady = true; if (s.go) net.send(n.id, {k: 'y', s: 1}); } else if (m.s === 3) s.left = true; }
+      else s.ls.receive(m, performance.now());
+    });
+    s.timer = setInterval(() => { if (!s.go) net.send(n.id, {k: 'y', s: 1}); }, 400);
+    s.ping = setInterval(() => net.send(n.id, {k: 'q', c: performance.now()}), 1000);
+    net.send(n.id, {k: 'y', s: 1});
+    session = s;
+  }
+  function endSession(leave) {
+    const s = session; if (!s) return; session = null;
+    clearInterval(s.timer); clearInterval(s.ping); s.off?.();
+    if (leave) { try { net.send(s.id, {k: 'y', s: 3}); net.quit(s.id); } catch (e) {} }
+    showNote('');
+  }
+  function showNote(text) {
+    const box = ov?.querySelector('.o-arc-screen'); if (!box) return;
+    let n = box.querySelector('.o-arc-note');
+    if (!text) { n?.remove(); return; }
+    if (!n) { n = document.createElement('div'); n.className = 'o-arc-note'; box.appendChild(n); }
+    n.textContent = text;
   }
   function showMessage(text) {
     const box = ov.querySelector('.o-arc-screen'); let m = box.querySelector('.o-arc-msg');
@@ -193,22 +242,27 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     m.textContent = text; ov.querySelector('.o-arc-menu').style.display = '';
   }
   function run() {
-    let last = performance.now(), acc = 0; const step = 1000 / 60.0988;
+    let last = performance.now(), acc = 0, stallAt = 0; const step = 1000 / 60.0988;
     const tick = now => {
       raf = requestAnimationFrame(tick);
-      acc += Math.min(100, now - last); last = now;
+      acc = Math.min(100, acc + Math.min(100, now - last)); last = now;
+      if (session && session.left) { endSession(false); stopGame(); showMessage(L().friendLeft); return; }
+      if (session && !session.go) { if (session.theirReady) { session.go = true; showNote(''); } else { showNote(L().waitingFor(session.friend)); acc = 0; return; } }
       let n = 0;
       while (acc >= step && n < 3) {
+        try {
+          if (session) { if (!session.ls.step(now)) { stallAt ||= now; if (now - stallAt > 15000) { endSession(true); stopGame(); showMessage(L().friendLeft); return; } if (now - stallAt > 600) showNote(L().waitingInputs(session.friend)); break; } stallAt = 0; if (n === 0) showNote(''); }
+          else { setPad(1, takeMask()); nes.frame(); }
+          frames++;
+        } catch (e) { stopGame(); showMessage(L().crashed); return; }
         acc -= step; n++;
-        try { setPad(1, maskOfKeys() | maskOfGamepad()); nes.frame(); frames++; }
-        catch (e) { stopGame(); showMessage(L().crashed); return; }
       }
       if (n === 3) acc = 0;
       view = {frames, acc, n, now, last, step};
     };
     raf = requestAnimationFrame(tick);
   }
-  function stopGame() { cancelAnimationFrame(raf); raf = 0; nes = null; playing = null; keysDown.clear(); wr = rd = 0; try { node?.disconnect(); } catch (e) {} }
+  function stopGame() { endSession(true); cancelAnimationFrame(raf); raf = 0; nes = null; playing = null; keysDown.clear(); wr = rd = 0; try { node?.disconnect(); } catch (e) {} }
 
   // ------------------------------------------------ the overlay: menu, screen, bar
   async function loadList() {
@@ -218,18 +272,44 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
   }
   function drawMenu() {
     const T = L(), menu = ov.querySelector('.o-arc-menu'); menu.style.display = '';
-    menu.innerHTML = `<h2>${T.title}<small>${T.pressStart}</small></h2>`;
+    menu.innerHTML = `<h2>${T.title}<small>${T.pressStart}</small></h2><div class="o-arc-banner"></div>`;
+    const st = net ? net.state() : null; netKey = st ? st.linked + '|' + st.friend : '';
     const list = gamesList || [];
     if (!list.length) menu.insertAdjacentHTML('beforeend', `<div style="grid-column:1/-1;text-align:center;opacity:.7">${T.noList}</div>`);
     for (const g of list) {
       const b = document.createElement('button'); b.className = 'o-arc-card'; b.dataset.id = g.id;
       b.innerHTML = `<b></b><small></small>`; b.querySelector('b').textContent = g.title; b.querySelector('small').textContent = `${T.players(g.players)} · ${g.kind || ''}`;
-      b.title = `${g.author || ''} · ${g.license || ''}`; b.prepend(thumb(g.id)); menu.appendChild(b);
+      b.title = `${g.author || ''} · ${g.license || ''}`; b.prepend(thumb(g.id));
+      if (st && st.linked && st.friend && g.players >= 2) { const two = document.createElement('span'); two.className = 'o-arc-two'; two.dataset.two = g.id; two.textContent = '👥 ' + T.playWith(st.friend); b.appendChild(two); }
+      menu.appendChild(b);
     }
     const own = document.createElement('label'); own.className = 'o-arc-card o-arc-load'; own.title = T.ownGameTip;
     own.innerHTML = `<span>📂</span><b>${T.ownGame}</b><small>${T.ownGameTip}</small><input type="file" accept=".nes" hidden>`;
     menu.appendChild(own);
-    sel = 0; markSel();
+    sel = 0; markSel(); drawBanner(st);
+  }
+  /** the line above the games: waiting for the friend to join mine, or the friend's invitation */
+  function drawBanner(st) {
+    const b = ov?.querySelector('.o-arc-banner'); if (!b) return;
+    const T = L(), titleOf = id => (gamesList || []).find(x => x.id === id)?.title || id;
+    let html = '';
+    if (st && st.mine && st.mine.players.length < 2) html = `⏳ ${esc(T.waitingFor(st.friend || '…'))} <button data-act="cancelnet">${T.cancel}</button>`;
+    else if (st && st.invites?.length) { const g = st.invites[0]; html = `📣 ${esc(T.invites(g.players[0], titleOf(g.rom)))} <button data-join="${esc(g.id)}">${T.join}</button>`; }
+    if (b.dataset.html !== html) { b.dataset.html = html; b.innerHTML = html; b.style.display = html ? 'flex' : 'none'; }
+  }
+  /** every half second while the arcade is open: a game of mine that the friend joined starts; the banner follows the common room */
+  function netPoll() {
+    if (!ov || !net || playing || starting) return;
+    const st = net.state();
+    if (st.linked + '|' + st.friend !== netKey) return drawMenu();
+    const g = st.mine;
+    if (g && g.players.length === 2) {
+      const info = (gamesList || []).find(x => x.id === g.rom); if (!info) return;
+      starting = true; const role = g.players[0] === me() ? 0 : 1;
+      start({...info, net: {id: g.id, role, friend: g.players[1 - role]}}).finally(() => { starting = false; });
+      return;
+    }
+    drawBanner(st);
   }
   let sel = 0;
   const cards = () => [...ov.querySelectorAll('.o-arc-menu .o-arc-card')];
@@ -238,7 +318,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     const T = L(), bar = ov.querySelector('.o-arc-bar');
     bar.innerHTML = `<span class="o-arc-keys">${T.keys}</span>`
       + (playing && playing.id ? `<span>🏆 <input type="number" min="0" max="999999999" class="o-arc-score" placeholder="${T.scorePlaceholder}"> <button data-act="save">${T.saveScore}</button></span>` : '')
-      + (playing && playing.id && !shaOk ? `<span style="color:#ffab91">⚠ ${T.sha}</span>` : '') + (playing ? `<button data-act="menu">${T.menu} (Esc)</button>` : '');
+      + (playing && playing.id && !shaOk ? `<span style="color:#ffab91">⚠ ${T.sha}</span>` : '') + (session ? `<span>👥 ${esc(T.vs(session.friend))}</span>` : '') + (playing ? `<button data-act="menu">${T.menu} (Esc)</button>` : '');
   }
   function open() {
     if (ov) return;
@@ -253,10 +333,11 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     ov.addEventListener('change', e => { const f = e.target.files?.[0]; if (f && e.target.type === 'file') start({file: f, title: f.name.replace(/\.nes$/i, '')}); });
     root.appendChild(ov); addEventListener('keydown', onKey, true); addEventListener('keyup', onKeyUp, true);
     drawBar(); drawMenu(); loadList().then(l => { if (ov && !playing && l) drawMenu(); }); ov.focus();
+    if (net) poller = setInterval(netPoll, 500);
   }
   function close() {
     if (!ov) return;
-    stopGame(); removeEventListener('keydown', onKey, true); removeEventListener('keyup', onKeyUp, true);
+    stopGame(); clearInterval(poller); removeEventListener('keydown', onKey, true); removeEventListener('keyup', onKeyUp, true);
     ov.remove(); ov = null;
   }
   function backToMenu() { stopGame(); ov.querySelector('.o-arc-game').textContent = ''; ov.querySelector('.o-arc-msg')?.remove(); drawBar(); drawMenu(); }
@@ -264,6 +345,9 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     if (e.target.closest('.o-arc-x')) return close();
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'menu') return backToMenu();
+    if (act === 'cancelnet') { const g = net?.state().mine; if (g) net.quit(g.id); return; }
+    const joinId = e.target.closest('[data-join]')?.dataset.join; if (joinId) return net?.join(joinId);
+    const two = e.target.closest('[data-two]')?.dataset.two; if (two) { const g = (gamesList || []).find(x => x.id === two); if (g) net?.invite(g.id, g.sha256); return; }
     if (act === 'save') {
       const inp = ov.querySelector('.o-arc-score'), n = Math.round(+inp.value);
       if (playing?.id && n >= 0 && Number.isFinite(n)) { report({game: 'arc-' + playing.id, score: n}); inp.value = ''; say(L().saved); }
@@ -278,7 +362,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     if (typing) { if (e.key === 'Escape') e.target.blur(); e.stopImmediatePropagation(); return; }
     e.stopImmediatePropagation();
     if (e.key === 'Escape') { e.preventDefault(); return playing || ov.querySelector('.o-arc-msg') ? backToMenu() : close(); }
-    if (playing) { if (KEYS[e.code] !== undefined) { e.preventDefault(); keysDown.add(e.code); } return; }
+    if (playing) { if (KEYS[e.code] !== undefined) { e.preventDefault(); keysDown.add(e.code); tapMask |= 1 << KEYS[e.code]; } return; }
     const c = cards(); if (!c.length) return;
     if (e.key === 'ArrowRight') sel = Math.min(c.length - 1, sel + 1);
     else if (e.key === 'ArrowLeft') sel = Math.max(0, sel - 1);
@@ -303,5 +387,5 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     btnA.position.y = 17 * 0.05 - (m & 1 ? 0.02 : 0); btnB.position.y = 17 * 0.05 - (m & 2 ? 0.02 : 0);
   }
 
-  return {stats: () => ({frames, nes: !!nes, raf, wr, rd, pad: pad.slice(), view}), open, close, active: () => !!ov, near, update, box: floorBox, mesh: cab, playing: () => playing, hint: () => L().hint};
+  return {stats: () => ({frames, nes: !!nes, raf, wr, rd, pad: pad.slice(), view, net: session && {...session.ls.stats(), go: session.go, rtt: session.rtt, left: session.left}}), open, close, active: () => !!ov, near, update, box: floorBox, mesh: cab, playing: () => playing, hint: () => L().hint};
 }

@@ -102,7 +102,11 @@ class Mailbox:
 
 RT_KINDS = {'p': ('y', 'c'), 'b': ('n', 'x', 'y', 'vx', 'vy', 'sp', 'a', 'b', 'w', 'm', 'sv'), 'f': ('n', 'x', 'y', 'vx', 'vy', 'a', 'b', 'w', 'm'),
             'r': ('r', 'y', 'a', 'm', 'w'), 'h': ('x', 'y', 'vx', 'vy'),
+            'n': ('t', 'a'), 'y': ('s',), 'z': ('f', 'h'),
             'q': ('c',), 'o': ('c',), 's': ()}   # paddle, ping-pong ball, foosball ball, a foosball rod, a hit of the ball, ping, pong, start
+
+
+RT_WIDE = {'n': ('t', 'a'), 'z': ('f', 'h')}                   # frame numbers and checksums of a lockstep game are big
 
 
 def clean_rt(m):
@@ -115,14 +119,18 @@ def clean_rt(m):
     out = {'k': k, 'g': g}
     for f in RT_KINDS[k]:
         if f in m:
-            out[f] = round(num(m[f], -5000, 5000), 3)
+            out[f] = int(num(m[f], 0, 2 ** 32)) if f in RT_WIDE.get(k, ()) else round(num(m[f], -5000, 5000), 3)
+    if k == 'n' and m.get('d'):                       # a lockstep packet: the changes of the buttons, "frame:mask,frame:mask"
+        if not re.fullmatch(r'[0-9:,]{1,1500}', str(m['d'])):
+            raise ValueError('a bad list of button changes')
+        out['d'] = str(m['d'])
     return out
 
 
 GONE = 15                                                   # seconds without a word: a guest (or the host) is gone
 LOST = 4                                                   # seconds a guest has heard nothing from the host before the host's figures leave its screen
 GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play', 'pause', 'seek'),
-         'pool': ('new', 'join', 'shot', 'quit'), 'pingpong': ('new', 'join', 'quit'), 'foos': ('new', 'join', 'quit'), 'result': ('add',)}
+         'pool': ('new', 'join', 'shot', 'quit'), 'pingpong': ('new', 'join', 'quit'), 'foos': ('new', 'join', 'quit'), 'nes': ('new', 'join', 'quit'), 'result': ('add',)}
 RESULT_MATCH = ('tris', 'morra', 'pool', 'pingpong', 'foos')      # games that are won or lost: the board counts wins and points
 RESULT_SCORE = ('zombie', 'paintball')                             # games played for a score (and every arcade game, arc-<name>): the board keeps the best
 POOL_W, POOL_H = 800, 440                                   # the pool table's canvas (office-games.js)
@@ -205,6 +213,11 @@ def _clean_game(g):
         out['turn'] = int(num(g.get('turn'), 0, 1))
         if g.get('win') is not None:
             out['win'] = int(num(g.get('win'), 0, 1))
+    if kind == 'nes' and op == 'new':                 # a NES game of the arcade, offered to a friend: which one, and its checksum, so both have the same file
+        out['rom'] = str(g.get('rom', ''))
+        if not re.fullmatch(r'[a-z0-9-]{1,40}', out['rom']):
+            raise ValueError('a game of the arcade is a short name')
+        out['sha'] = str(g.get('sha', '')) if re.fullmatch(r'[0-9a-f]{64}', str(g.get('sha', ''))) else ''
     if kind == 'result':                              # the end of a game, for the leaderboards: who won, or the score of a run
         gk = str(g.get('g', ''))
         if gk not in RESULT_MATCH and gk not in RESULT_SCORE and not re.fullmatch(r'arc-[a-z0-9-]{1,32}', gk):
@@ -1351,6 +1364,22 @@ def _prova():
             except (ValueError, TypeError):
                 continue
             raise AssertionError(f'a bad pool shot got in: {bad}')
+        pk = clean_rt({'k': 'n', 'g': 'ab12', 't': 123456, 'a': 123400, 'd': '123450:16,123455:0'})                   # a lockstep packet goes through whole
+        assert pk['t'] == 123456 and pk['d'] == '123450:16,123455:0' and clean_rt({'k': 'z', 'g': 'ab12', 'f': 119, 'h': 4000000000})['h'] == 4000000000
+        for bad in ({'k': 'n', 'g': 'ab12', 't': -1}, {'k': 'n', 'g': 'ab12', 't': 5, 'd': 'drop table'}, {'k': 'n', 'g': 'ab12', 't': 2 ** 40}):
+            try:
+                clean_rt(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'a bad lockstep packet got in: {bad}')
+        ng = {'type': 'nes', 'op': 'new', 'id': 'n1', 'rom': 'super-tilt-bro', 'sha': 'a' * 64}
+        assert clean_game(ng)['rom'] == 'super-tilt-bro' and clean_game({**ng, 'sha': 'zz'})['sha'] == '' and clean_game({'type': 'nes', 'op': 'join', 'id': 'n1'})['op'] == 'join'
+        for bad in ({**ng, 'rom': '../x'}, {**ng, 'rom': ''}):
+            try:
+                clean_game(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'a bad arcade invitation got in: {bad}')
         res = {'type': 'result', 'op': 'add', 'id': 'r1', 'g': 'foos', 'win': 1, 'opp': 'BOB', 'pts': [5, 3]}         # the leaderboards: results are checked, and counted once
         assert clean_game(res)['pts'] == [5, 3] and clean_game({**res, 'opp': None})['opp'] == '' and clean_game({'type': 'result', 'op': 'add', 'id': 'a1', 'g': 'arc-super-tilt-bro', 'score': 5})['g'] == 'arc-super-tilt-bro'
         for bad in ({**res, 'g': 'chess'}, {**res, 'win': 2}, {**res, 'pts': [5, 3000]}, {**res, 'g': 'arc-a b'}, {'type': 'result', 'op': 'add', 'id': 'z', 'g': 'zombie', 'score': -1},

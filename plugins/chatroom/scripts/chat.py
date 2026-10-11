@@ -1690,7 +1690,7 @@ def cmd_serve(room, a):
             path = self.path.split('?')[0]
             if path in ('/', '/index.html'):
                 return self.send(200, viewer.read_bytes(), 'text/html; charset=utf-8')
-            if re.fullmatch(r'/office(-[a-z]+)?\.js', path):
+            if re.fullmatch(r'/office(-[a-z]+)*\.js', path):
                 return self.send(200, (HERE / path[1:]).read_bytes(), 'text/javascript; charset=utf-8')
             if path == '/settings.json':              # the user's lasting choices: how far a lent helper goes, the figure's look
                 return self.send(200, json.dumps(settings(), ensure_ascii=False), 'application/json; charset=utf-8')

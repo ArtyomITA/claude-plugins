@@ -194,7 +194,7 @@ export const L = {
        poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', pingpong: 'Ping pong', foos: 'Foosball', theyWin: n => `${n} wins`, newMatch: 'Play with a friend, live', joinMatch: n => `Play with ${n}`,
        matchFriends: 'Link with a friend to play together', liveMatch: 'live match', poolFouls: 'fouls: -1 point each', cue_classic: 'Classic', cue_power: 'Power', cue_precise: 'Precise', cue_spin: 'Spin', cue_classic_tip: 'The cue as it is', cue_power_tip: '+40% force, but the aim trembles ', cue_precise_tip: '-20% force, a long aim line with the bounce', cue_spin_tip: 'The cue ball curves (press 4 again to turn the other way)', goal: 'GOAL!', points: 'pts', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
-       pool: 'Pool', foosball: 'Foosball', scores: 'Leaderboard', hint_scores: 'see the leaderboard', hint_arcade: 'play the arcade', noScores: 'no games played yet', colWins: 'W', colLoss: 'L', colPts: 'pts', colBest: 'best', colRuns: 'runs',
+       pool: 'Pool', foosball: 'Foosball', scores: 'Leaderboard', hint_scores: 'see the leaderboard', hint_arcade: 'play the arcade', arcadeInvite: (n, g) => `🕹 ${n} invites you to play ${g}: open the arcade`, noScores: 'no games played yet', colWins: 'W', colLoss: 'L', colPts: 'pts', colBest: 'best', colRuns: 'runs',
        foosHint: 'Mouse: slide the rod (its position picks the rod, or keys 1-4) · hold the button to wind up, let go to kick', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
        joinPool: n => `Play pool with ${n}`, newPool: 'Play pool with a friend, in turns', poolFriends: 'Link with a friend to play pool together',
@@ -240,7 +240,7 @@ export const L = {
        poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', pingpong: 'Ping pong', foos: 'Biliardino', theyWin: n => `Vince ${n}`, newMatch: 'Gioca con un amico, in diretta', joinMatch: n => `Gioca con ${n}`,
        matchFriends: 'Collegati a un amico per giocare insieme', liveMatch: 'partita in diretta', poolFouls: 'falli: -1 punto ciascuno', cue_classic: 'Classica', cue_power: 'Potente', cue_precise: 'Precisa', cue_spin: 'Effetto', cue_classic_tip: 'La stecca di sempre', cue_power_tip: '+40% di forza, ma la mira trema ', cue_precise_tip: '-20% di forza, linea di mira lunga con il rimbalzo', cue_spin_tip: 'La bianca curva (premi di nuovo 4 per girare dall altra parte)', goal: 'GOL!', points: 'punti', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
-       pool: 'Biliardo', foosball: 'Biliardino', scores: 'Classifica', hint_scores: 'apri la classifica', hint_arcade: 'gioca al videogioco', noScores: 'nessuna partita ancora', colWins: 'V', colLoss: 'S', colPts: 'punti', colBest: 'record', colRuns: 'partite',
+       pool: 'Biliardo', foosball: 'Biliardino', scores: 'Classifica', hint_scores: 'apri la classifica', hint_arcade: 'gioca al videogioco', arcadeInvite: (n, g) => `🕹 ${n} ti invita a giocare a ${g}: apri il videogioco`, noScores: 'nessuna partita ancora', colWins: 'V', colLoss: 'S', colPts: 'punti', colBest: 'record', colRuns: 'partite',
        foosHint: 'Mouse: sposta la barra (la sua posizione sceglie la barra, o tasti 1-4) · tieni premuto per caricare, rilascia per calciare', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
        joinPool: n => `Gioca a biliardo con ${n}`, newPool: 'Gioca a biliardo con un amico, a turni', poolFriends: 'Collegati a un amico per giocare a biliardo insieme',
@@ -286,9 +286,9 @@ export function replayGames(lines) {
       for (const y of games.values()) if (!y.done && y.players.includes(who) && (y.players.length === 1 || untouched(y))) y.done = {quit: who, winner: null};
       if (busy(who)) continue;
       // someone else of the same kind is already waiting alone: both clicked "play with a friend" together, so this is the answer
-      const waiting = [...games.values()].find(y => !y.done && y.type === g.type && y.players.length === 1 && y.players[0] !== who);
+      const waiting = [...games.values()].find(y => !y.done && y.type === g.type && y.players.length === 1 && y.players[0] !== who && (g.type !== 'nes' || y.rom === g.rom));
       if (waiting) { waiting.players.push(who); waiting.n = m.n; continue; }
-      games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {},
+      games.set(g.id, {id: g.id, type: g.type, players: [who], n: m.n, board: Array(9).fill(''), turn: 0, commits: {}, reveals: {}, ...(g.type === 'nes' ? {rom: g.rom, sha: g.sha} : {}),
                        ...(g.type === 'pool' ? {balls: poolRack(), groups: [null, null], shots: []} : {})});
       continue;
     }
@@ -632,7 +632,7 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       const {games, dice} = replayGames(s.games || []), me = s.me, gbox = cp.querySelector('.o-c-games');
       const busy = games.some(x => !x.done && x.players.includes(me));
       for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"], [data-g="pool"], [data-g="pingpong"], [data-g="foos"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
-      const ghtml = games.slice(0, 4).map(x => {
+      const ghtml = games.filter(x => x.type !== 'nes').slice(0, 4).map(x => {
         const vs = x.players.map(esc).join(' – ') || '?', mine = x.players.includes(me), status = x.done
           ? (x.done.quit ? L.quitBy(x.done.quit) : x.done.draw ? L.draw : L.won(x.done.winner)) : x.players.length < 2 ? L.waitingPlayer : '';
         const join = (!x.done && x.players.length === 1 && !mine && !busy ? `<button data-gm="join" data-type="${x.type}" data-id="${esc(x.id)}">${esc(L.joinGame)}</button>` : '')

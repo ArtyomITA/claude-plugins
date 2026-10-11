@@ -1328,7 +1328,7 @@ async function pollCommon() {
     commonState = await r.json();
     ui.commonState(commonState);
     const sk = JSON.stringify(commonState.scores || {}); if (sk !== scoresKey) { scoresKey = sk; drawScoreboard(); }
-    try { reportFinished(); } catch (e) {}
+    try { reportFinished(); arcadeInvites(); } catch (e) {}
     for (const q of commonState.share?.requests || []) if (q.status === 'pending' && !askedSeen.has(q.id)) {
       askedSeen.add(q.id); chime(); notify('ask' + q.id, `🙋 ${q.guest}`, q.text.slice(0, 160), true, () => openCommon());
     }
@@ -1791,10 +1791,34 @@ function tvFromFriends() {
 const myName = () => commonState?.me || D.user;
 const games = createGames({root, t: ui.t, me: myName, onResult: reportResult,
   sendShot: (id, s) => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolShot}`, game: {type: 'pool', op: 'shot', id, ...s}}).then(() => pollCommon())});
-/** the arcade cabinet of the common room (office-arcade.js): a click on it, E next to it, or Altro > 9999 IN 1 opens the player; the scores of a game go to the leaderboards */
-const arcade = ARC_ON ? createArcade({THREE, scene, camera, raycastables, root, Vox: V.Vox, mesh: V.mesh, lang: () => DATA.config.lang, say: t => ui.placeName(t), report: reportResult,
+/** the arcade cabinet of the common room (office-arcade.js): a click on it, E next to it, or Altro > Arcade opens the player; the scores of a game go to the leaderboards */
+/** the arcade's games for two: an invitation is a line of the common room (like a pool table); the buttons go over the real-time channel (office-arcade-net.js) */
+const NES_NET = false;                                                       // games for two: on when the lockstep has been proved over the real relay
+const nesNet = {
+  state: () => {
+    const me = myName(), all = replayGames(commonState?.games || []).games.filter(x => x.type === 'nes' && !x.done), mine = all.find(x => x.players.includes(me));
+    return {linked: NES_NET && linked(), friend: friendName(), mine, invites: mine ? [] : all.filter(x => x.players.length === 1)};
+  },
+  invite: async (rom, sha) => { await post('common/post', {text: `🕹 ${myName()} · 9999 IN 1: ${rom}`, game: {type: 'nes', op: 'new', id: resultId(), rom, sha: sha || ''}}); pollCommon(); },
+  join: async id => { await post('common/post', {text: `🕹 ${myName()} ✓`, game: {type: 'nes', op: 'join', id}}); pollCommon(); },
+  quit: async id => { await post('common/post', {text: `🕹 ${myName()} ✗`, game: {type: 'nes', op: 'quit', id}}); pollCommon(); },
+  send: (id, m) => rt.send({g: id, ...m}),
+  on: (id, fn) => rt.on((m, from) => { if (m.g === id) fn(m, from); }),
+};
+const nesSeen = new Set();
+/** a friend opened a game for two: a chime and a line, whether or not the arcade is open */
+function arcadeInvites() {
+  if (!arcade) return;
+  for (const g of nesNet.state().invites) {
+    if (nesSeen.has(g.id)) continue;
+    nesSeen.add(g.id);
+    const text = ui.t().arcadeInvite(g.players[0], String(g.rom).replace(/-/g, ' '));
+    chime(); ui.placeName(text); notify('nes' + g.id, '🕹 ' + g.players[0], text, true, () => arcade.open());
+  }
+}
+const arcade = ARC_ON ? createArcade({THREE, scene, camera, raycastables, root, Vox: V.Vox, mesh: V.mesh, lang: () => DATA.config.lang, say: t => ui.placeName(t), report: reportResult, me: myName, net: nesNet,
                                       unlock: unlockAudio, volume: () => mixLevel('arcade'), onOpen: () => document.exitPointerLock?.()}) : null;
-if (arcade) ui.addExtra('arcade', '🕹', '9999 IN 1', () => arcade.open());
+if (arcade) ui.addExtra('arcade', '🕹', 'Arcade', () => arcade.open());
 const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(m => {
   const type = itemOf(m).type, [w, d] = CATALOG[type].foot, c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
   m.userData.game = type; raycastables.push(m);
