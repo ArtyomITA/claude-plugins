@@ -115,6 +115,20 @@
               box-shadow: 0 1px 2px var(--shadow); background: rgba(127,127,127,.12); }
   .pics.many img { max-height: 200px; max-width: calc(50% - 3px); object-fit: cover; }
   .pill .pics { justify-content: center; } .pill .pics img { max-height: 160px; }
+  /* a structured status (JSON): a card with the task, a progress bar and the fields that were given */
+  .card { margin: 8px auto; width: min(560px, 92%); background: var(--in); color: var(--text); border-radius: 10px; padding: 9px 12px 8px;
+          box-shadow: 0 1px .5px rgba(11,20,26,.13); border-left: 4px solid var(--who, var(--accent)); font-size: 13.5px; }
+  .card .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card .task { background: var(--accent); color: #fff; border-radius: 6px; padding: 1px 7px; font-weight: 700; font-size: 12px; }
+  .card .step { flex: 1; min-width: 40%; }
+  .card .bar { height: 6px; border-radius: 3px; background: var(--border); margin: 7px 0 5px; overflow: hidden; }
+  .card .bar i { display: block; height: 100%; background: var(--who, var(--accent)); }
+  .card .f { display: grid; grid-template-columns: 22px 1fr; gap: 2px 4px; margin-top: 3px; }
+  .card .f span:first-child { text-align: center; }
+  .card ul { margin: 0; padding-left: 16px; }
+  .card .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .card .chips code { background: var(--border); border-radius: 5px; padding: 0 5px; font-size: 11.5px; }
+  .pill.board { font-size: 12.5px; }
   #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: none; place-items: center; z-index: 20;
               cursor: zoom-out; padding: 18px; }
   #lightbox.open { display: grid; }
@@ -366,9 +380,36 @@ function pics(m) {
   return `<div class="pics${list.length > 1 ? ' many' : ''}">` +
     list.map(src => `<img loading="lazy" src="${esc(src)}" alt="#${m.n}">`).join('') + '</div>';
 }
+function card(m) {                          // a JSON status: the task, the bar, then each field that was given
+  const p = profile(m.from), st = m.state, pct = Math.max(0, Math.min(100, +st.pct || 0));
+  const row = (icon, html) => `<div class="f"><span>${icon}</span><span>${html}</span></div>`;
+  const el = document.createElement('div');
+  el.className = 'card'; el.style.setProperty('--who', p.color);
+  el.innerHTML = `<div class="top">${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b>` +
+      (st.task ? `<span class="task">${esc(st.task)}</span>` : '') + `<span class="step">${inline(st.step || '')}</span><b>${pct}%</b></div>` +
+    `<div class="bar"><i style="width:${pct}%"></i></div>` +
+    (st.done ? row('✅', inline(st.done)) : '') +
+    (st.evidence?.length ? row('🔎', `<ul>${st.evidence.map(x => `<li>${inline(x)}</li>`).join('')}</ul>`) : '') +
+    (st.risks ? row('⚠️', inline(st.risks)) : '') + (st.blocked_by ? row('⛔', inline(st.blocked_by)) : '') +
+    (st.needs ? row('🙋', inline(st.needs)) : '') + (st.next ? row('➡️', inline(st.next)) : '') +
+    (st.files?.length ? `<div class="chips">${st.files.map(f => `<code>${esc(f)}</code>`).join('')}</div>` : '') +
+    `<div style="text-align:right"><span class="num">#${m.n} ${esc(m.time || '')}</span></div>` + pics(m);
+  return el;
+}
 function build(m) {
   let el;
-  if (isStatus(m) || isIdle(m)) {
+  if (isStatus(m) && m.state && typeof m.state === 'object') {
+    el = card(m);
+    if (!$('optStatus').checked) el.classList.add('hidden');
+    lastFrom = null;
+  } else if (m.kind === 'board') {                       // a change of the task board (chat.py task)
+    const p = profile(m.from);
+    el = document.createElement('div');
+    el.className = 'pill board';
+    el.innerHTML = `${inline(m.text)} <span class="num">#${m.n} ${esc(m.time || '')}</span>`;
+    el.title = m.from + (p.role ? ' · ' + p.role : '');
+    lastFrom = null;
+  } else if (isStatus(m) || isIdle(m)) {
     const p = profile(m.from), idle = isIdle(m);
     el = document.createElement('div');
     el.className = 'pill status' + (idle ? ' idle' : '');

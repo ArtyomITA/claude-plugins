@@ -524,15 +524,30 @@ class Room:
                   f"to do until someone else acts, post ONE --idle instead (what you wait for and from whom, with "
                   f"your percentage) and wait to be tagged. ***\n", flush=True)
 
-    def read(self, name):
+    def read(self, name, focus=False):
         items = self.messages()
         self.timer_warning(name, items)
         items = [m for m in items if m['n'] > self.cursor(name)]
-        if items:
-            self.set_cursor(name, items[-1]['n'])
-            self.show(items)
-        else:
-            print('(no new messages)')
+        if not items:
+            return print('(no new messages)')
+        self.set_cursor(name, items[-1]['n'])
+        if not focus:
+            return self.show(items)
+        # focus: in full only what concerns you (tags, the user, the lead, plans and votes, board lines and needs that
+        # name you); the rest in one digest line per author with their latest state, so a busy agent reads less
+        users = self.user_names()
+        mine = [m for m in items if m['from'] != name and (self.wakes(m, name, users) or tags(m.get('text', ''), name)
+                or (m.get('kind') == 'board' and name.lower() in m.get('text', '').lower())
+                or name.lower() in str(m.get('state', {}).get('needs', '')).lower())]
+        self.show(mine)
+        rest = [m for m in items if m not in mine and m['from'] != name]
+        if rest:
+            by = {}
+            for m in rest:
+                by.setdefault(m['from'], []).append(m)
+            parts = [f"{k} {len(v)} (last #{v[-1]['n']}: {v[-1]['text'].splitlines()[0][:90]})" for k, v in by.items()]
+            print(f"(+{len(rest)} other messages, not for you: " + '; '.join(parts)
+                  + ". If you need their details, read --all shows the whole chat.)", flush=True)
 
     def wait(self, name, timeout):
         items = self.messages()
@@ -1971,6 +1986,7 @@ def main():
     p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
     p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
     p.add_argument('--note', help='task handoff: the decisions taken, the files touched, what was tried')
+    p.add_argument('--focus', action='store_true', help='read: in full only what concerns you, the rest as a one-line digest per author')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--host', default='127.0.0.1')
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
@@ -2004,7 +2020,7 @@ def main():
     if a.command == 'post':
         return cmd_post(room, a)
     if a.command == 'read':
-        return room.read(a.name)
+        return room.read(a.name, a.focus)
     return room.wait(a.name, a.timeout)         # wait caps the timeout: 110 s, or 540 s while idle
 
 

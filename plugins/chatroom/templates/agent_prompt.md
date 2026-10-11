@@ -5,6 +5,9 @@ LANGUAGE AND STYLE: write in {{LANGUAGE}}. {{STYLE}}
 THE CHAT (use your shell tool; the room is {{ROOM}}):
 - the whole chat:        python "{{CHAT}}" read --all --room "{{ROOM}}"
 - new messages:          python "{{CHAT}}" read --as {{NAME}} --room "{{ROOM}}"
+- new messages, only what concerns you (tags, the user, the lead, plans, board lines and needs that name you) in full,
+  the rest as one digest line per author; use it while you work, the plain read when you need the whole picture:
+                         python "{{CHAT}}" read --focus --as {{NAME}} --room "{{ROOM}}"
 - wait for someone (blocks up to ~100 s, returns early when someone writes or your timer expires):
                          python "{{CHAT}}" wait --as {{NAME}} --room "{{ROOM}}" --timeout 100
 - wait while you are IDLE (rule 9; blocks up to 540 s, returns only when you are tagged, the user or the lead writes,
