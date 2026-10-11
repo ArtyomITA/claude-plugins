@@ -755,6 +755,27 @@ def tv_search(q):
     return [e for e, good in zip(out, playable) if good][:16]
 
 
+AUDIO_URLS = {}                                    # video id -> (address of its sound alone, when yt-dlp found it)
+
+
+def tv_audio_url(vid):
+    """where a YouTube video's sound alone is (m4a when there is one), found by yt-dlp and kept 30 minutes; raises
+    RuntimeError with what to do when yt-dlp is missing or fails"""
+    hit = AUDIO_URLS.get(vid)
+    if hit and time.time() - hit[1] < 1800:
+        return hit[0]
+    try:
+        r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
+                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=40)
+        url = (r.stdout or '').strip().splitlines()[0] if (r.stdout or '').strip() else ''
+    except (OSError, subprocess.TimeoutExpired):
+        url = ''
+    if not re.match(r'https://[\w.-]+\.googlevideo\.com/', url):    # only YouTube's own servers are ever fetched
+        raise RuntimeError('the placed sound needs yt-dlp, up to date: python -m pip install -U yt-dlp')
+    AUDIO_URLS[vid] = (url, time.time())
+    return url
+
+
 def settings():
     """lend_mode: 'full' (a lent helper works for real inside its own folder: commands, a venv, tests) or 'safe' (it only
     talks and writes drafts); full by default"""
@@ -1235,6 +1256,30 @@ def cmd_serve(room, a):
                 return self.send(200, json.dumps({'results': out}, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/tv.json':                    # the lounge TV's channels
                 return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')
+            m = re.fullmatch(r'/tv/audio/([A-Za-z0-9_-]{11})', path)
+            if m:                                      # a YouTube video's sound alone, passed through by ranges: the page places it left or right
+                try:
+                    url = tv_audio_url(m[1])
+                except RuntimeError as exc:
+                    return self.send(503, str(exc), 'text/plain')
+                ask = urllib.request.Request(url, headers={'Range': self.headers.get('Range') or 'bytes=0-', 'User-Agent': 'Mozilla/5.0'})
+                try:
+                    up = urllib.request.urlopen(ask, timeout=20)
+                except OSError as exc:
+                    AUDIO_URLS.pop(m[1], None)          # an address that expired: the next try asks yt-dlp again
+                    return self.send(502, f'YouTube did not give the sound: {exc}', 'text/plain')
+                with up:
+                    self.send_response(up.status)
+                    for h in ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges'):
+                        if up.headers.get(h):
+                            self.send_header(h, up.headers[h])
+                    self.end_headers()
+                    try:
+                        while chunk := up.read(65536):
+                            self.wfile.write(chunk)
+                    except OSError:                    # the page jumped elsewhere or moved on: it closed the line
+                        pass
+                return
             m = re.fullmatch(r'/tv/([\w.-]{1,60})/([\w.-]{1,120}\.(?:mp4|webm))', path)
             if m:                                      # a local video, by ranges (seeking, looping)
                 f = (TV_DIR / m[1] / m[2]).resolve()

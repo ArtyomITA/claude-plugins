@@ -12,7 +12,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
-import {createTV} from './office-tv.js';
+import {createTV, createRadio} from './office-tv.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
 import {mergeStatic} from './office-merge.js';
@@ -761,6 +761,7 @@ function nearby() {
   if (d(BREW.pos) < 1.3) opts.push({kind: 'coffee', k: d(BREW.pos)});
   for (const s of sitSpots()) { const k = Math.min(d(s.pos), d(outOf(s))); if (k < 1.3) opts.push({kind: 'sit', seat: s, k: k + 0.2}); }
   if (loungeTv.near(boss.pos) < 1.4) opts.push({kind: 'zap', k: loungeTv.near(boss.pos)});
+  if (radio && radio.near(boss.pos) < 1.3) opts.push({kind: 'radio', k: radio.near(boss.pos)});
   for (const g of GAME_TABLES) { const k = g.near(boss.pos); if (k < 0.8) opts.push({kind: 'game', game: g.type, k: k + 0.3}); }
   for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
   return opts.sort((a, b) => a.k - b.k)[0] || null;
@@ -773,6 +774,7 @@ function interact() {
   if (t.kind === 'sit') return walkTo(outOf(t.seat), t.seat);
   if (t.kind === 'talk') return talkTo(t.name);
   if (t.kind === 'zap') return loungeTv.menu();
+  if (t.kind === 'radio') return radio.menu();
   if (t.kind === 'game') return openGame(t.game);
   watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
 }
@@ -1361,6 +1363,7 @@ renderer.domElement.addEventListener('click', e => {
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
   if (hit?.object.userData.remote) return loungeTv.menu();                       // the TV's remote: its menu
+  if (hit?.object.userData.radio) return radio.menu();                           // the radio: its stations
   if (hit?.object.userData.game) return openGame(hit.object.userData.game);       // a games table: play
   const name = hit?.object.userData.person;
   if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
@@ -1493,7 +1496,7 @@ function frame(now) {
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
   if (now - shadowAt > (speed === 'use' ? 66 : speed === 'work' ? 120 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not
-  camera.updateMatrixWorld(); loungeTv.update(t); paintball.update(dt);
+  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); paintball.update(dt);
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
 }
 
@@ -1561,10 +1564,18 @@ window.addEventListener('chatroom:data', () => ui.setLang(DATA.config.lang));
 const itemOf = m => (LAYOUT.items || [])[m.userData.src];
 const tvMesh = ITEM_MESHES.find(m => itemOf(m)?.type === 'tvStand');
 const tvTable = tvMesh && ITEM_MESHES.filter(m => itemOf(m)?.type === 'lowTable').sort((a, b) => a.position.distanceTo(tvMesh.position) - b.position.distanceTo(tvMesh.position))[0];
+// the TV and the radio sound full in their floor zone (the lounge, the games corner) and fade, from their side, outside it
+const grow = z => z && {x0: z.x0 - 0.3, z0: z.z0 - 0.3, x1: z.x1 + 0.3, z1: z.z1 + 0.3};
+const zoneAt = p => p && grow(LAYOUT.floor.zones.findLast(z => p.x >= z.x0 && p.x <= z.x1 && p.z >= z.z0 && p.z <= z.z1));
+const ear = () => boss?.pos;
 const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: tvTable, raycastables, say: t => ui.placeName(t), t: ui.t, linked,
+  ear, area: zoneAt((tvTable || tvMesh)?.position),
   onTogether: g => post('common/post', {text: `📺 ${commonState?.me || D.user} ${g.op === 'pause' ? '⏸' : g.op === 'seek' ? '⏩ ' + Math.floor(g.pos / 60) + ':' + String(Math.floor(g.pos % 60)).padStart(2, '0') : ui.t().tvPuts + ': ' + (g.title || g.v)}`,
                                        game: {type: 'tv', id: Math.random().toString(16).slice(2, 10), ...g}})});
-if (FORCE) window.__officeTv = loungeTv;
+const gameZone = LAYOUT.floor.zones.find(z => z.kind === 'game');
+const radio = gameZone && createRadio({THREE, scene, camera, root, raycastables, say: t => ui.placeName(t), t: ui.t, ear,
+  spot: {x: gameZone.x0 + 0.4, z: gameZone.z1 - 1.9}, rot: Math.PI / 2, area: grow(gameZone)});
+if (FORCE) Object.assign(window, {__officeTv: loungeTv, __officeRadio: radio});
 let lastTvN = null;
 /** a friend chose a video to watch together: our TV plays it from the same second */
 function tvFromFriends() {

@@ -26,6 +26,34 @@ function quadMatrix(w, h, q) {
   return `matrix3d(${[a, d, 0, g, bb, e, 0, hh, 0, 0, 1, 0, c, f, 0, 1].join(',')})`;
 }
 
+// Placed sound: Web Audio fades a sound with distance and puts it left or right. A page can only place a sound it
+// serves itself (another site's player is closed to it), so YouTube's sound comes through the viewer (tv/audio/<id>,
+// found by yt-dlp) while YouTube's player shows the picture, muted. In the sound's own area it is full and centred.
+let ac = null;
+/** an audio or video element through a gain and a stereo panner */
+function speaker(el) {
+  ac ??= new AudioContext();
+  const gain = ac.createGain(), pan = ac.createStereoPanner();
+  ac.createMediaElementSource(el).connect(gain).connect(pan).connect(ac.destination);
+  return {gain, pan};
+}
+for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => ac?.state === 'suspended' && ac.resume(), true);
+/** [gain, side] of a sound at `src` whose area is the rectangle `area`, heard by a figure at `me` looking through
+ *  `camera`: inside the area 1 and 0; outside it fades with the distance and comes from where it is (right = +1) */
+export function hear(area, src, me, camera) {
+  const d = Math.hypot(Math.max(area.x0 - me.x, 0, me.x - area.x1), Math.max(area.z0 - me.z, 0, me.z - area.z1));
+  if (d < 0.05) return [1, 0];
+  const e = camera.matrixWorld.elements, fx = -e[8], fz = -e[10], fl = Math.hypot(fx, fz) || 1;
+  const tx = src.x - me.x, tz = src.z - me.z, tl = Math.hypot(tx, tz) || 1;
+  const side = (-fz * tx + fx * tz) / fl / tl;                                 // the camera's right is (-fz, fx)
+  return [Math.max(0, 1 - d / 30) / (1 + d / 3), Math.max(-0.85, Math.min(0.85, side * 0.85 * Math.min(1, d / 2)))];
+}
+/** move a speaker's gain and side smoothly */
+function steer(nodes, g, p) {
+  nodes.gain.gain.setTargetAtTime(g, ac.currentTime, 0.12);
+  nodes.pan.pan.setTargetAtTime(p, ac.currentTime, 0.12);
+}
+
 const CSS = `
 .o-tvmenu { position: absolute; inset: 0; background: rgba(6,8,14,.66); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .o-tvbox { width: min(760px, 94vw); max-height: 86%; display: flex; flex-direction: column; background: #10131b; color: #e8eaf0; border-radius: 14px;
@@ -58,7 +86,7 @@ const CSS = `
                    padding: 6px 12px; cursor: pointer; font: 14px "Segoe UI", system-ui, sans-serif; }
 `;
 
-export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, raycastables, say, t, linked, onTogether}) {
+export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, raycastables, say, t, linked, onTogether, ear, area}) {
   if (!tvMesh) return {update() {}, menu() {}, near: () => Infinity, remote: null, together() {}, open: () => false};
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   // the screen: on the TV's front, near its top, 16:9
@@ -71,6 +99,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   at.y = box.max.y - h / 2 - size.y * 0.05;
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({color: '#050608', toneMapped: false}));
   screen.position.copy(at); screen.rotation.y = rot; scene.add(screen);
+  area ??= {x0: at.x - 3, z0: at.z - 3, x1: at.x + 3, z1: at.z + 3};       // no floor zone around the TV: 3 m all round
 
   // the remote, on the low table in front of the TV
   let remote = null;
@@ -97,6 +126,22 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   try { sound = localStorage.getItem('chatroom.tv.sound') === '1'; } catch (e) {}
   let vol = 80, ytTime = 0, ytDur = 0, ytState = -1, ytSeen = 0, holdPause = false;
   try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.tv.vol') ?? 80))); } catch (e) {}
+  // the sound: the user's files through a placed speaker; YouTube's sound through the viewer, beside the muted picture
+  const aud = Object.assign(new Audio(), {preload: 'auto'});
+  let vNodes = null, aNodes = null, audOk = true, audId = '', ytVid = '', syncAt = 0, heardAt = 0, flatAt = 0, heard = 1;
+  aud.addEventListener('error', () => {              // no yt-dlp here, or YouTube refused: its own sound, fading but without sides
+    if (!aud.getAttribute('src') || !audOk) return;
+    audOk = false; aud.removeAttribute('src'); audId = ''; audio(); say(t().tvFlat);
+  });
+  /** the separate sound keeps to YouTube's picture: same video, same second, playing or not */
+  function follow() {
+    if (!audOk || now.kind === 'off' || isLocal() || !ytVid) return;
+    if (audId !== ytVid) { audId = ytVid; aud.src = `tv/audio/${ytVid}`; }
+    if (ytState !== 1 || fullEl) { if (!aud.paused) aud.pause(); return; }
+    const want = position(), clock = performance.now() / 1000;
+    if (aud.readyState >= 1 && !aud.seeking && Math.abs(aud.currentTime - want) > 0.5 && clock - syncAt > 3) { syncAt = clock; aud.currentTime = want; }
+    if (aud.paused) aud.play().catch(() => {});
+  }
   // YouTube's iframe API: commands go in by postMessage, the time and state come back the same way
   const yt = (func, args = []) => frame.contentWindow?.postMessage(JSON.stringify({event: 'command', func, args}), '*');
   let hello = 0;                                     // ask the player for its news until it answers (it may not be ready at load)
@@ -114,15 +159,19 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     if (!info || typeof info !== 'object') return;
     if (typeof info.currentTime === 'number') { ytTime = info.currentTime; ytSeen = Date.now() / 1000; }
     if (typeof info.duration === 'number') ytDur = info.duration;
+    const vid = info.videoData?.video_id;                                         // a channel's playlist moved on
+    if (typeof vid === 'string' && /^[\w-]{11}$/.test(vid)) ytVid = vid;
     if (typeof info.playerState === 'number') {
       ytState = info.playerState;
       if (ytState === 1 && holdPause) { holdPause = false; yt('pauseVideo'); }   // a friend's pause arrived before the video started
     }
+    follow();
   });
   /** sound as chosen, as soon as the browser allows it (after the first click or key on the page) */
   function audio() {
-    if (isLocal()) { video.volume = vol / 100; video.muted = !canSound(); return; }
-    yt('setVolume', [vol]);
+    if (isLocal()) { video.muted = !canSound(); return; }
+    if (audOk) { yt('mute'); aud.muted = !canSound(); return; }
+    yt('setVolume', [Math.round(vol * heard)]);
     yt(canSound() ? 'unMute' : 'mute');
   }
   for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (sound) setTimeout(audio, 0); }, {capture: true, once: true});
@@ -157,8 +206,9 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   }
 
   function local(c) {
-    frame.style.display = 'none'; frame.src = 'about:blank';
-    video.loop = c.files.length === 1; video.muted = !canSound(); video.volume = vol / 100;
+    frame.style.display = 'none'; frame.src = 'about:blank'; aud.pause();
+    vNodes ??= speaker(video);
+    video.loop = c.files.length === 1; video.muted = !canSound();
     video.src = `tv/${encodeURIComponent(c.name)}/${encodeURIComponent(c.files[file % c.files.length])}`;
     video.play().catch(() => {});
     screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
@@ -168,6 +218,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
     playing = {ids, at: Date.now() / 1000 - start};
     ytTime = start; ytSeen = 0; ytState = -1;
+    aud.pause(); audId = ''; ytVid = ids[0]; audOk = true; aNodes ??= speaker(aud); aud.muted = !canSound();
     frame.src = `https://www.youtube-nocookie.com/embed/${ids[0]}?autoplay=1&mute=1&controls=0&loop=1&playlist=${ids.join(',')}`
               + `&playsinline=1&rel=0&modestbranding=1&vq=hd720&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`
               + `${start > 0 ? '&start=' + Math.floor(start) : ''}`;
@@ -331,6 +382,15 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     },
     /** each frame: YouTube's player follows the screen on the page, and hides when the screen cannot be seen */
     update(time) {
+      if (now.kind !== 'off' && time - heardAt > 0.1) {                         // where the user's figure is: how loud, which side
+        heardAt = time;
+        const me = ear?.();
+        let side; [heard, side] = me ? hear(area, at, me, camera) : [1, 0];
+        const nodes = isLocal() ? vNodes : audOk ? aNodes : null;
+        if (nodes) steer(nodes, heard * vol / 100, side);
+        else if (time - flatAt > 0.5) { flatAt = time; yt('setVolume', [Math.round(vol * heard)]); }
+        follow();
+      }
       if (now.kind === 'off' || (now.kind === 'channel' && channels[now.i]?.files)) return;
       const rect = renderer.domElement.getBoundingClientRect(), rr = root.getBoundingClientRect();
       const facing = _p.copy(camera.position).sub(at).dot(n) > 0.05;
@@ -348,6 +408,116 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
       show = show && !hidden;
       frame.style.display = show ? '' : 'none';
       if (show) frame.style.transform = quadMatrix(FW, FH, q.map(p => [p[0], p[1]]));
+    },
+  };
+}
+
+// ------------------------------------------------------------------ the radio in the games corner
+// Music from YouTube, sound only (through the viewer, like the TV's, so it is placed: full in the games corner,
+// fading and from its side elsewhere). A genre plays a search's results one after the other; the search picks one.
+const RADIO_CSS = `
+.o-radiogenres { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.o-radiogenres button { background: #222a3a; color: #e8eaf0; border: 1px solid #334058; border-radius: 999px; padding: 5px 12px; cursor: pointer; font: inherit; }
+.o-radiogenres button:hover { border-color: #4dd0e1; }
+.o-radionow { padding: 8px 14px 0; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.o-radio .o-tvcard.o-on { border-color: #4dd0e1; }
+.o-radio .o-meta { opacity: .7; }
+`;
+const GENRES = [['Lo-fi', 'lofi hip hop mix'], ['Pop', 'pop hits'], ['Rap IT', 'rap italiano'], ['Rock', 'rock classics'],
+                ['Chill', 'chill electronic mix'], ['Jazz', 'jazz relax']];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
+export function createRadio({THREE, scene, camera, root, spot, rot = 0, area, raycastables, say, t, ear}) {
+  const style = document.createElement('style'); style.textContent = RADIO_CSS; document.head.appendChild(style);
+  // a boombox on the floor: body, two speakers, a handle, and five bars that dance while it plays
+  const box = new THREE.Group(), mat = c => new THREE.MeshStandardMaterial({color: c, roughness: 0.55});
+  const part = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); box.add(o); return o; };
+  part(new THREE.BoxGeometry(0.62, 0.34, 0.2), mat('#2b2f3a'), 0, 0.17, 0);
+  for (const x of [-0.19, 0.19]) part(new THREE.CylinderGeometry(0.1, 0.1, 0.02, 20), mat('#14161c'), x, 0.17, 0.105).rotation.x = Math.PI / 2;
+  part(new THREE.BoxGeometry(0.44, 0.03, 0.03), mat('#9aa0ad'), 0, 0.4, 0);
+  for (const x of [-0.21, 0.21]) part(new THREE.BoxGeometry(0.03, 0.07, 0.03), mat('#9aa0ad'), x, 0.365, 0);
+  const lit = new THREE.MeshBasicMaterial({color: '#4dd0e1', toneMapped: false});
+  const bars = [0, 1, 2, 3, 4].map(i => part(new THREE.BoxGeometry(0.014, 0.06, 0.006), lit, -0.04 + i * 0.02, 0.17, 0.104));
+  box.position.set(spot.x, 0, spot.z); box.rotation.y = rot;
+  box.traverse(o => { o.userData.radio = true; if (o.isMesh) raycastables.push(o); });
+  scene.add(box);
+  area ??= {x0: spot.x - 3, z0: spot.z - 3, x1: spot.x + 3, z1: spot.z + 3};
+
+  const aud = Object.assign(new Audio(), {preload: 'auto'});
+  let nodes = null, list = [], idx = -1, vol = 70, menuEl = null, heardAt = 0;
+  try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.radio.vol') ?? 70))); } catch (e) {}
+  aud.addEventListener('ended', () => play(idx + 1));
+  aud.addEventListener('error', () => { if (aud.getAttribute('src')) { aud.removeAttribute('src'); idx = -1; say(t().radioNeeds); draw(); } });
+  function play(i) {
+    if (!list.length) return;
+    idx = (i + list.length) % list.length;
+    nodes ??= speaker(aud);
+    aud.src = `tv/audio/${list[idx].id}`; aud.play().catch(() => {});
+    say(`📻 ${list[idx].title}`); draw();
+  }
+  async function find(q) {
+    list = []; idx = -1; draw(t().tvLooking);
+    try {
+      const r = await fetch('tv/search?q=' + encodeURIComponent(q), {cache: 'no-store'});
+      list = r.ok ? (await r.json()).results : [];
+      if (!r.ok) say(r.status === 404 ? t().oldServer : await r.text());
+    } catch (e) { list = []; }
+    draw();
+    return list;
+  }
+  function draw(msg) {
+    if (!menuEl) return;
+    const L = t();
+    menuEl.querySelector('.o-radionow').textContent = idx >= 0 ? `${aud.paused ? '⏸' : '▶'} ${list[idx].title}` : '';
+    menuEl.querySelector('.o-tvgrid').innerHTML = msg ? `<div class="o-meta">${esc(msg)}</div>`
+      : list.map((r, i) => `<button class="o-tvcard${i === idx ? ' o-on' : ''}" data-i="${i}"><img alt="" src="https://i.ytimg.com/vi/${r.id}/mqdefault.jpg">`
+                         + `<div>${esc(r.title)}<small>${esc(r.channel)}</small></div></button>`).join('') || `<div class="o-meta">${esc(L.radioHint)}</div>`;
+  }
+  function menu() {
+    if (menuEl) return close();
+    const L = t();
+    menuEl = document.createElement('div'); menuEl.className = 'o-tvmenu o-radio';
+    menuEl.innerHTML = `<div class="o-tvbox"><div class="o-tvhead"><b>📻 ${esc(L.radio)}</b><button data-x>✕</button></div>
+      <div class="o-tvctl"><button data-c="play" title="${esc(L.tvPlay)}">⏯</button><button data-c="next" title="${esc(L.radioNext)}">⏭</button>
+        <label>🔊 <input type="range" min="0" max="100" step="5" value="${vol}" data-vol></label></div>
+      <div class="o-radionow"></div>
+      <div class="o-tvbody"><div class="o-radiogenres">${GENRES.map(([n, q]) => `<button data-q="${esc(q)}">${esc(n)}</button>`).join('')}</div>
+        <form class="o-tvsearch"><input name="q" placeholder="${esc(L.radioSearchPh)}" autocomplete="off"><button>🔎 ${esc(L.tvSearch)}</button></form>
+        <div class="o-tvgrid"></div></div></div>`;
+    menuEl.addEventListener('pointerdown', e => { e.stopPropagation(); if (e.target === menuEl) close(); });
+    menuEl.addEventListener('wheel', e => e.stopPropagation());
+    menuEl.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') close(); });
+    menuEl.addEventListener('input', e => {
+      if (e.target.dataset.vol === undefined) return;
+      vol = +e.target.value;
+      try { localStorage.setItem('chatroom.radio.vol', String(vol)); } catch (err) {}
+    });
+    menuEl.addEventListener('submit', e => { e.preventDefault(); const q = e.target.q.value.trim(); if (q) find(q); });
+    menuEl.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.x !== undefined) return close();
+      if (b.dataset.q) return void find(b.dataset.q).then(l => l.length && play(0));
+      if (b.dataset.i) return play(+b.dataset.i);
+      if (b.dataset.c === 'next') return play(idx + 1);
+      if (b.dataset.c === 'play' && idx >= 0) { if (aud.paused) aud.play().catch(() => {}); else aud.pause(); draw(); }
+    });
+    root.appendChild(menuEl); draw();
+  }
+  const close = () => { menuEl?.remove(); menuEl = null; };
+
+  return {
+    menu,
+    open: () => !!menuEl,
+    /** how far a point is from the radio (E opens it from close by) */
+    near: p => Math.hypot(p.x - spot.x, p.z - spot.z),
+    /** each frame: the bars dance while it plays; ten times a second, how loud and from which side */
+    update(time) {
+      const on = !aud.paused;
+      bars.forEach((b, i) => { b.scale.y = on ? 0.4 + Math.abs(Math.sin(time * (5 + i * 1.7) + i)) * 1.6 : 0.3; });
+      if (!nodes || time - heardAt < 0.1) return;
+      heardAt = time;
+      const me = ear?.(), [g, side] = me ? hear(area, spot, me, camera) : [1, 0];
+      steer(nodes, g * vol / 100, side);
     },
   };
 }
