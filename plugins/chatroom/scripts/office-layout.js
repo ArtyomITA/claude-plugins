@@ -58,7 +58,7 @@ Object.assign(CATALOG, {
   espresso: pk('Misc/Coffee/Office_Misc_Coffee_Machine_04', {fx: {steam: [0, 1.0, 0.1]}}),
   coffeeMaker: pk('Misc/Coffee/Office_Misc_Coffee_Machine_01', {block: false, scale: 0.032}),
   corkboard: pk('Misc/Office_Misc_Wall_Corkboard_01', {block: false}), wallGraph: pk('Misc/Office_Misc_Wall_Graph', {block: false}),
-  cubicle: pk('Cubicles/Office_Cubicle_White_04', {block: false, sy: 0.75}),
+  cubicle: {model: 'cubicle', block: false},                       // low fabric screens round each desk (office-voxel.js)
   pack: {},                                                       // any pack model, named by the item's `pack`
   pod: {group: true},                                             // a block of four cubicles: four desks
   workstation: {group: true},                                     // one desk with its chair, no cubicle
@@ -233,9 +233,10 @@ function cubicleBlock(out, cx, z0, prot, src, tint = null) {
   for (const [side, crot] of [[1, 0], [-1, PI]]) for (const sx of [-1, 1]) {
     const [ox, oz] = turn(prot, sx * 1.04, side * 1.04), x = cx + ox, z = z0 + oz, rot = crot + prot;
     const at = (lx, lz) => { const [dx, dz] = turn(rot, lx, lz); return [x + dx, z + dz]; };
-    out.items.push({type: 'cubicle', src, part: true, x, y: 0, z, rot, pack: CATALOG.cubicle.pack, scale: 0.065, sy: CATALOG.cubicle.sy, args: [], tint});
-    const [bx, bz] = at(0, -0.975), [lx, lz] = at(-0.94, 0), [rx, rz] = at(0.94, 0), [dx, dz] = at(0, -0.5), [hx, hz] = at(0, 0.3);
-    out.boxes.push({x: bx, z: bz, hw: 1.04, hd: 0.07, rot}, {x: lx, z: lz, hw: 0.1, hd: 1.04, rot}, {x: rx, z: rz, hw: 0.1, hd: 1.04, rot},
+    out.items.push({type: 'cubicle', src, part: true, x, y: 0, z, rot, model: 'cubicle', args: [], tint});
+    // low screens: the back one, and the sides only as deep as the desk and a little more (from -1.04 to 0.2)
+    const [bx, bz] = at(0, -0.975), [lx, lz] = at(-0.94, -0.42), [rx, rz] = at(0.94, -0.42), [dx, dz] = at(0, -0.5), [hx, hz] = at(0, 0.3);
+    out.boxes.push({x: bx, z: bz, hw: 1.04, hd: 0.07, rot}, {x: lx, z: lz, hw: 0.1, hd: 0.62, rot}, {x: rx, z: rz, hw: 0.1, hd: 0.62, rot},
                    {x: dx, z: dz, hw: 0.8, hd: 0.4, rot}, {x: hx, z: hz, hw: 0.25, hd: 0.25, rot});
     out.desks.push({x: dx, z: dz, rot, order: n * 10 + (side > 0 ? 0 : 4) + (sx + 1)});
   }

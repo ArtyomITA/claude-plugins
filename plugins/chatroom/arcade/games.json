@@ -1,0 +1,225 @@
+{
+ "source": "https://github.com/retrobrews/nes-games",
+ "games": [
+  {
+   "id": "super-tilt-bro",
+   "title": "Super Tilt Bro.",
+   "author": "sgadrat",
+   "license": "WTFPL",
+   "players": 2,
+   "kind": "fighting",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "ed0369a686a945c1f19c30aef9b6d02e184ff592876622610675c3474e2b3d8c"
+  },
+  {
+   "id": "novathesquirrel",
+   "title": "Nova the Squirrel",
+   "author": "NovaSquirrel",
+   "license": "GPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 1,
+   "bytes": 262160,
+   "sha256": "818877d6fe0d935d9531abb369d03aa45e58db03718dda4a032d7f478985b69b"
+  },
+  {
+   "id": "dabg",
+   "title": "Double Action Blaster Guys",
+   "author": "NovaSquirrel",
+   "license": "GPL-3.0 / zlib",
+   "players": 2,
+   "kind": "run and gun",
+   "mapper": 0,
+   "bytes": 24592,
+   "sha256": "30a4c063ec8a3d375bb59c62685c4a0ac2c74fbfdf71198115c4ee5cd9ba98a1"
+  },
+  {
+   "id": "thwaite",
+   "title": "Thwaite",
+   "author": "Damian Yerrick (pinobatch)",
+   "license": "GPL-3.0",
+   "players": 2,
+   "kind": "missile defence",
+   "mapper": 0,
+   "bytes": 24592,
+   "sha256": "3543ebf804f80abb19acfde4630a909a7485e2d69487900fd93b5698c412adc5"
+  },
+  {
+   "id": "croom",
+   "title": "Concentration Room",
+   "author": "Damian Yerrick (pinobatch)",
+   "license": "GPL-3.0",
+   "players": 2,
+   "kind": "memory",
+   "mapper": 0,
+   "bytes": 24592,
+   "sha256": "2ce17df1ad66a8a0533c0a8739f5b5ebe275c264924bbe350c42c5ac0394f20e"
+  },
+  {
+   "id": "megamountain",
+   "title": "Mega Mountain",
+   "author": "AdrianMakesGames, Damian Yerrick",
+   "license": "GPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "b3a29bc7d6c272ec9af42a21eea44872f17feadcb866a5098ba28a7fbbc78d2d"
+  },
+  {
+   "id": "lunarlimit",
+   "title": "Lunar Limit",
+   "author": "Pubby",
+   "license": "MIT",
+   "players": 1,
+   "kind": "shooter",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "675f494d04d0adbe7d926eab70464ad9c12558465f7f6e0849aee80204ce38d3"
+  },
+  {
+   "id": "fff",
+   "title": "F-FF",
+   "author": "Pubby",
+   "license": "MIT",
+   "players": 1,
+   "kind": "racing",
+   "mapper": 2,
+   "bytes": 65552,
+   "sha256": "01b764db2ebd393c37388e89a9e4adef853344eedcc5d1e42110c04a479e8476"
+  },
+  {
+   "id": "falling",
+   "title": "Falling",
+   "author": "tragicmuffin (Jesse Williams)",
+   "license": "MIT",
+   "players": 2,
+   "kind": "falling blocks",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "f597c76ef431eb1c2d79ffa6e1827f1d46006404398bfa0484d9d8f72c67e943"
+  },
+  {
+   "id": "spaceymcracey",
+   "title": "Spacey McRacey",
+   "author": "Nathan Tolbert",
+   "license": "CC0 code, CC-BY 3.0 art",
+   "players": 4,
+   "kind": "racing",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "e150603ced31fc65c917ea6eae376f085863bdc06a36186409f3a9af6d5b85a0"
+  },
+  {
+   "id": "sgthelmet",
+   "title": "Sgt. Helmet - Training Day",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 1,
+   "kind": "run and gun",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "dc7dfe0becee89c9de81c03a68b86cd4e4fab92ae4906dfd58b44fbeed187fbf"
+  },
+  {
+   "id": "jetpaco",
+   "title": "Jet Paco: Space Agent",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "45838d03dd83372d70b3636852e9eb0547a9493c7bbad7b5daf4eaa055a35b93"
+  },
+  {
+   "id": "lala",
+   "title": "Lala the Magical",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 66,
+   "bytes": 81936,
+   "sha256": "c76222d50efee0ac625a43d0c39ed91870342c02b2a64bd3923698de9551e0eb"
+  },
+  {
+   "id": "sir-ababol-remastered",
+   "title": "Sir Ababol Remastered",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "849555eaccdd2739ad484084505ad68d66de762f55364ade735d3ab9ad4b0d0a"
+  },
+  {
+   "id": "yun",
+   "title": "Yun",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 3,
+   "bytes": 65552,
+   "sha256": "fb0026dd31b0433dd24e81b7c7bee1dbdaa76e2cde60c81a2cdf4778f8e4b4eb"
+  },
+  {
+   "id": "31in1realgame-multicart",
+   "title": "31 in 1 Real Game!",
+   "author": "Mojon Twins",
+   "license": "LGPL-3.0",
+   "players": 2,
+   "kind": "multicart",
+   "mapper": 113,
+   "bytes": 393232,
+   "sha256": "d8d7e1f61f1961f2ac71e273b9267fe480c220748d740f5160e0388b61a9ca92"
+  },
+  {
+   "id": "driar",
+   "title": "Driar",
+   "author": "Adolfsson, Eriksson",
+   "license": "CC BY-NC 3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 1,
+   "bytes": 131088,
+   "sha256": "b45b0e075ac21eb11cff7c0607a23eaf586a318e4d944aaf7af3e1b0d7cbfea1"
+  },
+  {
+   "id": "cheril-the-goddess",
+   "title": "Cheril the Goddess",
+   "author": "Mojon Twins",
+   "license": "CC BY-NC-SA 3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 2,
+   "bytes": 65552,
+   "sha256": "c23afa0c6c9a3f1ef00426eaca2b3af4cecec83c9460e1eb4e282ea948e24c32"
+  },
+  {
+   "id": "superuwol",
+   "title": "Super Uwol",
+   "author": "Mojon Twins",
+   "license": "CC BY-NC-SA 3.0",
+   "players": 1,
+   "kind": "platformer",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "67eaa300c8abc5eca33f96f8d80df6a6b7ce8a808218a159b38c567e05f5fbdd"
+  },
+  {
+   "id": "bootee",
+   "title": "Bootee",
+   "author": "Mojon Twins",
+   "license": "CC BY-NC-SA 3.0",
+   "players": 1,
+   "kind": "arcade",
+   "mapper": 0,
+   "bytes": 40976,
+   "sha256": "9e3daee355eb56a80e73ce314feabe8f0bae380cb80a32468e0a1962e8c9c9ec"
+  }
+ ]
+}

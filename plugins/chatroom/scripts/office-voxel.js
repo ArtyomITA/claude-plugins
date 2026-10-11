@@ -363,6 +363,19 @@ export function workDesk(top = '#e9e7e2') {
   for (const y of [2, 6, 10]) v.box(23, y, 15, 25, y, 15, '#8a9099');         // handles, standing out
   return mesh(v, {pivot: [16, 0, 8], scale: 0.05});
 }
+/** the screens of one cubicle at 5 cm, open in front: a back screen 1.15 m high with a frosted strip on top, side
+ *  screens 1 m high as deep as the desk; fabric with an aluminium edge and a dark kick plate (centred on the cubicle) */
+export function cubicle() {
+  const v = new Vox(), fabric = '#7b8a99', alu = '#b8c0c8', kick = '#4a5058';
+  const screen = (x0, x1, z0, z1, h) => {
+    v.box(x0, 0, z0, x1, 1, z1, kick).box(x0, 2, z0, x1, h - 1, z1, (x, y) => (x + y) % 7 === 0 ? darker(fabric, 0.94) : fabric).box(x0, h, z0, x1, h, z1, alu);
+  };
+  screen(-20, 20, -20, -19, 22);
+  v.box(-20, 17, -20, 20, 21, -19, '#c9dbe2');                                // frosted strip
+  screen(-20, -19, -18, 3, 19); screen(18, 19, -18, 3, 19);
+  for (const x of [-20, 20]) v.box(x, 0, -20, x, 22, -19, alu);              // end posts
+  return mesh(v, {pivot: [0.5, 0, 0.5], scale: 0.05, jitter: 0.03});
+}
 /** a fabric screen between facing desks, len in voxels along x */
 export function divider(len = 34, color = '#5b7380') {
   const v = new Vox().box(0, 7, 0, len - 1, 11, 0, (x, y) => (x + y) % 5 === 0 ? darker(color, 0.92) : color)
