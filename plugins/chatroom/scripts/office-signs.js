@@ -32,17 +32,15 @@ function guide(lines) {
 /** signs: LAYOUT.signs; V: office-voxel.js; lang(): 'it' or 'en'. Returns {redraw()} (call when the language may have changed) */
 export function buildSigns({THREE, scene, V, signs = [], lang = () => 'en'}) {
   const items = [];
-  const plane = (canvas, w, h) => {
-    const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({map: tex, toneMapped: false}));
-    return {mesh: m, tex};
-  };
+  const group = new THREE.Group(); group.name = 'signs'; scene.add(group);            // one holder, so the office can bake the boards' bodies and rods with the furniture
+  const plane = (tex, w, h) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({map: tex, toneMapped: false}));
   for (const s of signs) {
-    const root = new THREE.Group(); root.position.set(s.x, s.y, s.z); root.rotation.y = s.rot || 0; scene.add(root);
-    const w = s.w || 1.4, h = s.h || 0.4, faces = [];
-    const front = plane(document.createElement('canvas'), w, h); front.mesh.position.z = 0.028; root.add(front.mesh); faces.push(front);
+    const root = new THREE.Group(); root.position.set(s.x, s.y, s.z); root.rotation.y = s.rot || 0; group.add(root);
+    const w = s.w || 1.4, h = s.h || 0.4;
+    const tex = new THREE.CanvasTexture(document.createElement('canvas')); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;     // both faces of a hanging sign show the same picture: one texture
+    const front = plane(tex, w, h); front.position.z = 0.028; root.add(front);
     if (s.hang || s.both) {                                                     // a hanging sign reads from both sides
-      const back = plane(document.createElement('canvas'), w, h); back.mesh.position.z = -0.028; back.mesh.rotation.y = Math.PI; root.add(back.mesh); faces.push(back);
+      const back = plane(tex, w, h); back.position.z = -0.028; back.rotation.y = Math.PI; root.add(back);
     }
     // the board's body: a dark slab with a thin frame, and rods to the ceiling when it hangs
     const body = V.mesh(new V.Vox().box(0, 0, 0, Math.round(w * 20) - 1, Math.round(h * 20) - 1, 0, '#14161f'), {pivot: [w * 10, h * 10, 0.5], scale: 0.05, jitter: 0.02});
@@ -53,19 +51,16 @@ export function buildSigns({THREE, scene, V, signs = [], lang = () => 'en'}) {
     if (s.easel) for (const dx of [-w / 2 + 0.1, w / 2 - 0.1]) {                  // an easel: two legs to the floor
       const leg = V.mesh(new V.Vox().box(0, 0, 0, 1, Math.max(2, Math.round((s.y - h / 2) * 20)) - 1, 1, '#5d3a1a'), {pivot: [1, 0, 1], scale: 0.05, jitter: 0.02}); leg.position.set(dx, -s.y, -0.04); root.add(leg);
     }
-    items.push({s, faces});
+    items.push({s, tex});
   }
   let drawn = '';
   function redraw() {
     const lg = lang() === 'it' ? 'it' : 'en';
     if (lg === drawn) return; drawn = lg;
-    for (const {s, faces} of items) {
+    for (const {s, tex} of items) {
       const text = typeof s.text === 'string' ? s.text : (s.text[lg] || s.text.en);
-      for (const f of faces) {
-        const c = s.kind === 'guide' ? guide(GUIDE[lg]) : neon(text, s.w || 1.4, s.h || 0.4, s.tone);
-        f.tex.image = c; f.tex.needsUpdate = true;
-      }
+      tex.image = s.kind === 'guide' ? guide(GUIDE[lg]) : neon(text, s.w || 1.4, s.h || 0.4, s.tone); tex.needsUpdate = true;
     }
   }
-  return {redraw, count: items.length};                       // drawn by the office's first drawBoards(), when the language is known
+  return {redraw, count: items.length, group};                       // drawn by the office's first drawBoards(), when the language is known
 }

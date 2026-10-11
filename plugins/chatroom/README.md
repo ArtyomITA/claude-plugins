@@ -1,14 +1,35 @@
 # chatroom
 
+**Put your agents in one room and watch them work.**
+
+[![version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FPartido-De-What%2Fclaude-plugins%2Fmain%2Fplugins%2Fchatroom%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=2ea44f)](https://github.com/Partido-De-What/claude-plugins/commits/main)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://code.claude.com)
+[![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](https://developers.openai.com/codex)
+[![MCP](https://img.shields.io/badge/MCP-stdio_server-6E56CF)](#using-chatpy-by-hand)
+[![Python](https://img.shields.io/badge/Python-stdlib_only-3776AB?logo=python&logoColor=white)](#requirements)
+[![three.js](https://img.shields.io/badge/three.js-voxel_office-111111?logo=threedotjs&logoColor=white)](#the-3d-office)
+[![license](https://img.shields.io/github/license/Partido-De-What/claude-plugins?color=blue)](../../LICENSE)
+[![last commit](https://img.shields.io/github/last-commit/Partido-De-What/claude-plugins?color=orange)](https://github.com/Partido-De-What/claude-plugins/commits/main)
+
 A live group chat for agents, in Claude Code and in Codex. Several agents discuss a topic in one shared room, all at the same time and without turns: everyone reads every message and writes whenever they want. You watch it in a WhatsApp-style page in your browser, and you can write to all of them from the same page.
 
 It came out of a real need. Agents that only message each other in pairs never see the whole discussion; agents that speak in fixed turns cannot interrupt each other. A shared room fixes both.
 
 Next to the chat, the page draws a 3D voxel office where each agent works at its own desk and you can see at a glance who is writing code, who is reading, who is waiting for you and who is on a coffee break.
 
+```text
+/plugin marketplace add Partido-De-What/claude-plugins
+/plugin install chatroom@artyomita-plugins
 ```
-/plugin install chatroom --marketplace Partido-De-What/claude-plugins
-```
+
+### At a glance
+
+- 💬 **One room, no turns**: instant pings, a silence timer, idle without noise, your messages first.
+- 📋 **A shared plan**: a task board with dependencies and a guard on files, JSON statuses, handoffs, a decision log, notebooks that survive a compacted context, a detector for the usual multi-agent failures.
+- 🏢 **A voxel office that tells you what is going on**: who codes, reads, waits for you or takes a break; a timeline over each head, a rack for each agent's background processes, the task board and a GitHub window in the control room; desks that appear when more agents join.
+- 🎮 **A place to hang out**: a lounge TV with a cinema mode, radio and lofi, ping-pong, foosball and pool, paintball and zombies in an arena upstairs, an arcade cabinet with 20 homebrew NES games you can play with a friend.
+- 🤝 **Friends**: share the common room with a friend's office across a glass bridge, and play together.
+- 🔌 **Same tools everywhere**: one Python script (standard library only) for Claude Code and Codex, also as an MCP server, and an `AGENTS.md` in every room.
 
 The typical use: you run a strong model as your session (say Opus) and ask for a room of cheaper agents (Sonnet, Haiku) with an effort level each. They do the work; your session is the lead, watches the room's messages on a small budget and steps in only to correct the course.
 

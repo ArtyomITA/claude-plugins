@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
 import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
-import {ShaderPass} from 'three/addons/postprocessing/ShaderPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
@@ -35,7 +34,11 @@ const VOTE = /(VOTE|VOTO)\s*v?(\d+)\s*:\s*(yes|no|sì|si)/i, EVERY = /(^|[^\w@])
 // ------------------------------------------------------------------ renderer, scene, camera
 const root = document.getElementById('office') || document.body.appendChild(Object.assign(document.createElement('div'), {id: 'office'}));
 document.body.classList.add('has-office');
-const renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
+// the canvas's own MSAA only matters when the scene is drawn straight to it ('bassa'); through the composer (alta, media) the
+// composer's target does the anti-aliasing and the canvas MSAA only costs a big buffer and a resolve every frame (about 20 ms
+// on an integrated GPU). A context cannot change its anti-aliasing, so crossing to or from 'bassa' reloads the page (see onQuality).
+const DIRECT = pref('quality', 'alta') === 'bassa';
+const renderer = new THREE.WebGLRenderer({antialias: DIRECT, powerPreference: 'high-performance'});
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -73,20 +76,18 @@ const lamps = [], towerWindows = [];                                       // wa
 // above the screen resolution on high, crisp shadows, and no blur pass at all
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples: 4}));
 composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new OutputPass());
-// the grade, on the finished picture: a gentle S curve, a touch more colour, a soft vignette (the bloom it replaces
-// cost about 14 ms a frame and barely showed)
-const grade = new ShaderPass({uniforms: {tDiffuse: {value: null}},
-  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
-    void main() {
-      vec4 c = texture2D(tDiffuse, vUv); vec3 x = c.rgb;
-      x = mix(x, x * x * (3.0 - 2.0 * x), 0.2);
-      x = mix(vec3(dot(x, vec3(0.299, 0.587, 0.114))), x, 1.1);
-      vec2 d = vUv - 0.5; x *= 1.0 - dot(d, d) * 0.4;
-      gl_FragColor = vec4(x, c.a);
-    }`});
-composer.addPass(grade);
+// the output pass (tone mapping, sRGB) and, in the same shader, the grade on the finished picture: a gentle S curve, a touch
+// more colour, a soft vignette (the bloom it replaces cost about 14 ms a frame and barely showed). One full-screen pass,
+// straight to the screen: a separate grade pass cost a second half-float target (written, resolved, read back).
+const output = new OutputPass();
+output.material.fragmentShader = output.material.fragmentShader.replace(/\}\s*$/, `
+	vec3 x = gl_FragColor.rgb;
+	x = mix(x, x * x * (3.0 - 2.0 * x), 0.2);
+	x = mix(vec3(dot(x, vec3(0.299, 0.587, 0.114))), x, 1.1);
+	vec2 d = vUv - 0.5; x *= 1.0 - dot(d, d) * 0.4;
+	gl_FragColor.rgb = x;
+}`);
+composer.addPass(output);
 const QUALITY = ['alta', 'media', 'bassa'];
 let quality = pref('quality', 'alta');
 let basePr = 1, dynScale = 1;                                               // the quality's pixel ratio, and how much of it the GPU keeps up with
@@ -1377,7 +1378,7 @@ const ui = createUI(root, {
   onReset: () => { follow = false; if (pov) setPov(false); else tween = {pos: HOME.pos.clone(), target: HOME.target.clone()}; },
   onFollow: () => { follow = !follow && !!selected; },
   onSens: () => { sensIdx = (sensIdx + 1) % SENS.length; setPref('sens', sensIdx); },
-  onQuality: () => { quality = QUALITY[(QUALITY.indexOf(quality) + 1) % QUALITY.length]; setPref('quality', quality); applyQuality(); },
+  onQuality: () => { quality = QUALITY[(QUALITY.indexOf(quality) + 1) % QUALITY.length]; setPref('quality', quality); if ((quality === 'bassa') !== DIRECT) location.reload(); else applyQuality(); },
   onSelect: n => select(n),
   onTag: n => { if (mode === 'office') { mode = 'split'; applyMode(); } window.chatroom?.tag(n); },
   onGo: n => walkOver(n),
@@ -1700,7 +1701,8 @@ function frame(now) {
   if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); climb = null; }
   const using = now - lastInput < 4000 || tween || flyHome || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
   const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || pov;
-  speed = using ? 'use' : working ? 'work' : 'idle';
+  const covered = games.active() || arcade?.active() || github?.active() || racks?.active();       // a game, the arcade or a panel covers the office (dimmed): it only needs the calm rate, the game gets the GPU
+  speed = covered ? 'idle' : using ? 'use' : working ? 'work' : 'idle';
   // smooth first: 60 while you use it or agents work (a 144 Hz screen would only burn the GPU), 30 when nothing moves
   const fps = {use: 60, work: quality === 'bassa' ? 30 : 60, idle: quality === 'bassa' ? 15 : 30}[speed];
   acc += now - last; last = now;
@@ -2048,7 +2050,7 @@ function poolFromFriends() {
 }
 // fewer draw calls: the furniture, the desks' fixed pieces and the city are baked into a few big meshes while you look at them
 // (the editor sees the originals and bakes again when it closes)
-const baked = mergeStatic({THREE, scene, items: ITEM_MESHES, extra: () => [...DESKS.map(d => d.g), city],
+const baked = mergeStatic({THREE, scene, items: ITEM_MESHES, extra: () => [...DESKS.map(d => d.g), city, ...(signs ? [signs.group] : [])],
                            skip: o => !!o.userData.person || !!(o.parent?.userData.kit && !o.parent.userData.kit.has(o))});
 let bakedEditing = false;
 // ------------------------------------------------------------------ the arena (office-arena.js): the floor above, where the paintball and zombie modes are played
@@ -2068,6 +2070,7 @@ function putBoss(x, z, rot, lvl) {
 /** up to the arena or back to the office: the veil, the other level hidden (it costs nothing), the figure on its place */
 function setLevel(next) {
   if (next === level || !boss) return;
+  lightsAt = -1e9;                                                            // the pool of lights for the new floor before the first frame there, not a quarter of a second later
   veil.style.transition = 'none'; veil.style.opacity = '1'; void veil.offsetWidth; veil.style.transition = 'opacity .55s'; setTimeout(() => { veil.style.opacity = '0'; }, 80);
   if (next === 'arena') {
     cameFrom = {x: boss.pos.x, z: boss.pos.z, rot: boss.rot};
@@ -2097,10 +2100,29 @@ function liftMenu() {
 /** what the paintball asks of the floor: the one under it now */
 const arenaFloor = {blocked: (x, z, r) => (level === 'arena' ? arena.world.floorAll : FLOOR).blocked(x, z, r), route: (a, b) => (level === 'arena' ? arena.world.floorAll : FLOOR).route(a, b)};
 // ------------------------------------------------------------------ paintball and zombies (office-paintball.js), switched on from the "Altro" menu
+const drawTarget = () => quality === 'bassa' ? null : composer.readBuffer;      // what the scene is drawn into (shaders differ per target)
 paintball = createPaintball({THREE, scene, camera, canvas: renderer.domElement, root, rt, aim: locked, report: reportResult,
   level: () => level === 'arena' ? ARENA_Y : 0, onMode: on => setLevel(on ? 'arena' : 'office'), respawn: arenaRespawn, pov: () => pov && povLocked, me: myName, lang: () => DATA.config.lang,
   players: () => new Map([...remote].filter(([, f]) => f.root.visible).map(([n, f]) => [n, f.root]).concat(hostFigure?.root.visible ? [[hostFigure.name, hostFigure.root]] : [])),
-  sink: pb => { myPb = pb; }, say: t => ui.placeName(t), body: () => boss && {x: boss.pos.x, y: boss.pos.y + (boss.jumpY || 0), z: boss.pos.z}, floor: arenaFloor, size: LAYOUT.size || [30, 20], enterPov: () => { if (!pov) setPov(true); }, renderer, atmosphere: {hemi, sun, lamps}});
+  sink: pb => { myPb = pb; }, say: t => ui.placeName(t), body: () => boss && {x: boss.pos.x, y: boss.pos.y + (boss.jumpY || 0), z: boss.pos.z}, floor: arenaFloor, size: LAYOUT.size || [30, 20], enterPov: () => { if (!pov) setPov(true); }, renderer, drawTarget, atmosphere: {hemi, sun, lamps}});
+/** the shaders of the arena and of the zombie fog, built while nobody looks: going up the first time (the lights go from 7 to 8, so
+ *  every shader changes) and the first wave (the fog changes them again) froze the picture for a second and a half. One sync block per
+ *  state, as setLevel would leave the scene; nothing is drawn in between, and the programs link in the background. */
+async function prewarm() {
+  if (visit || !boss || !renderer.compileAsync || level !== 'office' || paintball.active()) return;
+  const jobs = [];
+  for (const fog of [false, true]) {
+    const keep = new Set([boss.root, hostFigure?.root, arena.group, camera, ...[...remote.values()].map(q => q.root)]);
+    const hide = scene.children.filter(o => o.visible && !o.isLight && !keep.has(o) && !o.userData.noShot);
+    for (const o of hide) o.visible = false;
+    arena.show(true); level = 'arena'; lightsAt = lightsListedAt = -1e9; nearestLights(frameT);
+    const undo = paintball.warm(fog);
+    renderer.setRenderTarget(drawTarget());
+    try { jobs.push(renderer.compileAsync(scene, camera)); }
+    finally { renderer.setRenderTarget(null); undo(); arena.show(false); level = 'office'; for (const o of hide) o.visible = true; lightsAt = lightsListedAt = -1e9; nearestLights(frameT); }
+  }
+  await Promise.all(jobs);
+}
 ui.addExtra('paintball', '🔫', 'Paintball', () => paintball.toggle());
 ui.addExtra('zombie', '🧟', 'Zombie', () => paintball.zombies());
 applyMode(); applyQuality();
@@ -2108,3 +2130,4 @@ drawSky(new Date().getHours()); drawClock();
 pollState();
 if (window.chatroom?.snapshot) { const s = window.chatroom.snapshot(); DATA.all = s.all; DATA.config = s.config; DATA.loaded = true; derive(); }
 requestAnimationFrame(frame);
+setTimeout(() => prewarm().catch(() => {}), 4000);

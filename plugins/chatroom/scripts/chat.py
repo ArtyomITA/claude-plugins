@@ -65,6 +65,7 @@ TV_DIR = Path.home() / '.claude' / 'chatroom' / 'tv'                    # the lo
 TV_YOUTUBE = {'YouTube · Minecraft parkour': ['0c4KWfPhgWA'], 'YouTube · Subway Surfers': ['L_fcrOyoWZ8']}
 SETTINGS_FILE = Path.home() / '.claude' / 'chatroom' / 'settings.json'   # the user's lasting choices, for every room
 OFFICE_FILE = Path.home() / '.claude' / 'chatroom' / 'office.json'   # the user's own office layout, never in a repo
+OFFICE_RESET = OFFICE_FILE.with_name('office.reset-1')                  # done once: see reset_office_once()
 sys.stdout.reconfigure(encoding='utf-8')
 
 PALETTE = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085', '#b7950b', '#6c5ce7', '#e84393', '#0984e3']
@@ -1461,8 +1462,21 @@ def cmd_transcript(room, a):
         print(text)
 
 
+def reset_office_once():
+    """The new default office is everyone's start once: a saved office is set aside (office.json.bak-reset-1, still
+    there to restore by hand) and the marker keeps every later release from touching saved offices again."""
+    if OFFICE_RESET.exists():
+        return
+    if OFFICE_FILE.is_file():
+        os.replace(OFFICE_FILE, OFFICE_FILE.with_name('office.json.bak-reset-1'))
+        print(f'office: your saved layout is now {OFFICE_FILE.name}.bak-reset-1, the new default office is in place')
+    OFFICE_RESET.parent.mkdir(parents=True, exist_ok=True)
+    OFFICE_RESET.write_text('the new default office replaced the saved one once; delete this file to let it happen again\n', encoding='utf-8')
+
+
 def cmd_serve(room, a):
     import threading
+    reset_office_once()
     from activity import Activity, register_room
     viewer = HERE / 'viewer.html'
     vendor = (HERE / 'vendor').resolve()

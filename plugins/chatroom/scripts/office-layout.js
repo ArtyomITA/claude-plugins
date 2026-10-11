@@ -164,6 +164,7 @@ export const DEFAULT_LAYOUT = {
     {type: 'couch', x: -10.0, z: -1.8, rot: -PI / 2, pack: 'Chairs/Office_Couch_Black_02'},
     {type: 'lowTable', x: -12.2, z: -1.8, rot: PI / 2}, {type: 'tvStand', x: -12.2, z: 0.55, rot: PI},
     {type: 'console', x: -12.2, y: 0.45, z: 0.45, rot: PI}, {type: 'armchair', x: -12.2, z: -3.8, rot: 0, color: '#6d5d8a'},
+    {type: 'sofa', x: -10.9, z: -3.8, rot: 0}, {type: 'couch', x: -13.5, z: -3.9, rot: 0},
     {type: 'floorLamp', x: -14.5, z: -4.1}, {type: 'plantTall', x: -8.6, z: 0.6},
     // games corner
     {type: 'foosball', x: -13.2, z: -8.4}, {type: 'pingPong', x: -10.4, z: -6.4}, {type: 'poolTable', x: -10.6, z: -8.85},
@@ -192,10 +193,10 @@ export const DEFAULT_LAYOUT = {
   // neon signs that name the places (office-signs.js; text in both languages; hang: from the ceiling, readable from both sides) and an easel with a guide at the entrance
   signs: [
     {text: {it: 'SALA REGIA', en: 'CONTROL ROOM'}, x: 0.9, y: 2.72, z: -4.7, rot: 0, w: 1.9, h: 0.42, tone: 'cyan', hang: true},
-    {text: 'ARCADE', x: 1.2, y: 2.4, z: 5.12, rot: 0, w: 1.0, h: 0.34, tone: 'magenta'},
+    {text: 'ARCADE', x: 1.2, y: 2.4, z: 5.12, rot: 0, w: 1.0, h: 0.34, tone: 'magenta', both: true},      // both: the board shows through the glass wall, so the open space sees it too
     {text: 'CINEMA', x: -12.2, y: 2.68, z: 0.8, rot: PI, w: 1.3, h: 0.34, tone: 'amber', hang: true},
     {text: 'OPEN SPACE', x: -1.6, y: 2.72, z: 2.1, rot: 0, w: 2.0, h: 0.42, tone: 'green', hang: true},
-    {kind: 'guide', text: 'guide', x: -1.7, y: 0.7, z: 7.9, rot: 0, w: 1.0, h: 0.75, easel: true},
+    {kind: 'guide', text: 'guide', x: -2.3, y: 0.7, z: 7.9, rot: 0, w: 1.0, h: 0.75, easel: true},
   ],
   // blocks of four cubicles (two open toward +z, two toward -z), all furnished; agents take the free desks in order
   // what the room under the mouse (or around you in first person) is called; the first match wins

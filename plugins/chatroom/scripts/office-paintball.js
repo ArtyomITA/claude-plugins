@@ -147,7 +147,7 @@ const SFX = {
   bite: () => blip({f0: 200, f1: 80, type: 'sawtooth', dur: 0.12, gain: 0.18, nz: 0.6, nzF: 800}),
 };
 
-export function createPaintball({THREE, scene, camera, canvas, root, pov, me, players, sink, lang = () => 'it', say = () => {}, body = () => null, floor = null, size = [30, 20], enterPov = () => {}, renderer = null, atmosphere = {}, aim = () => true, report = () => {}, level = () => 0, onMode = () => {}, respawn = () => {}}) {
+export function createPaintball({THREE, scene, camera, canvas, root, pov, me, players, sink, lang = () => 'it', say = () => {}, body = () => null, floor = null, size = [30, 20], enterPov = () => {}, renderer = null, drawTarget = () => null, atmosphere = {}, aim = () => true, report = () => {}, level = () => 0, onMode = () => {}, respawn = () => {}}) {
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   const hud = document.createElement('div'); hud.className = 'o-pnt'; hud.style.display = 'none';
   hud.innerHTML = `<div class="o-pnt-vig"></div><div class="o-pnt-flash"></div><div class="o-pnt-scope"><i></i></div><div class="o-pnt-cross"><i></i><i></i><i></i><i></i></div><div class="o-pnt-others"></div><div class="o-pnt-z"></div><div class="o-pnt-boss"><b></b><div class="o-pnt-bbar"><i></i></div></div>
@@ -863,10 +863,29 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
   }
 
   /** the shaders of what the mode draws, built when it starts (not on the first shot or the first zombie, which would freeze the picture for half a second) */
-  function precompile() { try { const was = muzzle.visible; muzzle.visible = true; renderer?.compile(scene, camera); muzzle.visible = was; } catch (e) {} }
+  function precompile() {       // for the target the scene is drawn into: a program built for the screen is another program (tone mapping, colour space)
+    try { const was = muzzle.visible; muzzle.visible = true; renderer?.setRenderTarget(drawTarget()); renderer?.compile(scene, camera); muzzle.visible = was; } catch (e) {} finally { renderer?.setRenderTarget(null); }
+  }
 
   const api = {
     active: () => on,
+    /** for the shader prewarm (office.js): everything the mode draws shown, and the zombie fog if asked; the function it returns puts it all back */
+    warm(fog) {
+      if (on || watch) return () => {};
+      const fogWas = scene.fog, gunOf = muzzle.parent;
+      for (const sp of splashes) sp.mesh.visible = true;
+      balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = muzzle.visible = stains.visible = true;
+      for (const p of PART_LIST) p.mesh.visible = true;
+      guns.forEach(g => { g.g.visible = true; }); guns[0].g.add(muzzle);
+      if (fog) scene.fog = new THREE.FogExp2('#05070b', MOOD.fog);
+      return () => {
+        for (const sp of splashes) sp.mesh.visible = false;
+        balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = muzzle.visible = stains.visible = false;
+        for (const p of PART_LIST) p.mesh.visible = false;
+        guns.forEach(g => { g.g.visible = false; }); if (gunOf) gunOf.add(muzzle); else muzzle.removeFromParent();
+        scene.fog = fogWas;
+      };
+    },
     /** switch the mode on or off (no argument: the other way) */
     toggle(next = !on) {
       if (watch) stopWatch();

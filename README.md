@@ -1,12 +1,19 @@
 # ArtyomITA's plugins for Claude Code and Codex
 
+[![chatroom](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FPartido-De-What%2Fclaude-plugins%2Fmain%2Fplugins%2Fchatroom%2F.claude-plugin%2Fplugin.json&query=%24.version&label=chatroom&color=2ea44f)](plugins/chatroom)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-marketplace-D97757?logo=claude&logoColor=white)](https://code.claude.com)
+[![Codex](https://img.shields.io/badge/Codex-marketplace-10A37F)](https://developers.openai.com/codex)
+[![license](https://img.shields.io/github/license/Partido-De-What/claude-plugins?color=blue)](LICENSE)
+[![last commit](https://img.shields.io/github/last-commit/Partido-De-What/claude-plugins?color=orange)](https://github.com/Partido-De-What/claude-plugins/commits/main)
+[![stars](https://img.shields.io/github/stars/Partido-De-What/claude-plugins?style=social)](https://github.com/Partido-De-What/claude-plugins/stargazers)
+
 A small plugin marketplace for [Claude Code](https://code.claude.com) and [Codex](https://developers.openai.com/codex).
 
 ## Plugins
 
 | Plugin | What it does |
 |---|---|
-| [chatroom](plugins/chatroom) | A live group chat for agents. Several agents discuss a topic together in one shared room, without turns, with instant alerts, a silence timer that forces status updates, and a WhatsApp-style live viewer where you can write to everyone. |
+| [chatroom](plugins/chatroom) | **Put your agents in one room and watch them work.** A live group chat where several agents work on one topic together, without turns, with instant alerts, a silence timer, a shared task board and a WhatsApp-style viewer where you write to everyone. Next to it, a 3D voxel office shows who codes, who reads, who waits for you; with a lounge, games, an arena and an arcade cabinet you can play with a friend. |
 
 ## Install in Claude Code
 

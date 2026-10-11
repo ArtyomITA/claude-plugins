@@ -332,6 +332,16 @@ export function createGames({root, t, me, sendShot, onResult}) {
       else if (s.msg) { s.pts = [0, 0]; s.msg = 0; s.reported = false; }
     });
     if (ref && !net) serve();
+    const table = document.createElement('canvas'); table.width = W; table.height = H;
+    {
+      const k = table.getContext('2d');
+      let gr = k.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#1976d2'); gr.addColorStop(1, '#0a3b86'); k.fillStyle = gr; k.fillRect(0, 0, W, H);
+      k.strokeStyle = 'rgba(255,255,255,.92)'; k.lineWidth = 4; k.strokeRect(10, 10, W - 20, H - 20); k.lineWidth = 2; k.beginPath(); k.moveTo(10, H / 2); k.lineTo(W - 10, H / 2); k.stroke();
+      k.fillStyle = 'rgba(0,0,0,.18)'; k.fillRect(W / 2 - 9, 0, 18, H);
+      k.fillStyle = 'rgba(245,245,245,.92)'; k.fillRect(W / 2 - 2, 0, 4, H);
+      k.fillStyle = '#b0bec5'; for (let y = 12; y < H; y += 10) k.fillRect(W / 2 - 3, y, 6, 2);
+      k.fillStyle = '#78909c'; for (const y of [4, H - 4]) { k.beginPath(); k.arc(W / 2, y, 6, 0, 7); k.fill(); }
+    }
     let readyAt = 0;
     c.addEventListener('pointerdown', () => { unlock(); if (s.msg) { if (net) { if (role === 0) { reset(); snap(); ns.send({k: 's'}); } else ns.send({k: 's'}); } else pingPong(); } });
     const stopLoop = loop(dt => {
@@ -366,13 +376,9 @@ export function createGames({root, t, me, sendShot, onResult}) {
       }
       if (net && role === 0 && s.started && (s.wait > 0 || s.msg) && performance.now() - lastSnap > 150) snap();                   // keep the other informed while nothing moves
       // the table, as the player sees it: own side on the left, the net, the score as faint figures behind
-      let gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#1976d2'); gr.addColorStop(1, '#0a3b86'); g.fillStyle = gr; g.fillRect(0, 0, W, H);
-      g.strokeStyle = 'rgba(255,255,255,.92)'; g.lineWidth = 4; g.strokeRect(10, 10, W - 20, H - 20); g.lineWidth = 2; g.beginPath(); g.moveTo(10, H / 2); g.lineTo(W - 10, H / 2); g.stroke();
+      let gr;
+      g.drawImage(table, 0, 0);                                                                                  // the table and the net (drawn once, they do not touch the faint score figures)
       g.font = '800 130px Segoe UI'; g.textAlign = 'center'; g.fillStyle = 'rgba(255,255,255,.07)'; g.fillText(s.pts[role], W * 0.25, H / 2 + 45); g.fillText(s.pts[1 - role], W * 0.75, H / 2 + 45); g.textAlign = 'left';
-      g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(W / 2 - 9, 0, 18, H);
-      g.fillStyle = 'rgba(245,245,245,.92)'; g.fillRect(W / 2 - 2, 0, 4, H);
-      g.fillStyle = '#b0bec5'; for (let y = 12; y < H; y += 10) g.fillRect(W / 2 - 3, y, 6, 2);
-      g.fillStyle = '#78909c'; for (const y of [4, H - 4]) { g.beginPath(); g.arc(W / 2, y, 6, 0, 7); g.fill(); }
       const paddle = (x, y, rubber, dir) => {                                                                // a wooden handle behind a blade with rubber
         g.fillStyle = '#c79a63'; rr(dir > 0 ? x - PW - 15 : x + PW, y - 5, 15, 10, 3); g.fill();
         g.fillStyle = 'rgba(0,0,0,.25)'; rr((dir > 0 ? x - PW : x) + 2, y - PH / 2 + 4, PW, PH, 5); g.fill();
