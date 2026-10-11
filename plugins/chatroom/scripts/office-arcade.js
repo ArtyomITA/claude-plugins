@@ -146,7 +146,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
 
   // ------------------------------------------------ the emulator
   let ov = null, nes = null, jsnes = null, ac = null, node = null, raf = 0, playing = null, frames = 0, view = null, gamesList = null, keysDown = new Set(), pad = [0, 0], shaOk = true;
-  let session = null, poller = 0, starting = false, netKey = '';              // session: a game with a friend (lockstep, office-arcade-net.js)
+  let session = null, poller = 0, starting = false, netKey = '', ended = new Set();              // session: a game with a friend (lockstep, office-arcade-net.js)
   const emu = document.createElement('canvas'); emu.width = 256; emu.height = 240; const eg = emu.getContext('2d'), img = eg.createImageData(256, 240), px = new Uint32Array(img.data.buffer);
   const MASK = 16383, bufL = new Float32Array(MASK + 1), bufR = new Float32Array(MASK + 1); let wr = 0, rd = 0;
   const BTN = {A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7};
@@ -224,7 +224,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     session = s;
   }
   function endSession(leave) {
-    const s = session; if (!s) return; session = null;
+    const s = session; if (!s) return; session = null; ended.add(s.id);                                   // a game that ended here is not offered again while its line is still on its way to being closed
     clearInterval(s.timer); clearInterval(s.ping); s.off?.();
     if (leave) { try { net.send(s.id, {k: 'y', s: 3}); net.quit(s.id); } catch (e) {} }
     showNote('');
@@ -273,7 +273,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
   function drawMenu() {
     const T = L(), menu = ov.querySelector('.o-arc-menu'); menu.style.display = '';
     menu.innerHTML = `<h2>${T.title}<small>${T.pressStart}</small></h2><div class="o-arc-banner"></div>`;
-    const st = net ? net.state() : null; netKey = st ? st.linked + '|' + st.friend : '';
+    const st = net ? netState() : null; netKey = st ? st.linked + '|' + st.friend : '';
     const list = gamesList || [];
     if (!list.length) menu.insertAdjacentHTML('beforeend', `<div style="grid-column:1/-1;text-align:center;opacity:.7">${T.noList}</div>`);
     for (const g of list) {
@@ -298,9 +298,10 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     if (b.dataset.html !== html) { b.dataset.html = html; b.innerHTML = html; b.style.display = html ? 'flex' : 'none'; }
   }
   /** every half second while the arcade is open: a game of mine that the friend joined starts; the banner follows the common room */
+  const netState = () => { const st = net.state(); if (st.mine && ended.has(st.mine.id)) st.mine = null; st.invites = (st.invites || []).filter(g => !ended.has(g.id)); return st; };
   function netPoll() {
     if (!ov || !net || playing || starting) return;
-    const st = net.state();
+    const st = netState();
     if (st.linked + '|' + st.friend !== netKey) return drawMenu();
     const g = st.mine;
     if (g && g.players.length === 2) {
@@ -345,7 +346,7 @@ export function createArcade({THREE, scene, camera, raycastables, root, lang = (
     if (e.target.closest('.o-arc-x')) return close();
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'menu') return backToMenu();
-    if (act === 'cancelnet') { const g = net?.state().mine; if (g) net.quit(g.id); return; }
+    if (act === 'cancelnet') { const g = net && netState().mine; if (g) net.quit(g.id); return; }
     const joinId = e.target.closest('[data-join]')?.dataset.join; if (joinId) return net?.join(joinId);
     const two = e.target.closest('[data-two]')?.dataset.two; if (two) { const g = (gamesList || []).find(x => x.id === two); if (g) net?.invite(g.id, g.sha256); return; }
     if (act === 'save') {

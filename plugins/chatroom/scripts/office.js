@@ -1755,6 +1755,7 @@ if (FORCE) Object.assign(window, {                                        // tes
   __officeBrew: () => brew(),
   __officePoll: () => pollCommon(),
   __officeReport: r => reportResult(r),
+  __officeArcade: () => arcade,
   __officeView: () => { const d = camera.getWorldDirection(new THREE.Vector3()); return {pov, locked: povLocked, rot: boss.rot, yaw: me.yaw, pitch: me.pitch, faceRot: boss.faceRot, pose: boss.pose, path: boss.path.length, seated: seated(boss), camYaw: Math.atan2(d.x, d.z), camPitch: Math.asin(d.y)}; },
   __officeOpen: k => openGame(k), __officePaintball: () => paintball,
   __officeScene: scene, __officeRenderer: renderer, __officeMeta: () => ({quality, speed, mode, pov, people: people.size, machine: MACHINE.toArray(), brew: [BREW.pos.x, BREW.pos.z]}),   // measuring: draw calls, who owns them
@@ -1808,7 +1809,7 @@ const games = createGames({root, t: ui.t, me: myName, onResult: reportResult,
   sendShot: (id, s) => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolShot}`, game: {type: 'pool', op: 'shot', id, ...s}}).then(() => pollCommon())});
 /** the arcade cabinet of the common room (office-arcade.js): a click on it, E next to it, or Altro > Arcade opens the player; the scores of a game go to the leaderboards */
 /** the arcade's games for two: an invitation is a line of the common room (like a pool table); the buttons go over the real-time channel (office-arcade-net.js) */
-const NES_NET = false;                                                       // games for two: on when the lockstep has been proved over the real relay
+const NES_NET = pref('nesnet', true) !== false;                                  // games for two in the arcade (office-arcade-net.js); localStorage chatroom.office.nesnet = false switches the buttons off
 const nesNet = {
   state: () => {
     const me = myName(), all = replayGames(commonState?.games || []).games.filter(x => x.type === 'nes' && !x.done), mine = all.find(x => x.players.includes(me));

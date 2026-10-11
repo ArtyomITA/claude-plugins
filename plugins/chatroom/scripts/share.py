@@ -106,7 +106,7 @@ RT_KINDS = {'p': ('y', 'c'), 'b': ('n', 'x', 'y', 'vx', 'vy', 'sp', 'a', 'b', 'w
             'q': ('c',), 'o': ('c',), 's': ()}   # paddle, ping-pong ball, foosball ball, a foosball rod, a hit of the ball, ping, pong, start
 
 
-RT_WIDE = {'n': ('t', 'a'), 'z': ('f', 'h')}                   # frame numbers and checksums of a lockstep game are big
+RT_WIDE = {'n': ('t', 'a'), 'z': ('f', 'h'), 'q': ('c',), 'o': ('c',)}      # frame numbers, checksums and the clock of a ping are big (a ping carries the time of the page, in ms)
 
 
 def clean_rt(m):
@@ -1364,6 +1364,7 @@ def _prova():
             except (ValueError, TypeError):
                 continue
             raise AssertionError(f'a bad pool shot got in: {bad}')
+        assert clean_rt({'k': 'q', 'g': 'ab12', 'c': 123456789.4})['c'] == 123456789                                  # a ping carries the page's clock: more than 5000 ms
         pk = clean_rt({'k': 'n', 'g': 'ab12', 't': 123456, 'a': 123400, 'd': '123450:16,123455:0'})                   # a lockstep packet goes through whole
         assert pk['t'] == 123456 and pk['d'] == '123450:16,123455:0' and clean_rt({'k': 'z', 'g': 'ab12', 'f': 119, 'h': 4000000000})['h'] == 4000000000
         for bad in ({'k': 'n', 'g': 'ab12', 't': -1}, {'k': 'n', 'g': 'ab12', 't': 5, 'd': 'drop table'}, {'k': 'n', 'g': 'ab12', 't': 2 ** 40}):
