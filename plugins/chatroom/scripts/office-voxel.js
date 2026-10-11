@@ -230,6 +230,24 @@ export function keyboard() {
   v.box(21, 0, 2, 22, 0, 4, '#d9d9de').set(21, 1, 3, '#d9d9de').set(22, 1, 3, '#bfc0c6');   // mouse
   return mesh(v, {pivot: [14, 0, 4], scale: 0.025, jitter: 0.02});
 }
+/** an office chair at 2.5 cm, facing +z: five-star base on casters, gas lift, seat, back with a lumbar pad,
+ *  armrests; `color` is the cushion (an agent's colour, or dark fabric) */
+export function officeChair(color = null) {
+  const v = new Vox(), cushion = color || '#3a3f4b', rim = darker(cushion, 0.78), base = '#2b2e35', chrome = '#8a8f9c';
+  for (let k = 0; k < 5; k++) {                                              // the star, with a caster at each end
+    const a = k / 5 * Math.PI * 2 + 0.3;
+    for (let r = 0; r <= 10; r++) v.set(11 + Math.round(Math.cos(a) * r), r > 8 ? 1 : 2, 11 + Math.round(Math.sin(a) * r), base);
+    v.set(11 + Math.round(Math.cos(a) * 10), 0, 11 + Math.round(Math.sin(a) * 10), '#16171b');
+  }
+  v.box(10, 3, 10, 12, 15, 12, chrome);                                     // gas lift
+  v.box(2, 16, 4, 20, 17, 21, cushion).box(1, 16, 5, 1, 17, 20, rim).box(21, 16, 5, 21, 17, 20, rim)
+    .box(2, 18, 5, 20, 18, 20, cushion).box(3, 16, 22, 19, 17, 22, rim);      // seat, rounded edges
+  v.box(10, 16, 1, 12, 21, 2, base);                                         // the spine to the back
+  v.box(3, 20, 1, 19, 38, 3, cushion).box(2, 21, 1, 2, 37, 3, rim).box(20, 21, 1, 20, 37, 3, rim)
+    .box(4, 38, 1, 18, 38, 3, rim).box(5, 22, 4, 17, 26, 4, darker(cushion, 1.12));   // back, lumbar pad
+  for (const x of [0, 22]) v.box(x, 19, 11, x, 23, 12, base).box(x, 24, 7, x, 24, 17, '#1d1f25');   // armrests
+  return mesh(v, {pivot: [11.5, 0, 11.5], scale: 0.025, jitter: 0.03});
+}
 export function mug(color) {
   return mesh(new Vox().box(0, 0, 0, 1, 1, 1, color).set(2, 1, 0, color), {pivot: [1, 0, 1]});
 }

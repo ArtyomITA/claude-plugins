@@ -405,7 +405,7 @@ const people = new Map();               // name -> Person
 const raycastables = [];
 // every cubicle desk is furnished from the start, so an office with few agents still looks lived in; an agent takes
 // the first free desk in the layout's order: its colour goes on the chair cushion and the mug, its screen comes alive
-const chairFor = color => V.packModel('Chairs/Office_Chair_White_02', color ? {tint: {map: {'#e2e2e2': color, '#a9a9a9': V.darker(color, 0.8)}}} : {});
+const chairFor = color => V.officeChair(color);                                   // finer than the pack's chair, cushion in the agent's colour
 const DESKS = PLACED.desks.map((d, i) => buildDesk(d, i));
 function buildDesk(d, i) {
   const g = new THREE.Group(); g.position.set(d.x, 0, d.z); g.rotation.y = d.rot; scene.add(g);
