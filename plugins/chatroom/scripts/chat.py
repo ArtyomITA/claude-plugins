@@ -72,7 +72,7 @@ PALETTE = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085', '#b
 LOOK_KEYS = {'title': str, 'subtitle': str, 'icon': str, 'accent': str, 'theme': str, 'wallpaper': str, 'lang': str,
              'heartbeat': int, 'user_name': str, 'topic': str}
 CHOICES = {'theme': ('auto', 'light', 'dark'), 'wallpaper': ('dots', 'plain', 'grid'), 'lang': ('en', 'it')}
-COLOR = re.compile(r'^#[0-9a-fA-F]{6}$')
+COLOR = re.compile(r'#[0-9a-fA-F]{6}\Z')
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
                '.gif': 'image/gif'}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
@@ -1047,12 +1047,22 @@ MCP_TOOLS = [
     {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof, one file in two statuses, '
                                      'tags left unanswered, a status repeated.', 'inputSchema': {'type': 'object', 'properties': {}}},
 ]
+for _t in MCP_TOOLS:      # one server for every agent (subagents share their lead's MCP config): each call may say where and who
+    _t['inputSchema']['properties'].update({'room': {'type': 'string', 'description': 'the room folder, when the server was started without --room'},
+                                            'as': {'type': 'string', 'description': 'your name in the room, when the server was started without --as'}})
 
 
 def mcp_call(room, name, tool, args):
     """run one tool as the shell command would, and return what it prints (errors included) as text"""
     import contextlib
     import io
+    if args.get('room'):
+        room = Room(args['room'])
+        if not (room.dir / 'config.json').is_file():
+            return f'no chat room in {room.dir}', True
+    name = str(args.get('as') or name or '').strip()
+    if room is None or not name:
+        return 'say where and who: pass "room" (the room folder) and "as" (your name) in the call', True
     ns = argparse.Namespace(name=name, room=str(room.dir), status=False, idle=False, finding=False, reply=None, image=None,
                             focus=True, pairs=[], deps=None, files=None, proof=None, force=False, note=None, all=False,
                             timeout=100, common=False, file=None)
@@ -1090,15 +1100,18 @@ def mcp_call(room, name, tool, args):
             return (out.getvalue() + str(exc.code)).strip(), True
     except ValueError as exc:
         return (out.getvalue() + f'error: {exc}').strip(), True
+    except (KeyError, TypeError, AttributeError) as exc:                 # a missing or odd argument
+        return (out.getvalue() + f'error: bad arguments ({type(exc).__name__}: {exc})').strip(), True
     return out.getvalue().strip() or 'ok', False
 
 
 def cmd_mcp(room, a):
-    """an MCP server on stdin/stdout (newline-delimited JSON-RPC) with the room's tools, for one participant (--as NAME):
-    claude mcp add chatroom -- python chat.py mcp --room ROOM --as NAME   (Codex: the same command in its MCP config)"""
-    if not a.name:
-        sys.exit('--as NAME required')
+    """an MCP server on stdin/stdout (newline-delimited JSON-RPC) with the room's tools. Added once for every room and agent
+    (claude mcp add chatroom -- python chat.py mcp; codex mcp add chatroom -- python chat.py mcp), each call names its
+    room and its agent ("room", "as"); --room and --as fix them for a session that is one participant."""
     out = sys.stdout
+    who = (f'You are {a.name} in the chat room {room.dir}. ' if a.name and room else
+           'Every call names the room folder ("room") and your name in it ("as"). ')
     def send(obj):
         out.write(json.dumps(obj, ensure_ascii=False) + '\n')
         out.flush()
@@ -1107,19 +1120,24 @@ def cmd_mcp(room, a):
             msg = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(msg, dict):
+            continue
         mid, method = msg.get('id'), msg.get('method')
         if mid is None:                              # a notification (initialized, cancelled): nothing to answer
             continue
         if method == 'initialize':
             res = {'protocolVersion': (msg.get('params') or {}).get('protocolVersion', '2025-06-18'),
                    'capabilities': {'tools': {}}, 'serverInfo': {'name': 'chatroom', 'version': '1'},
-                   'instructions': f'You are {a.name} in the chat room {room.dir}. Read with chat_read, take your task on the board '
-                                   'before working, post statuses with your percentage, and send the pings chat_post returns.'}
+                   'instructions': who + 'Read with chat_read, take your task on the board before working, post statuses with '
+                                         'your percentage, and send the pings chat_post returns.'}
         elif method == 'tools/list':
             res = {'tools': MCP_TOOLS}
         elif method == 'tools/call':
-            params = msg.get('params') or {}
-            text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') or {})
+            params = msg.get('params') if isinstance(msg.get('params'), dict) else {}
+            try:
+                text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') if isinstance(params.get('arguments'), dict) else {})
+            except Exception as exc:                      # one server serves every agent: a bad call (a room that is not a path...) answers with an error, never ends it
+                text, err = f'error: {type(exc).__name__}: {exc}', True
             res = {'content': [{'type': 'text', 'text': text}], 'isError': err}
         elif method == 'ping':
             res = {}
@@ -1193,12 +1211,15 @@ def tv_channels():
     return local + [c for c in youtube if c['youtube']]
 
 
+YTDLP = {'cwd': str(HERE), 'env': {**os.environ, 'PYTHONSAFEPATH': '1'}}     # python -m looks in the working directory first: not in the folder the viewer was started in
+
+
 def tv_search(q):
     """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded), kept only when their author lets
     them play on other pages; raises RuntimeError with what to do when yt-dlp is missing or fails"""
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch24:{q}'],
-                           capture_output=True, text=True, encoding='utf-8', timeout=30)
+                           capture_output=True, text=True, encoding='utf-8', timeout=30, **YTDLP)
         found = json.loads(r.stdout or '{}').get('entries') or [] if r.stdout.strip() else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         found = None
@@ -1232,7 +1253,7 @@ def tv_audio_url(vid):
         return hit[0]
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
-                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=40)
+                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=40, **YTDLP)
         url = (r.stdout or '').strip().splitlines()[0] if (r.stdout or '').strip() else ''
     except (OSError, subprocess.TimeoutExpired):
         url = ''
@@ -1482,6 +1503,9 @@ def cmd_serve(room, a):
     vendor = (HERE / 'vendor').resolve()
     activity = Activity(room)
     lock = threading.Lock()
+    if a.host not in ('127.0.0.1', 'localhost', '::1'):         # the user's own choice, at the user's risk: said, not refused
+        print(f'WARNING: --host {a.host}: the viewer has no login, anyone who reaches this address can read the chat and write as you; '
+              'to let friends in safely use the share option of the common room')
     hosts = {f'{h}:{a.port}' for h in (a.host, '127.0.0.1', 'localhost')}
     import share as sharing
     common = common_room(room)
@@ -1520,7 +1544,8 @@ def cmd_serve(room, a):
 
     def lent_helpers():
         b = guest['bridge']
-        return {r['helper'] for r in (b.requests if b else []) if r.get('status') == 'approved' and r.get('helper')}
+        # the host names its helpers AIUTO1, AIUTO2...: any other name from the other side could be this user's own, or an agent's, and would write in this chat as them
+        return {r['helper'] for r in (b.requests if b else []) if r.get('status') == 'approved' and re.fullmatch(r'AIUTO\d{1,4}', str(r.get('helper') or ''))}
 
     def to_helpers():
         """a guest's own chat: a line that tags a helper lent by the host goes to the common room, where the helper works"""
@@ -1690,6 +1715,8 @@ def cmd_serve(room, a):
         install['busy'] = False
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 30                                          # a client that stops sending lets go of its thread
+
         def log_message(self, *args):
             pass
 
@@ -1703,7 +1730,10 @@ def cmd_serve(room, a):
             self.wfile.write(data)
 
         def body(self):
-            return json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))).decode('utf-8'))
+            n = int(self.headers.get('Content-Length', 0))
+            if not 0 <= n <= 64 * 1024 * 1024:
+                raise ValueError('bad length')
+            return json.loads(self.rfile.read(n).decode('utf-8'))
 
         def trusted(self):
             """only this page and local programs may talk to the server: a Host of ours (against DNS rebinding) and,
@@ -2234,6 +2264,8 @@ def main():
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
     if a.command == 'rooms':
         return cmd_rooms(None, a)
+    if a.command == 'mcp' and not a.room:                # one server for every room: each call names its room
+        return cmd_mcp(None, a)
     if not a.room:
         sys.exit('no room: pass --room DIR or set CHATROOM_DIR')
     room = Room(a.room)

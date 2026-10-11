@@ -27,7 +27,7 @@ from pathlib import Path
 CLAUDE_DIR = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
 CODEX_DIR = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
 REGISTRY = CLAUDE_DIR / 'chatroom' / 'rooms.json'
-AGENT_ID = re.compile(r'^(a[0-9a-f]{8,40}|/root/[\w-]+)$')        # a Claude Code agent id, or a Codex agent path
+AGENT_ID = re.compile(r'(a[0-9a-f]{8,40}|/root/[\w-]+)\Z')        # a Claude Code agent id, or a Codex agent path
 RECENT, PULSE_SECONDS, FIND_EVERY, READ_MAX = 12, 300, 10.0, 4 * 1024 * 1024
 HISTORY, TIMELINE_SPAN = 300, 1800                       # the calls kept for the timeline of an agent, and how far back it goes (seconds)
 TOOL_LANES = ('read', 'edit', 'run', 'web', 'agent', 'chat', 'other')      # the rows of the timeline: what a tool call is
@@ -35,6 +35,8 @@ TOOL_LANES = ('read', 'edit', 'run', 'web', 'agent', 'chat', 'other')      # the
 
 def lane_of(tool, target=''):
     """the row of the timeline a tool call goes on: reading, editing, running a command, the web, agents and messages, the room's chat, the rest"""
+    if target == 'chat:wait-agent':
+        return 'agent'                                       # a Codex agent waiting for another agent: its row is the agents', its posture a wait
     if str(target).startswith('chat:'):
         return 'chat'
     if tool in ('Read', 'Grep', 'Glob', 'LS', 'NotebookRead'):
@@ -49,6 +51,7 @@ def lane_of(tool, target=''):
         return 'agent'
     return 'other'
 PROC_SHOWN, PROC_KEEP, PROC_QUIET, PROC_MAX = 6, 300, 60, 40       # per agent: shown, seconds a finished one stays, seconds of silence before it is 'quiet', remembered
+PROC_STALE = 1800                                                  # a Codex process nobody has asked about for this long is no longer shown
 ANSI = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
 
 
@@ -62,10 +65,10 @@ def target_of(tool, inp):
     """a short label of what a tool call works on: a file name, a command, a host, a query"""
     inp = inp if isinstance(inp, dict) else {}
     if tool in ('Read', 'Edit', 'Write', 'NotebookEdit', 'MultiEdit'):
-        return os.path.basename(str(inp.get('file_path') or inp.get('notebook_path') or ''))
+        return re.split(r'[\\/]', str(inp.get('file_path') or inp.get('notebook_path') or ''))[-1]      # a Windows path reads the same on any system
     if tool in ('Bash', 'PowerShell'):
         cmd = ' '.join(str(inp.get('command', '')).split())
-        chat = re.search(r'chat\.py["\']?\s+(post|wait|read|status|roster|alerts|command)', cmd)
+        chat = re.search(r'chat\.py["\']?\s+(post|wait-agent|wait|read|status|roster|alerts|command)', cmd)
         if chat:
             return 'chat:' + chat.group(1)
         return cmd[:70]
@@ -93,7 +96,9 @@ def codex_call(p):
         except ValueError:
             args = {}
         args = args if isinstance(args, dict) else {}
-        if name in ('wait_agent', 'wait'):
+        if name == 'wait_agent':
+            return 'Bash', {'command': 'chat.py wait-agent'}
+        if name == 'wait':                                     # waits for a cell of the exec tool (see record_codex, which knows which)
             return 'Bash', {'command': 'chat.py wait'}
         if name in ('send_message', 'followup_task'):
             return 'SendMessage', {'to': args.get('target') or args.get('agent_path') or ''}
@@ -102,23 +107,58 @@ def codex_call(p):
         if name in ('shell', 'shell_command', 'local_shell', 'exec_command'):
             cmd = args.get('cmd') or args.get('command') or ''
             return 'Bash', {'command': ' '.join(cmd) if isinstance(cmd, list) else str(cmd)}
+        if name == 'write_stdin':
+            return 'Bash', {'command': 'write_stdin'}
+        if name == 'view_image':
+            return 'Read', {'file_path': str(args.get('path') or '')}
+        if name == 'js' or name.endswith('node_repl__js'):
+            return 'Bash', {'command': 'js'}
+        if name.startswith('browser_') or '__browser_' in name:
+            return 'WebFetch', {'url': ''}
         return name, {}
     code = str(p.get('input') or '')                       # custom 'exec': JavaScript calling tools.<name>(...)
     used = re.search(r'tools\.(\w+)\(', code)
     name = used.group(1) if used else str(p.get('name') or '')
     if name in ('exec_command', 'shell_command', 'shell'):
-        cmd = re.search(r'(?:cmd|command)\s*:\s*"((?:[^"\\]|\\.)*)"', code)
+        cmd = re.search(r'["\']?(?:cmd|command)["\']?\s*:\s*"((?:[^"\\]|\\.)*)"', code)      # the key may be quoted: {"cmd":"..."}
         if cmd:
             return 'Bash', {'command': cmd.group(1).replace('\\\\', '\\').replace('\\"', '"')}
-        cmd = re.search(r'(?:cmd|command)\s*:\s*(?:@\'|`|\')([\s\S]{0,400})', code)     # here-strings, templates
+        cmd = re.search(r'["\']?(?:cmd|command)["\']?\s*:\s*(?:@\'|`|\')([\s\S]{0,400})', code)     # here-strings, templates
         return 'Bash', {'command': cmd.group(1) if cmd else ''}
+    if name == 'write_stdin':
+        return 'Bash', {'command': 'write_stdin'}
     if name == 'apply_patch' or '*** Begin Patch' in code:
-        f = re.search(r'\*\*\* (?:Update|Add|Delete) File: ([^\n\\]+)', code)
-        return 'Edit', {'file_path': f.group(1).strip() if f else ''}
+        return 'Edit', {'file_path': patch_file(code)}
     if name.startswith('web'):
         q = re.search(r'(?:q|query|ref_id)"?\s*:\s*"([^"]+)"', code)
         return 'WebSearch', {'query': q.group(1) if q else ''}
+    if name == 'view_image':
+        f = re.search(r'path"?\s*:\s*"((?:[^"\\]|\\.)*)"', code)
+        return 'Read', {'file_path': f.group(1).replace('\\\\', '\\') if f else ''}
+    if name.startswith('mcp__node_repl'):
+        return 'Bash', {'command': 'js'}
+    if name.startswith('mcp__playwright__browser_') or name.startswith('browser_'):
+        return 'WebFetch', {'url': ''}
     return name or 'exec', {}
+
+
+def patch_file(code):
+    """the first file an apply_patch touches. A native patch has the path on its own line, backslashes and all (C:\\proj\\a.py); inside a
+    JavaScript string the lines end in a backslash-n and the backslashes of the path are doubled"""
+    if code.lstrip().startswith('*** Begin Patch'):
+        f = re.search(r'\*\*\* (?:Update|Add|Delete) File: ([^\r\n]+)', code)
+        return f.group(1).strip() if f else ''
+    f = re.search(r'\*\*\* (?:Update|Add|Delete) File: ((?:[^\n\\]|\\\\)+)', code)
+    return f.group(1).replace('\\\\', '\\').strip() if f else ''
+
+
+def flat(o):
+    """a tool output as plain text: a string, or the texts of a list of content items"""
+    if isinstance(o, str):
+        return o
+    if isinstance(o, list):
+        return '\n'.join(x.get('text', '') if isinstance(x, dict) else str(x) for x in o)
+    return json.dumps(o)
 
 
 def ts_of(rec):
@@ -138,7 +178,8 @@ class Agent:
         self.ctx = self.model = self.win = None                    # win: a window the transcript states (Codex)
         self.subagents = 0
         self.procs = {}                                            # background processes: id -> {id, kind, cmd, state, started, last, code, out}
-        self.cx_sess = {}                                          # Codex write_stdin call id -> the session it writes to
+        self.cx_sess = {}                                          # Codex call id -> what it is about: 'start', 'cx:<session>' (a write) or 'cell:<cell>' (a wait)
+        self.cx_cells = {}                                         # Codex cell id -> the label of the script that started it
         self.recent = deque(maxlen=RECENT)
         self.pulse = deque(maxlen=400)
         self.history = deque(maxlen=HISTORY)                       # every finished call: (start, ms, lane, ok), for the timeline
@@ -215,6 +256,8 @@ class Agent:
                     pass
             if q['state'] != 'running' and now - last > PROC_KEEP:
                 continue
+            if q['state'] == 'running' and not q.get('out') and str(q['id']).startswith(('cx:', 'cell:')) and now - last > PROC_STALE:
+                continue                                           # Codex says nothing when a process is over unless someone asks: half an hour of silence and it goes
             state = 'quiet' if q['state'] == 'running' and now - last > PROC_QUIET else q['state']
             out.append({'id': q['id'], 'kind': q['kind'], 'cmd': q['cmd'], 'state': state, 'started': q['started'], 'last': last, 'code': q['code'], 'tail': bool(q.get('out'))})
         out.sort(key=lambda x: ({'running': 0, 'quiet': 1}.get(x['state'], 2), -x['last']))
@@ -417,29 +460,42 @@ class Activity:
         t = p.get('type')
         if kind == 'response_item' and t in ('function_call', 'custom_tool_call'):
             tool, inp = codex_call(p)
-            a.start(str(p.get('call_id')), tool, target_of(tool, inp), ts)
-            if p.get('name') == 'write_stdin':
-                try:
-                    args = json.loads(p.get('arguments') or '{}')
-                except ValueError:
-                    args = {}
-                a.cx_sess[str(p.get('call_id'))] = str((args if isinstance(args, dict) else {}).get('session_id', ''))
+            call_id, name, code = str(p.get('call_id')), p.get('name'), str(p.get('input') or '')
+            try:
+                args = json.loads(p.get('arguments') or '{}')
+            except ValueError:
+                args = {}
+            args = args if isinstance(args, dict) else {}
+            if name == 'wait':                                      # a wait on a cell of the exec tool: on the row of what that cell runs
+                cell = str(args.get('cell_id', ''))
+                a.cx_sess[call_id] = 'cell:' + cell
+                if not a.cx_cells.get(cell, '').startswith('chat:'):
+                    tool, inp = 'Bash', {'command': 'wait'}
+            elif name == 'write_stdin':
+                a.cx_sess[call_id] = 'cx:' + str(args.get('session_id', ''))
+            elif name == 'exec':                                    # a script: it may write to a session, or start a command that goes on
+                m = re.search(r'tools\.write_stdin\(\s*\{[^}]*?"?session_id"?\s*:\s*(\d+)', code)
+                if m:
+                    a.cx_sess[call_id] = 'cx:' + m[1]
+                elif 'tools.exec_command(' in code:
+                    a.cx_sess[call_id] = 'start'
+            elif name == 'exec_command':
+                a.cx_sess[call_id] = 'start'
+            a.start(call_id, tool, target_of(tool, inp), ts)
+        elif kind == 'response_item' and t == 'web_search_call':    # the model's own web search: no call id, no wait, one tick on the web row
+            act = p.get('action') if isinstance(p.get('action'), dict) else {}
+            if act.get('type') in ('open_page', 'find_in_page'):
+                tool, inp = 'WebFetch', {'url': act.get('url') or ''}
+            else:
+                tool, inp = 'WebSearch', {'query': act.get('query') or (act.get('queries') or [''])[0]}
+            cid = 'ws:' + str(p.get('id') or ts)
+            a.start(cid, tool, target_of(tool, inp), ts)
+            a.finish(cid, p.get('status') != 'failed', ts)
         elif kind == 'response_item' and t in ('function_call_output', 'custom_tool_call_output'):
-            out = json.dumps(p.get('output'))[:600]
-            call_id, raw = str(p.get('call_id')), p.get('output')
-            raw = raw if isinstance(raw, str) else json.dumps(raw)
-            sess = a.cx_sess.pop(call_id, None)
-            running = re.search(r'Process running with session ID (\d+)', raw)
-            if running and call_id in a.calls:                      # a command that is still going on after its first answer: a background process
-                a.proc_new('cx:' + running[1], 'shell', a.calls[call_id][1], ts)
-            elif running:
-                q = a.procs.get('cx:' + running[1])
-                if q:
-                    q['last'] = ts
-            exited = re.search(r'Process exited with code (-?\d+)', raw)
-            if exited and sess:
-                a.proc_end('cx:' + sess, 'done' if exited[1] == '0' else 'failed', int(exited[1]), ts)
-            a.finish(str(p.get('call_id')), not re.search(r'Exit code: [1-9]|exited with code [1-9]|"status": ?"rejected"', out), ts)
+            call_id, text = str(p.get('call_id')), flat(p.get('output'))
+            call = a.calls.get(call_id)
+            self.record_codex_proc(a, a.cx_sess.pop(call_id, None), call[1] if call else '', text, ts)
+            a.finish(call_id, not re.search(r'Exit code: [1-9]|exited with code [1-9]|"exit_code": ?-?[1-9]|Script failed|Script error|"status": ?"rejected"', text[:600]), ts)
         elif kind == 'response_item' and (t == 'agent_message' or (t == 'message' and p.get('role') == 'assistant')):
             a.text_at = a.seen = ts
         elif kind == 'event_msg' and t == 'token_count':
@@ -452,6 +508,44 @@ class Activity:
             a.win = int(p['model_context_window'])
         elif kind == 'event_msg' and t == 'thread_settings_applied':
             a.model = (p.get('thread_settings') or {}).get('model') or a.model
+
+    def record_codex_proc(self, a, about, target, text, ts):
+        """what the answer of a Codex call says about background processes. `about` is what the call was: 'start' (a command that may go on),
+        'cx:<n>' (a write to session n), 'cell:<n>' (a wait on cell n of the exec tool) or None; `target` is the label of the call.
+        The real transcripts say it in two ways: a cell of the exec tool still running after its first answer ("Script running with cell ID N",
+        ended by a later wait: "Script completed", "Script failed"), and a unified-exec session the script printed as JSON ("session_id": N while
+        it runs, "exit_code": N when it is over). The older plain text ("Process running with session ID N", "Process exited with code N") is read too.
+        The room's own commands (a chat wait, a post) are never a LED."""
+        mine = target.startswith('chat:')
+        cell = re.search(r'Script running with cell ID (\w+)', text)
+        sid = re.search(r'Process running with session ID (\d+)|"session_id"\s*:\s*(\d+)', text)
+        sid = (sid[1] or sid[2]) if sid else None
+        end = re.search(r'Process exited with code (-?\d+)|"exit_code"\s*:\s*(-?\d+)', text)
+        end = (end[1] or end[2]) if end else None
+        if about and about.startswith('cell:'):                     # a wait on a cell: still running, or over
+            pid = about
+            if cell:
+                if pid in a.procs:
+                    a.procs[pid]['last'] = ts
+            elif re.search(r'Script completed', text[:200]):
+                a.proc_end(pid, 'done', None, ts)
+            elif re.search(r'Script failed|Script error', text[:200]):
+                a.proc_end(pid, 'failed', None, ts)
+        elif about and about.startswith('cx:'):                     # a write to a session: it goes on, or it is over
+            pid = 'cx:' + (sid or about[3:])
+            if end is not None and sid is None:
+                a.proc_end(pid, 'done' if end == '0' else 'failed', int(end), ts)
+            elif sid and pid in a.procs:
+                a.procs[pid]['last'] = ts
+        elif sid and end is None and about == 'start':              # a command that is still going on after its first answer
+            if not mine:
+                a.proc_new('cx:' + sid, 'shell', target, ts)
+        elif cell:                                                  # a script that is still going on
+            a.cx_cells[cell[1]] = target
+            if len(a.cx_cells) > PROC_MAX * 5:
+                a.cx_cells.pop(next(iter(a.cx_cells)))
+            if not mine:
+                a.proc_new('cell:' + cell[1], 'shell', target or 'script', ts)
 
     def tail(self, name, pid, n=12):
         """the last lines of a background process's output, for the local viewer: only a task output file of Claude Code (…/tasks/<id>.output) is ever read"""
@@ -643,6 +737,48 @@ def _prova():
         for r in cx[2:]:
             act.record(c, r)
         assert c.procs['cx:77']['state'] == 'failed' and c.procs['cx:77']['code'] == 1 and not c.calls
+        # the Codex of real transcripts (checked against the rollouts of a real computer, 335 files): the exec tool's cells, sessions printed as JSON, native patches
+        # with Windows paths, the model's own web searches. Everything here is made up.
+        win_patch = '*** Begin Patch\n*** Update File: D:\\proj\\src\\a.py\n@@\n-x\n+y\n*** End Patch'
+        assert codex_call({'type': 'custom_tool_call', 'name': 'apply_patch', 'input': win_patch}) == ('Edit', {'file_path': 'D:\\proj\\src\\a.py'})
+        assert target_of('Edit', {'file_path': 'D:\\proj\\src\\a.py'}) == 'a.py'
+        assert codex_call({'type': 'custom_tool_call', 'name': 'exec', 'input': 'await tools.apply_patch("*** Begin Patch\\n*** Update File: D:\\\\proj\\\\b.py\\n*** End Patch")'}) == ('Edit', {'file_path': 'D:\\proj\\b.py'})
+        assert codex_call({'type': 'custom_tool_call', 'name': 'exec', 'input': 'const r = await tools.exec_command({"cmd":"git status","workdir":"D:\\\\x"});'}) == ('Bash', {'command': 'git status'})
+        assert codex_call({'type': 'function_call', 'name': 'browser_navigate', 'arguments': '{}'})[0] == 'WebFetch' and codex_call({'type': 'function_call', 'name': 'view_image', 'arguments': '{"path":"a/b.png"}'}) == ('Read', {'file_path': 'a/b.png'})
+        assert lane_of('Bash', 'chat:wait-agent') == 'agent' and target_of('Bash', {'command': 'python chat.py wait-agent'}) == 'chat:wait-agent'
+        d = Agent('D', '/root/d')
+        cell = lambda i, name, **kw: {'timestamp': '2026-10-10T13:00:%02dZ' % (i % 60), 'type': 'response_item', 'payload': {'type': 'custom_tool_call' if name == 'exec' else 'function_call', 'call_id': 'd%d' % i, 'name': name, **kw}}
+        out = lambda i, text, kind='custom_tool_call_output': {'timestamp': '2026-10-10T13:00:%02dZ' % ((i + 1) % 60), 'type': 'response_item', 'payload': {'type': kind, 'call_id': 'd%d' % i, 'output': [{'type': 'input_text', 'text': text}]}}
+        run = {'chunk_id': 'a', 'wall_time_seconds': 1.0, 'session_id': 42, 'output': 'ready'}
+        for r in (cell(1, 'exec', input='const r = await tools.exec_command({"cmd":"npm run dev"}); text(JSON.stringify(r));'), out(1, 'Script completed\nWall time 1.0 seconds\nOutput:\n' + json.dumps(run))):
+            act.record(d, r)
+        assert d.procs['cx:42']['state'] == 'running' and d.procs['cx:42']['cmd'] == 'npm run dev' and not d.calls
+        for r in (cell(3, 'exec', input='const r = await tools.write_stdin({session_id: 42, chars: "", yield_time_ms: 1000}); text(JSON.stringify(r));'), out(3, 'Script completed\nOutput:\n{"exit_code":1,"output":"boom"}')):
+            act.record(d, r)
+        assert d.procs['cx:42']['state'] == 'failed' and d.procs['cx:42']['code'] == 1 and d.recent[-1]['ok'] is False and d.history[-1][3] is False         # the command failed: the call is red
+        for r in (cell(5, 'exec', input='await sleep(60000);'), out(5, 'Script running with cell ID 7\nWall time 10.0 seconds\nOutput:\n'),
+                  cell(7, 'wait', arguments='{"cell_id":"7","yield_time_ms":1000}'), out(7, 'Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n', 'function_call_output')):
+            act.record(d, r)
+        assert d.procs['cell:7']['state'] == 'running' and d.procs['cell:7']['cmd'] == 'script' and d.history[-1][2] == 'run'
+        for r in (cell(9, 'wait', arguments='{"cell_id":"7"}'), out(9, 'Script completed\nWall time 3.0 seconds\nOutput:\n', 'function_call_output')):
+            act.record(d, r)
+        assert d.procs['cell:7']['state'] == 'done'
+        for r in (cell(11, 'exec', input='await tools.exec_command({"cmd":"python \\"E:/x/chat.py\\" wait --as D"})'), out(11, 'Script running with cell ID 8\nWall time 10.0 seconds\nOutput:\n'),
+                  cell(13, 'wait', arguments='{"cell_id":"8"}'), out(13, 'Script completed\nOutput:\n', 'function_call_output')):
+            act.record(d, r)
+        assert 'cell:8' not in d.procs and d.history[-1][2] == 'chat'                                       # the room's own wait is not a LED, and stays on the chat row
+        for r in (cell(15, 'exec', input='await tools.nothing();'), out(15, 'Script failed\nWall time 0.1 seconds\nOutput:\n')):
+            act.record(d, r)
+        assert d.history[-1][3] is False
+        for r in (cell(17, 'wait_agent', arguments='{"timeout_ms":1000}'), out(17, '{"message":"Wait timed out.","timed_out":true}', 'function_call_output')):
+            act.record(d, r)
+        assert d.history[-1][2] == 'agent'
+        act.record(d, {'timestamp': '2026-10-10T13:01:00Z', 'type': 'response_item', 'payload': {'type': 'web_search_call', 'status': 'completed', 'action': {'type': 'search', 'query': 'voxel ao'}}})
+        act.record(d, {'timestamp': '2026-10-10T13:01:01Z', 'type': 'response_item', 'payload': {'type': 'web_search_call', 'status': 'completed', 'action': {'type': 'open_page', 'url': 'https://example.com/a'}}})
+        assert [h[2] for h in list(d.history)[-2:]] == ['web', 'web'] and d.recent[-1]['target'] == 'example.com' and not d.calls
+        q = d.proc_new('cell:99', 'shell', 'old', time.time() - 4000)
+        q['last'] = time.time() - 4000
+        assert 'cell:99' not in [x['id'] for x in d.procs_view(time.time())]                                                   # nobody asked for half an hour: no longer shown
         # a hostile transcript cannot make the viewer read other files
         b.procs['bfoo12345']['out'] = str(Path(tmp, 'secret.txt')); Path(tmp, 'secret.txt').write_text('x')
         assert act.tail('B', 'bfoo12345')['lines'] == []

@@ -45,8 +45,8 @@ VIAS = ('cloudflared', 'pinggy', 'lan', 'local')
 LINE_MAX = 32000                                         # a common room line: about ten pages
 DOC_MAX = 5 * 1024 * 1024                                # a document: a text file up to 5 MB
 DOC_EXT = {'.md', '.txt', '.json', '.diff', '.patch', '.py', '.js', '.ts', '.csv', '.yaml', '.yml', '.toml', '.sh', '.ps1'}
-NAME = re.compile(r'^[A-Za-z0-9_-]{1,24}$')
-COLOR = re.compile(r'^#[0-9a-fA-F]{6}$')
+NAME = re.compile(r'[A-Za-z0-9_-]{1,24}\Z')
+COLOR = re.compile(r'#[0-9a-fA-F]{6}\Z')
 MAX_BODY = 128 * 1024
 DOC_BODY = DOC_MAX * 4 // 3 + 64 * 1024                  # a document travels as base64
 
@@ -414,7 +414,7 @@ class Share:
                 raise ValueError('the room is not shared right now')
             if len(self.fails) >= 10:
                 raise ValueError('too many wrong PINs: try again in a few minutes')
-            if not hmac.compare_digest(str(pin), self.pin):
+            if not hmac.compare_digest(str(pin).encode('utf-8'), self.pin.encode('utf-8')):      # str with non-ASCII letters would raise
                 self.fails.append(now)
                 raise ValueError('wrong PIN')
             g = person(guest)
@@ -616,6 +616,8 @@ class Share:
 
 def make_handler(share):
     class Handler(BaseHTTPRequestHandler):
+        timeout = 30                                          # a client that stops sending lets go of its thread (the body is read before the token is checked)
+
         def log_message(self, *args):
             pass
 
@@ -1329,6 +1331,12 @@ def _prova():
             raise AssertionError('a wrong PIN got in')
         except PermissionError:
             pass
+        try:                                                                       # a PIN with letters outside ASCII is a wrong PIN, not a crash
+            call(host.url, '/share/join', body={'pin': 'éééééé', 'name': 'BOB'})
+            raise AssertionError('a wrong PIN got in')
+        except PermissionError:
+            pass
+        assert make_handler(host).timeout, 'the share server has no socket timeout'       # a body that never comes must not keep a thread forever
         b = Bridge(tmp, host.url, host.pin, {'name': 'BOB', 'emoji': '🦊', 'color': '#ff8800'}, people=lambda: [{'name': 'RICERCA', 'state': 'break'}])
         b.start()
         (Path(tmp) / 'outbox.jsonl').write_text(json.dumps({'from': 'RICERCA', 'text': 'ciao a tutti'}) + '\n', encoding='utf-8')

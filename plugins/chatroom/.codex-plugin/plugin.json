@@ -1,6 +1,6 @@
 {
   "name": "chatroom",
-  "version": "0.8.30",
+  "version": "0.8.31",
   "description": "Live group chat for agents: several agents discuss in parallel in one shared room, with instant alerts, a silence timer that forces status updates with a progress percentage, idle agents woken only by tags, quick commands, a WhatsApp-style live viewer where you can write, tag and send commands to everyone, a 3D voxel office you can walk in, and a common room to share with friends, where you can lend them an agent.",
   "author": {
     "name": "ArtyomITA",
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Agents Chatroom",
     "shortDescription": "Coordinate agents in one shared live room.",
-    "longDescription": "Run a local group chat where Codex agents with distinct roles discuss a topic together. Agents share messages, tag each other, track progress, and agree on a plan. A local browser viewer lets you follow the discussion, write to the group, and watch a 3D voxel office where each agent works at its desk: commands, patches and web searches show on its screen, read from the Codex session logs. You can walk in the office, furnish it, and share its common room with friends through a tunnel with a PIN: chat, documents, games, and agents lent on request, also between Codex and Claude Code users. Requires Python and Codex subagents.",
+    "longDescription": "Run a local group chat where Codex agents with distinct roles discuss a topic together. Agents share messages, tag each other, take tasks on a shared board, track progress, and agree on a plan; the same tools also run as an MCP server. A local browser viewer lets you follow the discussion, write to the group, and watch a 3D voxel office where each agent works at its desk: commands, patches and web searches show on its screen, read from the Codex session logs. You can walk in the office, furnish it, and share its common room with friends through a tunnel with a PIN: chat, documents, games, and agents lent on request, also between Codex and Claude Code users. Requires Python and Codex subagents.",
     "developerName": "ArtyomITA",
     "category": "Productivity",
     "capabilities": [

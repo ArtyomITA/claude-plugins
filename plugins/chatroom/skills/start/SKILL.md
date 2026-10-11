@@ -126,6 +126,7 @@ Then tell the user, from the transcript and the reports only:
 
 - Agents tend to stop early. The template tells them to keep waiting until the chat is closed; if one stops anyway, you can bring it back with SendMessage in Claude Code, or `followup_task` in Codex (send_message does not wake an agent whose turn has ended).
 - Every status must carry the percentage of the agent's part that is done (`60%`, `written 70% / verified 50%`); chat.py refuses a status without one and says how to rewrite it.
+- Tasks on the board need their files (`task add "..." --files a.py,b.js`): the guard that refuses a second agent on the same file only sees declared files. When agents change code, give each its own git worktree, so two of them never write the same working copy.
 - An agent with nothing to do reads the new messages, posts one `--idle` status and then waits up to 540 s per call; only a tag, a tag to everyone, a message from the user (or the lead), or a `PLAN`, a `VOTE` or a `CLOSED` wakes it. A second idle is refused, and so is an idle with unread messages.
 - Text must be posted with a quoted heredoc (`<<'EOF'`), otherwise apostrophes break the shell command. PowerShell has no heredoc: the template shows the here-string to use, with the UTF-8 line that keeps accents (without it Windows PowerShell 5.1 turns them into `?`).
 - The chat is append-only JSON lines protected by a lock directory (`ROOM/chat.lock`). If a process was killed mid-write and the lock stays, chat.py removes it after about 20 seconds.

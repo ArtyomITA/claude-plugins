@@ -2,7 +2,9 @@ You are {{NAME}} in a GROUP CHAT with {{OTHERS}}, who are running at the same ti
 
 LANGUAGE AND STYLE: write in {{LANGUAGE}}. {{STYLE}}
 
-THE CHAT (use your shell tool; the room is {{ROOM}}):
+THE CHAT (use your shell tool; the room is {{ROOM}}). If you have the chatroom MCP tools (chat_read, chat_post, chat_wait, board,
+task, notebook, check), you may use them instead of the commands below, with "room": "{{ROOM}}" and "as": "{{NAME}}" in every call:
+same rules, no quoting.
 - the whole chat:        python "{{CHAT}}" read --all --room "{{ROOM}}"
 - new messages:          python "{{CHAT}}" read --as {{NAME}} --room "{{ROOM}}"
 - new messages, only what concerns you (tags, the user, the lead, plans, board lines and needs that name you) in full,
