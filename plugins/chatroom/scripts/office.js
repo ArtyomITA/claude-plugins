@@ -15,6 +15,8 @@ import {createEditor} from './office-edit.js';
 import {createTV, createRadio, createLofi, createMixer, mixLevel} from './office-tv.js';
 import {createArcade, ARCADE_AT} from './office-arcade.js';
 import {createGithubWall} from './office-github.js';
+import {buildSigns} from './office-signs.js';
+import {createRacks} from './office-rack.js';
 import {buildFloor} from './office-floor.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
@@ -298,6 +300,7 @@ let scoresKey = '';
 const ghBoard = board(2.2, 1.3, 768), ghAt = LAYOUT.boards.github || {x: 1.1, y: 1.6, z: -9.85, rot: 0};
 add(ghBoard.mesh, ghAt.x, ghAt.y, ghAt.z, ghAt.rot || 0);
 const ghFrame = V.mesh(new V.Vox().box(0, 0, 0, 23, 14, 0, '#2a2412'), {pivot: [12, 7.5, 1]}); ghFrame.position.copy(ghBoard.mesh.position); ghFrame.rotation.y = ghBoard.mesh.rotation.y; ghFrame.translateZ(-0.02); scene.add(ghFrame);
+const signs = visit ? null : buildSigns({THREE, scene, V, signs: LAYOUT.signs || [], lang: () => DATA.config.lang});          // the neon signs and the guide at the entrance
 let github = null;                                                         // made below, once the clickable things exist
 ghBoard.mesh.visible = false; ghFrame.visible = false;
 
@@ -424,6 +427,7 @@ function stepPlanes(dt) {
 const SPOTS = new Map();                // name -> {g, scr, beacon, seat, stand, intern}
 const people = new Map();               // name -> Person
 const raycastables = [];
+let racks = null;                                                          // the rack by each desk (office-rack.js), made once the clickable things exist
 // every cubicle desk is furnished from the start, so an office with few agents still looks lived in; an agent takes
 // the first free desk in the layout's order: its colour goes on the chair cushion and the mug, its screen comes alive
 const chairFor = color => V.officeChair(color);                                   // finer than the pack's chair, cushion in the agent's colour
@@ -489,7 +493,7 @@ function deskLayout(names) {
     const d = pick || addPod() || addWorkstation();
     if (!d) continue;                                            // ponytail: no free floor left either
     const color = DATA.profile(name).color;
-    d.owner = name;
+    d.owner = name; racks?.attach(name, d);
     d.g.remove(d.chair); d.chair = chairFor(color); d.chair.position.set(0, 0, 0.8); d.chair.rotation.y = Math.PI; d.g.add(d.chair);
     const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); d.g.add(mug);
     SPOTS.set(name, d);
@@ -680,6 +684,19 @@ async function pollState() {
   try { const r = await fetch('state.json?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) { DATA.state = await r.json(); derive(); } } catch (e) {}
 }
 setInterval(pollState, 1000);
+// the timeline of every agent (activity.py, through /timeline.json): a strip in each tag and a chart in the inspector
+let TL = null;
+async function pollTimeline() {
+  if (VISIT) return;
+  try {
+    const r = await fetch('timeline.json?span=1800', {cache: 'no-store'});
+    if (!r.ok) return;
+    TL = await r.json();
+    for (const [name, a] of Object.entries(TL.agents || {})) ui.timeline(name, a);
+    if (selected) inspect();
+  } catch (e) {}
+}
+setTimeout(pollTimeline, 1500); setInterval(pollTimeline, 5000);
 
 const cat = (tool, target = '') => !tool ? null : /^(Edit|Write|NotebookEdit|MultiEdit)$/.test(tool) ? 'code' : /^(Read|Grep|Glob|LS)$/.test(tool) ? 'read'
   : tool === 'Bash' || tool === 'PowerShell' ? (target === 'chat:post' ? 'post' : target.startsWith('chat:') ? 'chat' : 'term')
@@ -1050,6 +1067,7 @@ function sync() {
     else act = posted ? 'speak' : c || (a?.text_at && now - a.text_at < 15 ? 'think' : d.silence !== null && d.silence < 25 ? 'think' : 'idle');
     if (p.visit && now >= p.visit.until) { if (p.visit.look) p.look = null; p.visit = null; }
     if (!d.idle) p.breakAt = null;
+    racks?.set(name, a?.procs, now);
     p.goTo(want); p.act = act;
     p.faceRot = want === spot.seat && posted ? 0.0 : null;               // turn the chair round to talk
     // a subagent of this agent: an intern beside the desk
@@ -1058,7 +1076,7 @@ function sync() {
     if (subs === 0 && interns.has(name)) { const it = interns.get(name); emit(25, it.head(), {color: ['#ffffff', DATA.profile(name).color]}); it.dispose(); interns.delete(name); }
     spot.beacon.visible = !!a?.waiting;
   }
-  for (const [name, p] of people) if (!D.names.includes(name)) { p.dispose(); people.delete(name); }
+  for (const [name, p] of people) if (!D.names.includes(name)) { p.dispose(); people.delete(name); racks?.detach(name); }
 }
 
 // what happened since the last update: bubbles, planes, confetti, chimes, notifications
@@ -1133,7 +1151,7 @@ async function pollBoard() {
 if (!VISIT) { pollBoard(); setInterval(pollBoard, 3000); }
 function drawBoards() {
   const c = DATA.config, L = ui.t();
-  drawScoreboard();
+  drawScoreboard(); signs?.redraw();
   {
     const {g, canvas: k} = tv; g.fillStyle = '#0d1018'; g.fillRect(0, 0, k.lw, k.lh);
     g.fillStyle = '#4fc3f7'; g.font = '700 22px sans-serif'; g.fillText('● LIVE', 14, 30);
@@ -1517,7 +1535,7 @@ function inspect() {
                        msgs: D.all.filter(m => m.from === selected && !m.kind).slice(-3).reverse(), lastN: D.all.filter(m => m.from === selected).pop()?.n}); return; }
   const a = d.a;
   ui.inspect({name: selected, emoji: pr.emoji, role: pr.role, model: pr.model, color: pr.color, pct: d.pct, state: people.get(selected)?.act,
-              ctx: a?.ctx, window: a?.window, pulse: a?.pulse, lastN: d.last?.n, msgs: d.msgs,
+              ctx: a?.ctx, window: a?.window, pulse: a?.pulse, tl: TL?.agents?.[selected], lastN: d.last?.n, msgs: d.msgs,
               recent: (a?.recent || []).map(r => ({...r, emoji: EMOJI[cat(r.tool, r.target)] || '🔧'}))});
 }
 renderer.domElement.addEventListener('pointerdown', e => { unlockAudio(); downAt = [e.clientX, e.clientY]; });
@@ -1552,6 +1570,7 @@ renderer.domElement.addEventListener('click', e => {
   if (hit?.object.userData.remote) { document.exitPointerLock?.(); return loungeTv.menu(); }                       // the TV's remote: its menu
   if (hit?.object.userData.radio) return radio.menu();                           // the radio: its stations
   if (hit?.object.userData.lift) return liftMenu();                                  // the lift: up to the arena
+  if (hit?.object.userData.rack) return racks?.open(hit.object.userData.rack);                // the rack by a desk: its processes
   if (hit?.object.userData.github) return github?.open();                          // the GitHub window on the wall: its panel
   if (hit?.object.userData.arcade) return arcade?.open();                          // the arcade cabinet: play
   if (hit?.object.userData.lofi) return lofi.toggle();                           // the common room's speakers: music on or off
@@ -1600,6 +1619,7 @@ function placeTags() {
       if (a?.waiting) flags.push(['wait', '🙋 ' + L.wait]);
       if (d.tagged && !d.idle) flags.push(['tag', L.tagged]);
       if (d.late) flags.push(['late', '⏰ ' + L.late]);
+      if (racks && racks.count(p.name)) flags.push(['proc', '⚙ ' + racks.count(p.name)]);
       if (d.idle) flags.push(['idle', '💤 ' + L.idle]);
       if (d.vote) flags.push([d.vote === 'yes' ? 'vote-yes' : 'vote-no', `v${D.plan?.v} ${d.vote === 'yes' ? '✓' : '✗'}`]);
       if (c) line = `${EMOJI[c]} ${L[c]}${a.target && !a.target.startsWith('chat:') ? ': ' + a.target : ''}`;
@@ -1734,7 +1754,7 @@ function frame(now) {
   if (now - shadowAt > (speed === 'use' ? 33 : speed === 'work' ? 66 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not: shadows keep up at 30 a second
   watchCinema();
   nearestLights(t);
-  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); arcade?.update(t, boss?.pos); github?.update(); lift?.update(dt, level === 'office' ? boss?.pos : null); paintball.update(dt);
+  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); arcade?.update(t, boss?.pos); github?.update(); racks?.update(); lift?.update(dt, level === 'office' ? boss?.pos : null); paintball.update(dt);
   const drawAt = performance.now();
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
   if (FORCE) window.__officeTimes = {logic: drawAt - startAt, draw: performance.now() - drawAt, scale: dynScale};   // measuring: where a frame's time goes
@@ -1801,7 +1821,7 @@ if (FORCE) Object.assign(window, {                                        // tes
   __officeBrew: () => brew(),
   __officePoll: () => pollCommon(),
   __officeReport: r => reportResult(r),
-  __officeArcade: () => arcade, __officeGithub: () => github,
+  __officeArcade: () => arcade, __officeGithub: () => github, __officeRacks: () => racks,
   __officeLevel: () => ({level, y: boss.pos.y, lvl: boss.lvl || 0, arena: !!arena, lift: !!lift}), __officeArena: () => arena,
   __officeAgents: () => [...people].map(([name, q]) => ({name, x: +q.pos.x.toFixed(2), z: +q.pos.z.toFixed(2), pose: q.pose, act: q.act, walking: q.path.length, visit: q.visit ? {until: q.visit.until, act: q.visit.act} : null})),
   __officeView: () => { const d = camera.getWorldDirection(new THREE.Vector3()); return {pov, locked: povLocked, rot: boss.rot, yaw: me.yaw, pitch: me.pitch, faceRot: boss.faceRot, pose: boss.pose, path: boss.path.length, seated: seated(boss), camYaw: Math.atan2(d.x, d.z), camPitch: Math.asin(d.y)}; },
@@ -1884,6 +1904,8 @@ function arcadeInvites() {
 const arcade = ARC_ON ? createArcade({THREE, scene, camera, raycastables, root, Vox: V.Vox, mesh: V.mesh, lang: () => DATA.config.lang, say: t => ui.placeName(t), report: reportResult, me: myName, net: nesNet,
                                       unlock: unlockAudio, volume: () => mixLevel('arcade'), onOpen: () => document.exitPointerLock?.()}) : null;
 if (arcade) ui.addExtra('arcade', '🕹', 'Arcade', () => arcade.open());
+racks = visit ? null : createRacks({THREE, V, root, raycastables, lang: () => DATA.config.lang,
+                                    tail: (name, id) => fetch(`procs.json?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}&n=14`, {cache: 'no-store'}).then(r => r.json())});
 if (!visit) github = createGithubWall({board: ghBoard, frame: ghFrame, raycastables, root, lang: () => DATA.config.lang, onEnabled: () => ui.addExtra('github', '🐙', 'GitHub', () => github.open())});
 const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(m => {
   const type = itemOf(m).type, [w, d] = CATALOG[type].foot, c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);

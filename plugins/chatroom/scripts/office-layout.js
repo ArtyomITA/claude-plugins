@@ -189,6 +189,14 @@ export const DEFAULT_LAYOUT = {
     nameplate: {x: 12, y: 0.95, z: -7.21, rot: 0}, commonSign: {x: 4, y: 2.65, z: 4.97, rot: PI},
     scoreboard: {x: -9.9, y: 1.75, z: -9.85, rot: 0}, github: {x: 1.1, y: 1.6, z: -9.85, rot: 0},
   },
+  // neon signs that name the places (office-signs.js; text in both languages; hang: from the ceiling, readable from both sides) and an easel with a guide at the entrance
+  signs: [
+    {text: {it: 'SALA REGIA', en: 'CONTROL ROOM'}, x: 0.9, y: 2.72, z: -4.7, rot: 0, w: 1.9, h: 0.42, tone: 'cyan', hang: true},
+    {text: 'ARCADE', x: 1.2, y: 2.4, z: 5.12, rot: 0, w: 1.0, h: 0.34, tone: 'magenta'},
+    {text: 'CINEMA', x: -12.2, y: 2.68, z: 0.8, rot: PI, w: 1.3, h: 0.34, tone: 'amber', hang: true},
+    {text: 'OPEN SPACE', x: -1.6, y: 2.72, z: 2.1, rot: 0, w: 2.0, h: 0.42, tone: 'green', hang: true},
+    {kind: 'guide', text: 'guide', x: -1.7, y: 0.7, z: 7.9, rot: 0, w: 1.0, h: 0.75, easel: true},
+  ],
   // blocks of four cubicles (two open toward +z, two toward -z), all furnished; agents take the free desks in order
   // what the room under the mouse (or around you in first person) is called; the first match wins
   rooms: [

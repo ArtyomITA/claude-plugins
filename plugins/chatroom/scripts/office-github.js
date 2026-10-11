@@ -3,10 +3,10 @@
 // the project folder, cached for a minute, local only: it never goes through the relay to friends). Without a project folder the screen is not there at all.
 
 const S = {
-  en: {title: 'GitHub', prs: 'PULL REQUESTS', runs: 'CI RUNS', commits: 'COMMITS', issues: 'ISSUES', none: 'nothing open', noneRuns: 'no runs yet', ago: n => `${n} ago`, loading: 'loading…', panel: 'GitHub',
+  en: {title: 'GitHub', prs: 'PULL REQUESTS', runs: 'CI RUNS', commits: 'COMMITS', issues: 'ISSUES', none: 'nothing open', noneRuns: 'no runs yet', detached: 'detached copy', ago: n => `${n} ago`, loading: 'loading…', panel: 'GitHub',
        missing: 'gh is not installed (cli.github.com)', login: 'gh is not logged in: run  gh auth login', err: 'gh did not answer', draft: 'draft', updated: s => `updated ${s} ago`, stale: ' (old data)',
        checks: {success: 'checks passed', failure: 'checks failed', pending: 'checks running', none: 'no checks'}, close: 'Close', open: 'open on GitHub'},
-  it: {title: 'GitHub', prs: 'PULL REQUEST', runs: 'ESECUZIONI CI', commits: 'COMMIT', issues: 'ISSUE', none: 'niente di aperto', noneRuns: 'nessuna esecuzione', ago: n => `${n} fa`, loading: 'carico…', panel: 'GitHub',
+  it: {title: 'GitHub', prs: 'PULL REQUEST', runs: 'ESECUZIONI CI', commits: 'COMMIT', issues: 'ISSUE', none: 'niente di aperto', noneRuns: 'nessuna esecuzione', detached: 'copia staccata', ago: n => `${n} fa`, loading: 'carico…', panel: 'GitHub',
        missing: 'gh non e installato (cli.github.com)', login: 'gh non e collegato: esegui  gh auth login', err: 'gh non risponde', draft: 'bozza', updated: s => `aggiornato ${s} fa`, stale: ' (dati vecchi)',
        checks: {success: 'controlli ok', failure: 'controlli falliti', pending: 'controlli in corso', none: 'nessun controllo'}, close: 'Chiudi', open: 'apri su GitHub'},
 };
@@ -27,10 +27,13 @@ const CSS = `
 .o-gh code { background: #ffffff14; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
 `;
 const DOT = {success: '#43d17a', failure: '#ef5350', pending: '#f5c542', running: '#f5c542', queued: '#f5c542', cancelled: '#7a869a', none: '#7a869a'};
+const branchOf = (d, T) => !d.branch || d.branch === 'HEAD' ? T.detached : d.branch;
 const ago = (at, now, T) => {
   const s = Math.max(0, Math.round(now - at));
   return T.ago(s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 129600 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`);
 };
+/** a short age for the wall: 40s, 12m, 3h, 2d */
+const age = (at, now) => { const s = Math.max(0, Math.round(now - at)); return s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)}m` : s < 129600 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`; };
 const esc = x => String(x ?? '').replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
 
 /** board: {mesh, canvas, g, tex} made by the office (a plane of the size of the screen, drawn at canvas.lw x canvas.lh); frame: a mesh to hide with it */
@@ -47,19 +50,19 @@ export function createGithubWall({board, frame = null, raycastables, root, lang 
     let s = text; while (s.length > 1 && g.measureText(s + '…').width > w) s = s.slice(0, -1);
     return s + '…';
   }
-  function zone(g, x, y, w, h, title, lines, empty) {
+  function zone(g, x, y, w, h, title, lines, empty, neutral = false) {
     g.fillStyle = '#121a35'; g.fillRect(x, y, w, h);
-    g.fillStyle = '#ffd54f'; g.font = '800 25px "Segoe UI", sans-serif'; g.textBaseline = 'middle'; g.fillText(title, x + 12, y + 22);
-    g.font = '500 19px "Segoe UI", sans-serif';
+    g.fillStyle = '#ffd54f'; g.font = '800 27px "Segoe UI", sans-serif'; g.textBaseline = 'middle'; g.fillText(title, x + 12, y + 24);
+    g.font = '500 21px "Segoe UI", sans-serif';
     if (typeof lines === 'string') { g.fillStyle = '#ffab91'; g.fillText(fit(g, lines, w - 24), x + 12, y + 56); return; }
-    if (!lines.length) { g.fillStyle = '#7f8ab0'; g.fillText(empty, x + 12, y + 56); return; }
+    if (!lines.length) { g.fillStyle = neutral ? '#8c97b8' : '#7fd6a0'; g.font = '700 25px "Segoe UI", sans-serif'; g.fillText((neutral ? '' : '✓ ') + empty, x + 14, y + h * 0.62); return; }
     lines.slice(0, 4).forEach((l, i) => {
-      const yy = y + 58 + i * 35;
+      const yy = y + 62 + i * 33;
       if (l.dot) { g.fillStyle = l.dot; g.beginPath(); g.arc(x + 20, yy, 6, 0, 7); g.fill(); }
-      g.fillStyle = '#e8ecff'; g.font = '500 19px "Segoe UI", sans-serif';
+      g.fillStyle = '#e8ecff'; g.font = '500 21px "Segoe UI", sans-serif';
       const subW = l.sub ? g.measureText(l.sub).width + 8 : 0;
       g.fillText(fit(g, l.text, w - 48 - subW), x + 34, yy);
-      if (l.sub) { g.fillStyle = '#8c97b8'; g.font = '500 16px "Segoe UI", sans-serif'; g.textAlign = 'right'; g.fillText(l.sub, x + w - 12, yy); g.textAlign = 'left'; }
+      if (l.sub) { g.fillStyle = '#8c97b8'; g.font = '500 18px "Segoe UI", sans-serif'; g.textAlign = 'right'; g.fillText(l.sub, x + w - 12, yy); g.textAlign = 'left'; }
     });
   }
   function draw() {
@@ -69,18 +72,18 @@ export function createGithubWall({board, frame = null, raycastables, root, lang 
     g.fillStyle = '#161d3a'; g.fillRect(9, 9, W - 18, 40);
     g.textBaseline = 'middle'; g.font = '800 26px "Segoe UI", sans-serif'; g.fillStyle = '#ffd54f'; g.fillText('GitHub', 20, 30);
     g.font = '600 18px "Segoe UI", sans-serif'; g.fillStyle = '#9fb3ff';
-    if (d) g.fillText(fit(g, `${d.repo || ''}${d.branch ? ' · ' + d.branch : ''}`, W - 360), 124, 30);
-    if (d && d.at) { g.textAlign = 'right'; g.fillStyle = d.stale ? '#ffab91' : '#7f8ab0'; g.font = '500 16px "Segoe UI", sans-serif'; g.fillText(T.updated(ago(d.at, now, {ago: x => x})) + (d.stale ? T.stale : ''), W - 20, 30); g.textAlign = 'left'; }
+    if (d) g.fillText(fit(g, `${d.repo || ''} · ${branchOf(d, T)}`, W - 360), 124, 30);
+    if (d && d.at) { g.textAlign = 'right'; g.fillStyle = d.stale ? '#ffab91' : '#7f8ab0'; g.font = '600 19px "Segoe UI", sans-serif'; g.fillText(T.updated(ago(d.at, now, {ago: x => x})) + (d.stale ? T.stale : ''), W - 20, 30); g.textAlign = 'left'; }
     const zw = (W - 9 * 2 - 8) / 2, zh = (H - 9 - 56 - 8) / 2, x0 = 9, x1 = 9 + zw + 8, y0 = 56, y1 = 56 + zh + 8;
     if (!d || d.gh === 'loading') { zone(g, x0, y0, zw, zh, T.prs, T.loading); zone(g, x1, y0, zw, zh, T.runs, T.loading); zone(g, x0, y1, zw, zh, T.commits, T.loading); zone(g, x1, y1, zw, zh, T.issues, T.loading); }
     else {
       const ghMsg = d.gh === 'ok' ? null : d.gh === 'missing' ? T.missing : d.gh === 'not logged in' ? T.login : T.err;
       const prs = (d.prs || []).map(p => ({dot: DOT[p.checks] || DOT.none, text: `#${p.n} ${p.draft ? '[' + T.draft + '] ' : ''}${p.title}`, sub: '@' + p.author}));
-      const runs = (d.runs || []).map(r => ({dot: DOT[r.state] || DOT.none, text: `${r.workflow || 'CI'} · ${r.title}`, sub: ago(r.at, now, T)}));
-      const commits = (d.commits || []).map(c => ({dot: null, text: `${c.sha} ${c.subject}`, sub: ago(c.at, now, T)}));
+      const runs = (d.runs || []).map(r => ({dot: DOT[r.state] || DOT.none, text: `${r.workflow || 'CI'} · ${r.title}`, sub: age(r.at, now)}));
+      const commits = (d.commits || []).map(c => ({dot: null, text: `${c.sha} ${c.subject}`, sub: age(c.at, now)}));
       const issues = (d.issues || []).map(i => ({dot: '#a78bfa', text: `#${i.n} ${i.title}`, sub: '@' + i.author}));
       zone(g, x0, y0, zw, zh, `${T.prs} ${d.prs ? d.prs.length : ''}`, ghMsg && !d.prs ? ghMsg : prs, T.none);
-      zone(g, x1, y0, zw, zh, T.runs, ghMsg && !d.runs ? ghMsg : runs, T.noneRuns);
+      zone(g, x1, y0, zw, zh, T.runs, ghMsg && !d.runs ? ghMsg : runs, T.noneRuns, true);
       zone(g, x0, y1, zw, zh, T.commits, d.commits ? commits : (d.errors && d.errors.log) || T.err, T.none);
       zone(g, x1, y1, zw, zh, `${T.issues} ${d.issues ? d.issues.length : ''}`, ghMsg && !d.issues ? ghMsg : issues, T.none);
     }
@@ -106,7 +109,7 @@ export function createGithubWall({board, frame = null, raycastables, root, lang 
     const ghMsg = d.gh === 'ok' ? null : d.gh === 'missing' ? T.missing : d.gh === 'not logged in' ? T.login : T.err;
     const sec = (title, rows, empty, failed) => `<h3>${esc(title)}</h3>` + (failed ? `<div class="o-msg">${esc(failed)}</div>` : rows.length ? rows.join('') : `<div class="o-empty">${esc(empty)}</div>`);
     const box = ov.querySelector('.o-gh');
-    box.innerHTML = `<h2>🐙 ${esc(d.repo)} <small>${esc(d.branch || '')}${d.at ? ' · ' + esc(T.updated(ago(d.at, now, {ago: x => x}))) : ''}</small><button data-x>${T.close} (Esc)</button></h2>`
+    box.innerHTML = `<h2>🐙 ${esc(d.repo)} <small>${esc(branchOf(d, T))}${d.at ? ' · ' + esc(T.updated(ago(d.at, now, {ago: x => x}))) : ''}</small><button data-x>${T.close} (Esc)</button></h2>`
       + sec(T.prs, (d.prs || []).map(p => `<div class="o-row">${dot(p.checks)}${link(p.url, `#${p.n} ${p.title}`)}<small>${esc(p.draft ? T.draft + ' · ' : '')}@${esc(p.author)}${p.review ? ' · ' + esc(p.review) : ''} · ${esc(ago(p.at, now, T))}</small></div>`), T.none, ghMsg && !d.prs ? ghMsg : '')
       + sec(T.runs, (d.runs || []).map(r => `<div class="o-row">${dot(r.state)}${link(r.url, `${r.workflow || 'CI'} · ${r.title}`)}<small>${esc(r.branch)} · ${r.secs ? Math.floor(r.secs / 60) + ':' + String(r.secs % 60).padStart(2, '0') + ' · ' : ''}${esc(ago(r.at, now, T))}</small></div>`), T.noneRuns, ghMsg && !d.runs ? ghMsg : '')
       + sec(T.commits, (d.commits || []).map(c => `<div class="o-row"><code>${esc(c.sha)}</code>${esc(c.subject)}<small>${esc(c.author)} · ${esc(ago(c.at, now, T))}</small></div>`), T.none, d.commits ? '' : T.err)

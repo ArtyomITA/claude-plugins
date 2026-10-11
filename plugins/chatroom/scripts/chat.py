@@ -709,6 +709,21 @@ def cmd_post(room, a, text=None):
 
 
 # ---------------------------------------------------------------------- structured statuses and the task board
+def status_points(items, name, now, span):
+    """the percentages an agent stated in its statuses, as [seconds ago, percent]: the number of a JSON status, else the lowest percentage written in the text"""
+    out = []
+    for m in items:
+        if m.get('from') != name or m.get('kind') not in STATUS_KINDS or now - float(m.get('ts') or 0) > span:
+            continue
+        pct = (m.get('state') or {}).get('pct')
+        if pct is None:
+            nums = [int(x) for x in re.findall(r'(\d{1,3})[^\S\n]?%', m.get('text', '')) if int(x) <= 100]
+            pct = min(nums) if nums else None
+        if pct is not None:
+            out.append([round(now - float(m['ts']), 1), int(pct)])
+    return out[-60:]
+
+
 def parse_state(text):
     """a structured status: a JSON object with some of STATE_KEYS, pct (0-100) required; exits with the reason if bad"""
     try:
@@ -1781,10 +1796,32 @@ def cmd_serve(room, a):
                 if m and m[1] in listed and (arcade / name).is_file():
                     return self.send(200, (arcade / name).read_bytes(), 'application/octet-stream')
                 return self.send(404, 'not found', 'text/plain')
+            if path == '/procs.json':                 # the last lines of an agent's background process (local only: output can hold secrets, it never goes to friends)
+                q = urllib.parse.parse_qs(self.path.partition('?')[2])
+                try:
+                    n = max(1, min(30, int(q.get('n', ['12'])[0])))
+                except ValueError:
+                    n = 12
+                with lock:
+                    info = activity.tail(q.get('name', [''])[0][:60], q.get('id', [''])[0][:60], n)
+                return self.send(200 if info else 404, json.dumps(info or {'error': 'unknown process'}, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/state.json':
                 with lock:
                     state = activity.state()
                 return self.send(200, json.dumps(state, ensure_ascii=False), 'application/json; charset=utf-8')
+            if path == '/timeline.json':              # the timelines of the agents (office-timeline.js): calls, waits, context and stated percentages, as seconds ago
+                try:
+                    span = max(60, min(3600, int(urllib.parse.parse_qs(self.path.partition('?')[2]).get('span', ['1800'])[0])))
+                except ValueError:
+                    span = 1800
+                with lock:
+                    tl = activity.timeline(span)
+                items, c = room.messages(), room.config()
+                for n in c.get('participants', []):
+                    tl['agents'].setdefault(n, {'ev': [], 'run': None, 'wt': [], 'cx': []})
+                for n, d in tl['agents'].items():
+                    d['st'] = status_points(items, n, tl['now'], span)
+                return self.send(200, json.dumps(tl, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/summary.json':               # what the /stanza pane of the mod shows
                 with lock:
                     state = activity.state()

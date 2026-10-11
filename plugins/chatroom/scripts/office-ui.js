@@ -2,6 +2,7 @@
 // and what gets your attention when an agent waits for you (tab title, favicon, chime, desktop notification).
 
 import {poolRack} from './office-games.js';
+import {drawStrip, drawChart, summary} from './office-timeline.js';
 
 const CSS = `
 #office { position: fixed; inset: 0 auto 0 0; width: 100vw; background: #1b1d27; z-index: 1; overflow: hidden;
@@ -73,6 +74,8 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-bar > div { height: 100%; background: linear-gradient(90deg, #43a047, #fbc02d, #e53935); }
 #office .o-spark { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin: 3px 0 8px; }
 #office .o-spark div { flex: 1; background: #4fc3f7; min-height: 1px; border-radius: 1px; }
+#office .o-tl { width: 140px; height: 22px; border-radius: 3px; pointer-events: auto; cursor: pointer; box-shadow: 0 0 0 1px #ffffff1a; }
+#office .o-chart { display: block; width: 272px; max-width: 100%; height: 150px; margin: 3px 0 4px; border-radius: 4px; }
 #office .o-tools div { display: flex; gap: 6px; font-size: 11.5px; padding: 2px 0; border-bottom: 1px solid #ffffff10; }
 #office .o-tools span:last-child { margin-left: auto; opacity: .6; }
 #office .o-tools .o-err { color: #ff8a80; }
@@ -213,6 +216,8 @@ export const L = {
        hint_board: 'look at the whiteboard', hintStop: 'stop looking', go: 'Walk over', edit: 'Furnish', cmdTitle: 'quick commands for the room',
        hint_cmds: 'quick commands', cmdSent: c => `${c} sent to the room`,
        jump: 'In the chat', ctx: 'context', pulse: 'activity, last 5 min', tools: 'last tools', msgs: 'last messages',
+       tl: 'timeline, last 30 min', tlHint: 'red: failed call · yellow: waiting for a permission · white: the % it stated · green: context',
+       tlTip: s => `${s.calls} calls, ${s.errors} failed${s.running ? ', one running' : ''}: click for the chart`, lanes: ['read', 'edit', 'run', 'web', 'agents', 'chat', 'other'], now: 'now',
        mod: 'live (mod)', tail: 'from transcripts', nodata: 'chat only'},
   it: {code: 'scrive codice', read: 'legge', term: 'terminale', web: 'sul web', post: 'scrive in chat', chat: 'legge la chat',
        agent: 'delega', msg: 'messaggio', other: 'lavora', think: 'pensa', idle: 'idle', coffee: 'pausa caffè',
@@ -259,6 +264,8 @@ export const L = {
        hint_board: 'guarda la lavagna', hintStop: 'smetti di guardare', go: 'Vai da lui', edit: 'Arreda', cmdTitle: 'comandi rapidi per la stanza',
        hint_cmds: 'comandi rapidi', cmdSent: c => `${c} mandato alla stanza`,
        jump: 'Nella chat', ctx: 'contesto', pulse: 'attività, ultimi 5 min', tools: 'ultimi strumenti', msgs: 'ultimi messaggi',
+       tl: 'linea del tempo, ultimi 30 min', tlHint: 'rosso: chiamata fallita · giallo: attesa di un permesso · bianco: la % dichiarata · verde: contesto',
+       tlTip: s => `${s.calls} chiamate, ${s.errors} fallite${s.running ? ', una in corso' : ''}: clic per il grafico`, lanes: ['legge', 'scrive', 'esegue', 'web', 'agenti', 'chat', 'altro'], now: 'adesso',
        mod: 'dal vivo (mod)', tail: 'dai transcript', nodata: 'solo chat'},
 };
 export const EMOJI = {code: '✏️', read: '📖', term: '💻', web: '🌐', post: '💬', chat: '👀', agent: '🤖', msg: '✉️', other: '🔧',
@@ -401,19 +408,34 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
   const closeMenu = () => menuEl.classList.remove('o-open');
   root.addEventListener('pointerdown', e => { if (!e.target.closest('.o-more')) closeMenu(); }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
-  const labels = new Map(), itemLabels = new Map();
+  const labels = new Map(), itemLabels = new Map(), tlData = new Map();
+  /** the strip over the head of an agent: its calls of the last ten minutes (office-timeline.js), only when there is something to show */
+  function drawTl(name) {
+    const l = labels.get(name), a = tlData.get(name);
+    if (!l || !a) return;
+    const key = JSON.stringify(a);
+    if (key === l.tlKey) return;
+    l.tlKey = key;
+    const s = summary(a), live = s.calls || s.running || s.waits;
+    l.tl.style.display = live ? '' : 'none';
+    if (!live) return;
+    const g = l.tl.getContext('2d'); g.setTransform(2, 0, 0, 2, 0, 0); drawStrip(g, 140, 22, a, 600);
+    l.tl.title = t().tlTip(s);
+  }
 
   function label(name) {
     let l = labels.get(name);
     if (l) return l;
     const el = document.createElement('div'); el.className = 'o-tag';
-    el.innerHTML = `<div class="o-bub"></div><div class="o-flags"></div><svg class="o-ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="#14151dd9" stroke="#ffffff22" stroke-width="5"/><circle class="o-arc" cx="18" cy="18" r="15" fill="none" stroke-width="5" stroke-dasharray="0 100" transform="rotate(-90 18 18)" pathLength="100"/><text x="18" y="22" text-anchor="middle" font-size="11" font-weight="700" fill="#fff"></text></svg><div class="o-line"></div><div class="o-name" tabindex="0" role="button"></div>`;
+    el.innerHTML = `<div class="o-bub"></div><div class="o-flags"></div><svg class="o-ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="#14151dd9" stroke="#ffffff22" stroke-width="5"/><circle class="o-arc" cx="18" cy="18" r="15" fill="none" stroke-width="5" stroke-dasharray="0 100" transform="rotate(-90 18 18)" pathLength="100"/><text x="18" y="22" text-anchor="middle" font-size="11" font-weight="700" fill="#fff"></text></svg><div class="o-line"></div><canvas class="o-tl" width="280" height="44" style="display:none"></canvas><div class="o-name" tabindex="0" role="button"></div>`;
     el.querySelector('.o-name').addEventListener('click', () => onSelect(name));
+    el.querySelector('.o-tl').addEventListener('click', () => onSelect(name));
     el.querySelector('.o-name').addEventListener('keydown', e => { if (e.key === 'Enter') onSelect(name); });
     tags.appendChild(el);
     l = {el, bub: el.querySelector('.o-bub'), flags: el.querySelector('.o-flags'), ring: el.querySelector('.o-ring'), arc: el.querySelector('.o-arc'),
-         pct: el.querySelector('text'), line: el.querySelector('.o-line'), name: el.querySelector('.o-name'), key: ''};
+         pct: el.querySelector('text'), line: el.querySelector('.o-line'), name: el.querySelector('.o-name'), tl: el.querySelector('.o-tl'), key: '', tlKey: ''};
     labels.set(name, l);
+    drawTl(name);
     return l;
   }
 
@@ -429,6 +451,8 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       l.el.style.left = x + 'px'; l.el.style.top = y + 'px';
       l.el.style.transform = `translate(-50%, -100%) scale(${scale})`;
     },
+    /** the timeline of an agent (what /timeline.json says): the strip in its tag and, when it is selected, the chart of the inspector */
+    timeline(name, a) { tlData.set(name, a); drawTl(name); },
     /** what a tag shows; only touches the DOM when something changed */
     tag(name, d) {
       const l = label(name), key = JSON.stringify(d);
@@ -472,6 +496,7 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
         ${d.pct != null ? `<div>${d.pct}%</div><div class="o-bar"><div style="width:${d.pct}%;background:${esc(d.color)}"></div></div>` : ''}
         ${ctx != null ? `<div>${t().ctx}: ${Math.round(d.ctx / 1000)}k / ${Math.round(d.window / 1000)}k (${ctx}%)</div><div class="o-bar"><div style="width:${ctx}%"></div></div>` : ''}
         ${d.pulse ? `<div>${t().pulse}</div><div class="o-spark">${bins.map(b => `<div style="height:${Math.round(100 * b / max)}%"></div>`).join('')}</div>` : ''}
+        ${d.tl ? `<div>${t().tl}</div><canvas class="o-chart" width="544" height="300"></canvas><div class="o-meta">${t().tlHint}</div>` : ''}
         ${(d.recent || []).length ? `<div>${t().tools}</div><div class="o-tools">${d.recent.slice(0, 10).map(r => `<div class="${r.ok ? '' : 'o-err'}"><span>${esc(r.emoji)}</span><span>${esc(r.tool)} ${esc(r.target || '')}</span><span>${r.ms < 1000 ? r.ms + ' ms' : Math.round(r.ms / 1000) + ' s'}</span></div>`).join('')}</div>` : ''}
         ${(d.msgs || []).length ? `<div style="margin-top:8px">${t().msgs}</div><div class="o-msgs">${d.msgs.map(m => `<div data-n="${m.n}">#${m.n} ${esc(m.text.slice(0, 140))}</div>`).join('')}</div>` : ''}
         <div class="o-row"><button data-x="tag">${t().tag}</button><button data-x="jump">${t().jump}</button>${d.you ? '' : `<button data-x="go">🚶 ${t().go}</button>`}</div>`;
@@ -479,6 +504,8 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       insp.querySelector('[data-x="jump"]').onclick = () => onJump(d.lastN);
       if (!d.you) insp.querySelector('[data-x="go"]').onclick = () => onGo(d.name);
       insp.querySelectorAll('.o-msgs [data-n]').forEach(el => el.onclick = () => onJump(+el.dataset.n));
+      const cv = insp.querySelector('.o-chart');
+      if (cv) { const g = cv.getContext('2d'); g.setTransform(2, 0, 0, 2, 0, 0); drawChart(g, 272, 150, d.tl, 1800, t().lanes, {now: t().now}); }
     },
     /** the common room panel: who may take breaks there, the whole room, sharing with friends; null closes it */
     /** the common room panel: who may take breaks there, sharing it with friends, joining a friend's, its chat;

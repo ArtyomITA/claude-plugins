@@ -65,15 +65,18 @@ export function arenaPlan() {
     S(a, 0, -10, b, 0.5, -9.5, low); S(a, 0.5, -10, b, ARENA_H, -9.5, up); S(a, 0, 9.5, b, 0.5, 10, low); S(a, 0.5, 9.5, b, ARENA_H, 10, up);
   }
   S(-15, 0, -10, -14.5, 0.5, 10, C.wallWlow); S(-15, 0.5, -10, -14.5, ARENA_H, 10, C.wallW); S(14.5, 0, -10, 15, 0.5, 10, C.wallElow); S(14.5, 0.5, -10, 15, ARENA_H, 10, C.wallE);
-  // the word ARENA in neon letters (a 5 x 7 font) on the four walls: big on the long walls, smaller above the lift on the west one
+  // the word ARENA in neon letters (a 5 x 7 font): on the west wall above the lift, on the east wall, and on the lane walls (below)
   const FONT = {A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'], R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'], E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'], N: ['#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#', '#...#']};
-  const word = (wall, px, top) => [...'ARENA'].forEach((ch, li) => FONT[ch].forEach((row, r) => [...row].forEach((c, k) => {
+  // `at` is the plane of the face (z for N and S, x for W and E), `mid` the middle of the word along it
+  const word = (wall, px, top, at, mid = 0) => [...'ARENA'].forEach((ch, li) => FONT[ch].forEach((row, r) => [...row].forEach((c, k) => {
     if (c !== '#') return;
     const u0 = -(5 * 5 * px + 4 * px) / 2 + li * 6 * px + k * px, u1 = u0 + px, y0 = top - (r + 1) * px, y1 = top - r * px;     // u: along the wall, to the right of whoever looks at it
-    if (wall === 'N') G(u0, y0, -9.5, u1, y1, -9.46, '#7df0ff'); else if (wall === 'S') G(-u1, y0, 9.46, -u0, y1, 9.5, '#7df0ff');
-    else if (wall === 'W') G(-14.5, y0, -u1, -14.46, y1, -u0, '#7df0ff'); else G(14.46, y0, u0, 14.5, y1, u1, '#7df0ff');
+    if (wall === 'N') G(mid + u0, y0, at, mid + u1, y1, at + 0.04, '#7df0ff'); else if (wall === 'S') G(mid - u1, y0, at - 0.04, mid - u0, y1, at, '#7df0ff');
+    else if (wall === 'W') G(at, y0, mid - u1, at + 0.04, y1, mid - u0, '#7df0ff'); else G(at - 0.04, y0, mid + u0, at, y1, mid + u1, '#7df0ff');
   })));
-  word('N', 0.14, 3.4); word('S', 0.14, 3.4); word('W', 0.1, 3.45); word('E', 0.14, 3.4);
+  word('W', 0.1, 3.45, -14.5); word('E', 0.14, 3.4, 14.5);
+  // the north and south walls are hidden behind the 2.4 m lane walls (from the middle only the top row showed, 'ODLWO'), so the word is on the faces of the middle lane walls instead, at eye height
+  word('N', 0.14, 1.8, -6.2, 0.3); word('S', 0.14, 1.8, 6.2, -1.5);
   for (const [y, hh] of [[0.55, 0.05], [3.52, 0.05]]) {
     G(-14.5, y, -9.5, 0, y + hh, -9.46, C.teamA); G(0, y, -9.5, 14.5, y + hh, -9.46, C.teamB); G(-14.5, y, 9.46, 0, y + hh, 9.5, C.teamA); G(0, y, 9.46, 14.5, y + hh, 9.5, C.teamB);
     G(-14.5, y, -9.5, -14.46, y + hh, 9.5, C.teamA); G(14.46, y, -9.5, 14.5, y + hh, 9.5, C.teamB);
