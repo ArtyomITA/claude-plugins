@@ -51,7 +51,7 @@ const CSS = `
 .o-pnt .o-pnt-hpbox.o-low .o-pnt-hpnum { color: #ff5252; animation: o-pnt-pulse .7s infinite alternate; } @keyframes o-pnt-pulse { to { opacity: .55; } }
 .o-pnt .o-pnt-gunbox { position: absolute; left: 22px; bottom: 124px; }
 .o-pnt .o-pnt-slots { display: flex; gap: 6px; margin-bottom: 8px; }
-.o-pnt .o-pnt-slot { position: relative; width: 62px; height: 40px; border-radius: 6px; background: #0007; border: 2px solid #ffffff44; display: flex; align-items: center; justify-content: center; opacity: .7; }
+.o-pnt .o-pnt-slot { pointer-events: auto; cursor: pointer; position: relative; width: 62px; height: 40px; border-radius: 6px; background: #0007; border: 2px solid #ffffff44; display: flex; align-items: center; justify-content: center; opacity: .7; }
 .o-pnt .o-pnt-slot svg { max-width: 92%; height: auto; }
 .o-pnt .o-pnt-slot b { position: absolute; left: 4px; top: 1px; font-size: 11px; opacity: .85; }
 .o-pnt .o-pnt-slot.o-on { opacity: 1; border-color: #f5b400; background: #f5b40033; }
@@ -553,6 +553,8 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
           if (tg && dist < T0.reach * 0.6 && dist > 1e-3) { wx -= (tg.x - z.x) / dist * 1.2; wz -= (tg.z - z.z) / dist * 1.2; }
           for (let j = 0; j < nz; j++) if (j !== i && zs[j].state !== 'dead') { const dx = z.x - zs[j].x, dz = z.z - zs[j].z, d2 = dx * dx + dz * dz, rr = 0.3 * z.sc[0] * zs[j].sc[0]; if (d2 < rr && d2 > 1e-6) { const d = Math.sqrt(d2); wx += dx / d * 0.5; wz += dz / d * 0.5; } }
           const k = 1 - Math.exp(-5 * dt); z.vx += (wx - z.vx) * k; z.vz += (wz - z.vz) * k; z.x += z.vx * dt; z.z += z.vz * dt;
+          const minD = Math.max(1.35, T0.reach * 0.62 + 0.3);                                   // never closer than this to anyone it hunts: a zombie inside the camera is a green wall
+          for (let t = 0; t < tgN; t++) { const dx = z.x - tgs[t].x, dz = z.z - tgs[t].z, d = Math.hypot(dx, dz); if (d < minD) { if (d > 1e-3) { z.x = tgs[t].x + dx / d * minD; z.z = tgs[t].z + dz / d * minD; } else z.x += minD; } }
           const sp = Math.hypot(z.vx, z.vz);
           if (sp > 0.05 && !hold) z.yaw = shortAng(z.yaw, Math.atan2(z.vx, z.vz), 1 - Math.exp(-8 * dt)); else if (tg) z.yaw = shortAng(z.yaw, Math.atan2(tg.x - z.x, tg.z - z.z), 1 - Math.exp(-6 * dt));
           z.phase += sp * dt * 5.5;
@@ -778,6 +780,8 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = false; for (const b2 of bolts) b2.live = false; balls.count = trails.count = 0; others.clear();
   }
 
+  el.slots.addEventListener('pointerdown', e => e.stopPropagation());
+  el.slots.addEventListener('click', e => { const sl = e.target.closest('.o-pnt-slot'); if (sl && on) { e.stopPropagation(); setWeapon([...el.slots.children].indexOf(sl)); } });
   // input: a click that is not a drag shoots, 1-6 or the wheel choose the weapon, R reloads, Z / right button zoom. With the mouse captured the
   // shot starts at the press (and an automatic weapon keeps firing while the button is down)
   let down = null;
@@ -804,7 +808,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     e.preventDefault();
   }, {passive: false, capture: true});
   document.addEventListener('keydown', e => {
-    if (!on || !pov() || e.repeat || e.ctrlKey || e.metaKey || e.altKey || !/^[1-6rRzZ]$/.test(e.key) || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (!on || e.repeat || e.ctrlKey || e.metaKey || e.altKey || !/^[1-6rRzZ]$/.test(e.key) || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
     if (/[rR]/.test(e.key)) startReload(performance.now() / 1000);
     else if (/[zZ]/.test(e.key)) { if (WEAPONS[weapon].zoom) zoomWant = !zoomWant; }
     else setWeapon(+e.key - 1);
