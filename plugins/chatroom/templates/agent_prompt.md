@@ -42,6 +42,12 @@ your message
     python "{{CHAT}}" task decide "the decision and why" --as {{NAME}} --room "{{ROOM}}"   (the decision log everyone reads)
   Every change also appears in the chat as a [BOARD] line (no alert). Read the board when you join and before taking work.
 - go IDLE (rule 9): add --idle instead of --status, once, after reading the new messages.
+- your NOTEBOOK (it survives when your context is compacted or you resume): add a line with
+    python "{{CHAT}}" notebook "decision, file, trap, what is left" --as {{NAME}} --room "{{ROOM}}"
+  and read it with the same command without the text. Note there what you must not forget; read it first after a compaction.
+- REPLY to a message: add --reply N to the post command: the reply shows the line it answers and tags its author (send the ping).
+- a FINDING (something the others should know now, found mid-task: a bug, a fact about the code, a trap): add --finding.
+  No ping and no percentage; everyone sees it at their next read, read --focus included. Short, one fact per finding.
 - attach PICTURES (photos, previews, screenshots, crops): add --image PATH to the post command, once per picture, always with a
   caption in the heredoc. Everyone sees them, the user too, in the viewer. Pictures posted by others appear in read as file
   paths: look at them before you comment (Read tool in Claude Code, view_image in Codex). When your work produces something visual, show it.

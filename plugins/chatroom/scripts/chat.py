@@ -75,7 +75,7 @@ IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                '.gif': 'image/gif'}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
-STATUS_KINDS = ('status', 'stato', 'board')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
+STATUS_KINDS = ('status', 'stato', 'board', 'finding')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
 STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str,
               'done': str, 'evidence': list, 'risks': str}
 IDLE = 'idle'
@@ -421,7 +421,7 @@ class Room:
             n = len(items) + 1
             entry = {'n': n, 'time': time.strftime('%H:%M:%S'), 'ts': time.time(), 'from': name, 'text': text}
             if status:
-                entry['kind'] = IDLE if status == IDLE else 'board' if status == 'board' else 'status'
+                entry['kind'] = IDLE if status == IDLE else status if status in ('board', 'finding') else 'status'
             if state:
                 entry['state'] = state
             if images:
@@ -497,7 +497,8 @@ class Room:
         users = self.user_names()
         for m in items:
             kind = m.get('kind')
-            tag = ' [IDLE]' if kind == IDLE else ' [BOARD]' if kind == 'board' else ' [STATUS]' if kind in STATUS_KINDS else ''
+            tag = (' [IDLE]' if kind == IDLE else ' [BOARD]' if kind == 'board' else ' [FINDING]' if kind == 'finding'
+                   else ' [STATUS]' if kind in STATUS_KINDS else '')
             if m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
             print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}", flush=True)
@@ -537,7 +538,7 @@ class Room:
         # name you); the rest in one digest line per author with their latest state, so a busy agent reads less
         users = self.user_names()
         mine = [m for m in items if m['from'] != name and (self.wakes(m, name, users) or tags(m.get('text', ''), name)
-                or (m.get('kind') == 'board' and name.lower() in m.get('text', '').lower())
+                or m.get('kind') == 'finding' or (m.get('kind') == 'board' and name.lower() in m.get('text', '').lower())
                 or name.lower() in str(m.get('state', {}).get('needs', '')).lower())]
         self.show(mine)
         rest = [m for m in items if m not in mine and m['from'] != name]
@@ -636,8 +637,20 @@ def cmd_roster(room, a):
 
 def cmd_post(room, a):
     text = '' if sys.stdin.isatty() else sys.stdin.buffer.read().decode('utf-8', errors='replace').strip()
-    if a.status and a.idle:
-        sys.exit('error: use --status or --idle, not both. Nothing was posted.')
+    if sum(map(bool, (a.status, a.idle, a.finding))) > 1:
+        sys.exit('error: use one of --status, --idle, --finding. Nothing was posted.')
+    if a.finding:                                     # a finding: something the others should know now, no alert, no percentage
+        if not text:
+            sys.exit('error: a finding needs a text. Nothing was posted.')
+        n = room.append(a.name, '💡 ' + text, 'finding')
+        return print(f'posted #{n} (a finding: everyone sees it at their next read, read --focus included; no ping)')
+    if a.reply:                                       # a reply: it names the message and tags its author, so they get the ping
+        to = next((m for m in room.messages() if m['n'] == a.reply), None)
+        if not to:
+            sys.exit(f'error: there is no message #{a.reply}. Nothing was posted.')
+        if to['from'] != a.name and not tags(text, to['from']):
+            text = f"@{to['from']} {text}"
+        text = f'↪ #{a.reply} ' + text
     kind = IDLE if a.idle else 'status' if a.status else None
     state = None
     if kind and text.startswith('{'):                # a structured status: the line everyone reads is written from it
@@ -900,6 +913,24 @@ def cmd_board(room, a):
     print(Board(room).show())
 
 
+def cmd_notebook(room, a):
+    """an agent's own notebook (ROOM/notes/NAME.md): what it must not forget when its context is compacted or it
+    resumes. notebook --as NAME prints it; notebook "text" --as NAME adds a dated line."""
+    if not a.name or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', a.name):
+        sys.exit('--as NAME required (letters, digits, - or _)')
+    path = room.dir / 'notes' / f'{a.name}.md'
+    text = ' '.join(a.pairs).strip()                 # the text to add comes as arguments: no stdin, so reading never waits
+    if text:
+        path.parent.mkdir(exist_ok=True)
+        with path.open('a', encoding='utf-8') as f:
+            f.write(f"- {time.strftime('%H:%M')} {text}\n")
+        lines = path.read_text(encoding='utf-8').splitlines()
+        if len(lines) > 200:                         # the newest 200 lines: a notebook, not a diary
+            path.write_text('\n'.join(lines[-200:]) + '\n', encoding='utf-8')
+        return print(f'noted in {path}')
+    print(path.read_text(encoding='utf-8') if path.exists() else '(your notebook is empty)')
+
+
 def failures(room, now=None):
     """the commonest ways a multi-agent chat goes wrong (MAST, 2025), seen in the room: [(key, text)]. A task closed
     without proof; one file in the statuses of two participants within 20 minutes; a tag not answered while the tagged
@@ -925,8 +956,8 @@ def failures(room, now=None):
         for k in people:
             if k == m['from'] or not tags(m['text'], k):
                 continue
-            after = [x for x in recent[i + 1:] if x['from'] == k]
-            answered = any(f"#{m['n']}" in x['text'] or tags(x['text'], m['from']) for x in after)
+            after = [x for x in recent[i + 1:] if x['from'] == k and not x.get('kind')]   # real messages: working statuses are not an answer, but not a dodge either
+            answered = any(f"#{m['n']}" in x['text'] or m['from'].lower() in x['text'].lower() for x in after)
             if len(after) >= 2 and not answered:
                 out.append((f"tag:{m['n']}:{k}", f"{k} has not answered #{m['n']} from {m['from']} and has posted {len(after)} times since"))
     for k in people:
@@ -1961,7 +1992,7 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -1998,6 +2029,8 @@ def main():
     p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
     p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
     p.add_argument('--note', help='task handoff: the decisions taken, the files touched, what was tried')
+    p.add_argument('--finding', action='store_true', help='post: a finding the others should know now (no ping, no percentage); read --focus always shows it')
+    p.add_argument('--reply', type=int, help='post: answer message #N; its author is tagged and gets the ping')
     p.add_argument('--focus', action='store_true', help='read: in full only what concerns you, the rest as a one-line digest per author')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--host', default='127.0.0.1')
@@ -2014,7 +2047,7 @@ def main():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
-                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check}
+                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

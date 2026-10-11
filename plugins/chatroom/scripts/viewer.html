@@ -129,6 +129,9 @@
   .card .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .card .chips code { background: var(--border); border-radius: 5px; padding: 0 5px; font-size: 11.5px; }
   .pill.board { font-size: 12.5px; }
+  .pill.finding { background: #fff3c4; color: #5d4500; font-size: 13px; }
+  .quote { border-left: 3px solid var(--accent); background: rgba(0,0,0,.05); border-radius: 6px; padding: 3px 8px; margin: 2px 0 5px;
+           font-size: 12.5px; color: var(--muted); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: none; place-items: center; z-index: 20;
               cursor: zoom-out; padding: 18px; }
   #lightbox.open { display: grid; }
@@ -380,6 +383,13 @@ function pics(m) {
   return `<div class="pics${list.length > 1 ? ' many' : ''}">` +
     list.map(src => `<img loading="lazy" src="${esc(src)}" alt="#${m.n}">`).join('') + '</div>';
 }
+/** a reply (post --reply N) shows the line it answers; a click jumps to it */
+function quoteOf(m) {
+  const r = String(m.text).match(/^↪ #(\d+) /); if (!r) return '';
+  const o = all.find(x => x.n === +r[1]);
+  return `<div class="quote" onclick="document.getElementById('m${+r[1]}')?.scrollIntoView({behavior: 'smooth', block: 'center'})">↪ #${+r[1]} `
+    + (o ? `<b>${esc(o.from)}</b>: ${esc(String(o.text).replace(/\s+/g, ' ').slice(0, 120))}` : '') + '</div>';
+}
 function card(m) {                          // a JSON status: the task, the bar, then each field that was given
   const p = profile(m.from), st = m.state, pct = Math.max(0, Math.min(100, +st.pct || 0));
   const row = (icon, html) => `<div class="f"><span>${icon}</span><span>${html}</span></div>`;
@@ -401,6 +411,12 @@ function build(m) {
   if (isStatus(m) && m.state && typeof m.state === 'object') {
     el = card(m);
     if (!$('optStatus').checked) el.classList.add('hidden');
+    lastFrom = null;
+  } else if (m.kind === 'finding') {                     // a finding everyone should know (post --finding)
+    const p = profile(m.from);
+    el = document.createElement('div');
+    el.className = 'pill finding';
+    el.innerHTML = `${esc(p.emoji)} <b style="color:${p.color}">${esc(m.from)}</b> · ${inline(m.text)} <span class="num">#${m.n} ${esc(m.time || '')}</span>`;
     lastFrom = null;
   } else if (m.kind === 'board') {                       // a change of the task board (chat.py task)
     const p = profile(m.from);
@@ -432,7 +448,7 @@ function build(m) {
                (m._room ? `<span class="roomtag">🏢 ${esc(m._room)}</span>` : '') +
                (p.role ? `<span class="role">${esc(p.role)}</span>` : '') + `</div>` : '') +
       (b ? `<div class="badge ${b.cls}">${esc(b.label)}</div><br>` : '') +
-      `<div class="text">${render(m.text)}</div>` + pics(m) +
+      quoteOf(m) + `<div class="text">${render(m.text.replace(/^↪ #\d+ /, ''))}</div>` + pics(m) +
       `<div class="meta"><span class="num">#${m.n}</span>${m.time}</div></div>`;
     lastFrom = m.from + (m._room || '');
   }
