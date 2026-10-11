@@ -76,7 +76,8 @@ IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
 STATUS_KINDS = ('status', 'stato', 'board')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
-STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str}
+STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str,
+              'done': str, 'evidence': list, 'risks': str}
 IDLE = 'idle'
 PERCENT = re.compile(r'\d[^\S\n]?%')
 # a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all
@@ -105,15 +106,16 @@ COMMANDS = {
                "lavoro lo fate voi.")},
     'resoconto': {
         'en': ('report', '📋', 'A short report from everyone',
-               '@all REPORT for the user. Each of you writes ONE short message (not a status): first line the outcome '
-               '(what you did, what you found); then the percentage of your part, written and verified; what is '
-               'missing; what blocks you or what you need from someone; your next action. Numbers and evidence '
-               '(files, #messages, pictures) instead of adjectives. Then go straight back to work.'),
+               '@all REPORT for the user. Each of you posts ONE JSON status (post --status, the text starts with {): '
+               '{"task": "T…", "pct": N, "done": "the outcome: what you did, what you found", "evidence": ["file:line, '
+               '#message, picture, measure"], "risks": "what is missing or fragile", "needs": "what you need from whom", '
+               '"next": "your next action"}. Numbers and evidence instead of adjectives. Then go straight back to work.'),
         'it': ('resoconto', '📋', 'Un resoconto breve da ognuno',
-               "@tutti RESOCONTO per il committente. Ognuno scriva UN solo messaggio breve (non uno status): prima "
-               "riga l'esito (cosa hai fatto, cosa hai trovato); poi la percentuale della tua parte, scritto e "
-               "verificato; cosa manca; cosa ti blocca o cosa ti serve da qualcuno; la prossima azione. Numeri e prove "
-               "(file, #messaggi, foto) al posto degli aggettivi. Poi tornate subito al lavoro.")},
+               "@tutti RESOCONTO per il committente. Ognuno pubblichi UNO status JSON (post --status, il testo inizia "
+               "con {): {\"task\": \"T…\", \"pct\": N, \"done\": \"l'esito: cosa hai fatto, cosa hai trovato\", "
+               "\"evidence\": [\"file:riga, #messaggio, foto, misura\"], \"risks\": \"cosa manca o e' fragile\", "
+               "\"needs\": \"cosa ti serve e da chi\", \"next\": \"la prossima azione\"}. Numeri e prove al posto degli "
+               "aggettivi. Poi tornate subito al lavoro.")},
     'menoparole': {
         'en': ('lesstalk', '🤫', 'A little less talk, a little more work',
                '@all A little less talk and a little more work (not drastically). Write when you have a result, a '
@@ -139,12 +141,14 @@ COMMANDS = {
     'prove': {
         'en': ('evidence', '🔍', 'Back every claim with evidence',
                '@all EVIDENCE. Every recent claim that still has no evidence gets it now: a picture with --image, a '
-               'measurement with numbers and load, or file:line. Whoever has visible work shows it in the chat. What '
-               'cannot be proven is written as "not verified", without rounding up.'),
+               'measurement with numbers and load, or file:line, in a JSON status ({"task": "T…", "pct": N, "evidence": '
+               '["…"]}); a task you closed gets its --proof (task done T… --proof). What cannot be proven is written as '
+               '"not verified", without rounding up.'),
         'it': ('prove', '🔍', 'Ogni affermazione con la sua prova',
                "@tutti PROVE. Ogni affermazione recente ancora senza prova la riceve adesso: una foto con --image, "
-               "una misura con numeri e carico, oppure file:riga. Chi ha lavoro visibile lo mostri in chat. Quello "
-               "che non si può provare si scrive \"non verificato\", senza arrotondare.")},
+               "una misura con numeri e carico, oppure file:riga, in uno status JSON ({\"task\": \"T…\", \"pct\": N, "
+               "\"evidence\": [\"…\"]}); un compito chiuso riceve la sua --proof (task done T… --proof). Quello che non "
+               "si può provare si scrive \"non verificato\", senza arrotondare.")},
     'pausa': {
         'en': ('pause', '⏸', 'Finish the step, save the state, go idle',
                '@all PAUSE. Finish the step in progress without leaving files half done. Then each of you writes '
@@ -703,7 +707,11 @@ def state_line(st):
     line = f"{st.get('task', '')}: {st.get('step', '')} ({st['pct']}%)".lstrip(': ')
     if st.get('files'):
         line += ' · ' + ', '.join(st['files'])
-    for key, label in (('blocked_by', 'blocked by'), ('next', 'next'), ('needs', 'needs')):
+    if st.get('done'):
+        line += f" · done: {st['done']}"
+    if st.get('evidence'):
+        line += ' · evidence: ' + '; '.join(st['evidence'])
+    for key, label in (('risks', 'risks'), ('blocked_by', 'blocked by'), ('next', 'next'), ('needs', 'needs')):
         if st.get(key):
             line += f' · {label}: {st[key]}'
     return line
@@ -722,7 +730,7 @@ class Board:
             d = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             d = {}
-        return {'facts': d.get('facts', []), 'tasks': d.get('tasks', [])}
+        return {'facts': d.get('facts', []), 'tasks': d.get('tasks', []), 'decisions': d.get('decisions', [])}
 
     def change(self, fn):
         """apply fn(board) under the room's lock and save; fn returns the line to post, or raises ValueError"""
@@ -799,6 +807,23 @@ class Board:
             return f"📋 {t['id']} note by {name}: {text[:140]}"
         return self.change(fn)
 
+    def handoff(self, name, tid, to, note=''):
+        """pass a task on with what the next one needs: the decisions taken, the files touched, what was tried"""
+        def fn(b):
+            t = self.find(b, tid)
+            if t['owner'] not in (None, name):
+                raise ValueError(f"{t['id']} belongs to {t['owner']}: only they hand it on")
+            t.update(owner=to, state='taken', ts=time.time())
+            t['notes'] = (t['notes'] + [f'handoff {name} -> {to}: {note[:300]}'])[-10:]
+            return f"📋 {t['id']} handed from {name} to @{to}: {t['title'][:90]}" + (f' · {note[:200]}' if note else '')
+        return self.change(fn)
+
+    def decide(self, name, text):
+        def fn(b):
+            b['decisions'] = (b['decisions'] + [{'text': text[:300], 'by': name, 'ts': time.time()}])[-50:]
+            return f'⚖️ decision by {name}: {text[:180]}'
+        return self.change(fn)
+
     def fact(self, name, text):
         def fn(b):
             b['facts'] = (b['facts'] + [{'text': text[:300], 'by': name}])[-30:]
@@ -808,6 +833,8 @@ class Board:
     def show(self):
         b = self.load()
         lines = (['FACTS:'] + [f"- {f['text']} ({f['by']})" for f in b['facts']]) if b['facts'] else []
+        if b['decisions']:
+            lines += ['DECISIONS (latest):'] + [f"- {d['text']} ({d['by']})" for d in b['decisions'][-6:]]
         order = {'taken': 0, 'open': 1, 'done': 2}
         lines.append('TASKS:' if b['tasks'] else 'TASKS: none yet (chat.py task add "title" --as NAME)')
         for t in sorted(b['tasks'], key=lambda t: (order.get(t['state'], 3), t['ts'])):
@@ -825,7 +852,7 @@ def cmd_task(room, a):
         sys.exit('--as NAME required')
     if not a.pairs:
         sys.exit('task: add "title" [--deps T1,T2] [--files a,b] | take ID [--force] | done ID [--proof TEXT] | drop ID '
-                 '| note ID TEXT | fact TEXT')
+                 '| note ID TEXT | handoff ID NAME [--note TEXT] | decide TEXT | fact TEXT')
     act, rest, b = a.pairs[0], a.pairs[1:], Board(room)
     split = lambda v: [x.strip() for x in (v or '').split(',') if x.strip()]
     if act == 'add' and rest:
@@ -840,6 +867,14 @@ def cmd_task(room, a):
         line = b.note(a.name, rest[0], ' '.join(rest[1:]))
     elif act == 'fact' and rest:
         line = b.fact(a.name, ' '.join(rest))
+    elif act == 'decide' and rest:
+        line = b.decide(a.name, ' '.join(rest))
+    elif act == 'handoff' and len(rest) > 1:
+        to = rest[1].lstrip('@').upper()
+        line = b.handoff(a.name, rest[0], to, a.note or '')
+        n = room.append(a.name, line)                 # a real message: it tags the new owner, who must be woken
+        print(f'posted #{n}')
+        return print_alert(room, a.name, n, line, [])
     else:
         sys.exit(f'task {act}: missing or unknown arguments (run chat.py task to see them)')
     n = room.append(a.name, line, 'board')
@@ -848,6 +883,47 @@ def cmd_task(room, a):
 
 def cmd_board(room, a):
     print(Board(room).show())
+
+
+def failures(room, now=None):
+    """the commonest ways a multi-agent chat goes wrong (MAST, 2025), seen in the room: [(key, text)]. A task closed
+    without proof; one file in the statuses of two participants within 20 minutes; a tag not answered while the tagged
+    one keeps posting; the same status three times in a row."""
+    now = now or time.time()
+    items, out, people = room.messages(), [], set(room.config().get('participants', []))
+    for t in Board(room).load()['tasks']:
+        if t['state'] == 'done' and not t.get('proof'):
+            out.append((f"noproof:{t['id']}", f"{t['id']} was closed by {t['owner']} without a proof (task done … --proof)"))
+    touched = {}
+    for m in items:
+        if m.get('state', {}).get('files') and now - m.get('ts', 0) < 1200:
+            for f in m['state']['files']:
+                touched.setdefault(f, {})[m['from']] = m['n']
+    for f, who in touched.items():
+        if len(who) > 1:
+            out.append((f"file:{f}:{','.join(sorted(who))}", f"{f} is in the statuses of {' and '.join(f'{k} (#{n})' for k, n in sorted(who.items()))}: "
+                        f"agree who changes it, or take it on the board"))
+    recent = items[-60:]
+    for i, m in enumerate(recent):
+        if m.get('kind') or now - m.get('ts', now) < 180:
+            continue
+        for k in people:
+            if k == m['from'] or not tags(m['text'], k):
+                continue
+            after = [x for x in recent[i + 1:] if x['from'] == k]
+            answered = any(f"#{m['n']}" in x['text'] or tags(x['text'], m['from']) for x in after)
+            if len(after) >= 2 and not answered:
+                out.append((f"tag:{m['n']}:{k}", f"{k} has not answered #{m['n']} from {m['from']} and has posted {len(after)} times since"))
+    for k in people:
+        own = [x for x in items if x['from'] == k and x.get('kind') in ('status', 'stato')][-3:]
+        if len(own) == 3 and len({x['text'].strip() for x in own}) == 1:
+            out.append((f"loop:{k}:{own[-1]['n']}", f"{k} posted the same status three times (#{own[0]['n']}, #{own[1]['n']}, #{own[2]['n']}): stuck?"))
+    return out
+
+
+def cmd_check(room, a):
+    found = failures(room)
+    print('\n'.join(f'CHECK {t}' for _, t in found) if found else 'CHECK nothing wrong seen')
 
 
 def common_room(room):
@@ -1101,7 +1177,7 @@ def watch_line(m, users):
 def cmd_alerts(room, a):
     """the lead's relay: print a ping line for each new message of the user (--follow keeps watching);
     with --messages also one WATCH line per real message, so the lead follows the room without reading it all"""
-    name = '_alerts'
+    name, checked, seen_checks = '_alerts', 0, set()
     while True:
         items = room.messages()
         new = [m for m in items if m['n'] > room.cursor(name)]
@@ -1116,6 +1192,12 @@ def cmd_alerts(room, a):
             room.set_cursor(name, new[-1]['n'])
         for line in lend_lines(room):
             print(line, flush=True)
+        if a.messages and time.time() - checked > 60:   # the lead also hears about what is going wrong, once each
+            checked = time.time()
+            for key, text in failures(room):
+                if key not in seen_checks:
+                    seen_checks.add(key)
+                    print(f'CHECK {text}', flush=True)
         if not a.follow:
             return
         time.sleep(1)
@@ -1852,7 +1934,7 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -1888,6 +1970,7 @@ def main():
     p.add_argument('--files', help='task add: the files it changes, comma separated; two taken tasks cannot share one')
     p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
     p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
+    p.add_argument('--note', help='task handoff: the decisions taken, the files touched, what was tried')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--host', default='127.0.0.1')
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
@@ -1903,7 +1986,7 @@ def main():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
-                    'task': cmd_task, 'board': cmd_board}
+                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

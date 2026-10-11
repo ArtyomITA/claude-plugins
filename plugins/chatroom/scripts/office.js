@@ -271,7 +271,7 @@ function drawSky(hour) {
 
 // boards on the walls: TV with the live chat, whiteboard (kanban), clock, coffee sign, the boss's nameplate
 const placeBoard = (b, key) => { const s = LAYOUT.boards[key]; add(b.mesh, s.x, s.y, s.z, s.rot || 0); return b; };
-const tv = placeBoard(board(2.2, 1.25, 512), 'tv'), wb = placeBoard(board(2.6, 1.4, 512), 'whiteboard');
+const tv = placeBoard(board(2.2, 1.25, 512), 'tv'), wb = placeBoard(board(2.6, 1.4, 768), 'whiteboard');
 for (const [b, w, h, col] of [[tv, 2.36, 1.4, '#16181f'], [wb, 2.76, 1.56, '#cfd3da']]) {
   const f = V.mesh(new V.Vox().box(0, 0, 0, Math.round(w * 10) - 1, Math.round(h * 10) - 1, 0, col), {pivot: [w * 5, h * 5, 1]});
   f.position.copy(b.mesh.position); f.rotation.y = b.mesh.rotation.y; f.translateZ(-0.02); scene.add(f);
@@ -1060,13 +1060,14 @@ function drawScoreboard() {
 }
 // the task board (chat.py task / board.json), read every 3 s; the whiteboard shows it when it has tasks
 let boardData = null, boardSig = '';
-if (!VISIT) setInterval(async () => {
+async function pollBoard() {
   try {
     const r = await fetch('board.json', {cache: 'no-store'}); if (!r.ok) return;
     const text = await r.text(); if (text === boardSig) return;
     boardSig = text; boardData = JSON.parse(text); if (DATA.loaded) drawBoards();
   } catch (e) {}
-}, 3000);
+}
+if (!VISIT) { pollBoard(); setInterval(pollBoard, 3000); }
 function drawBoards() {
   const c = DATA.config, L = ui.t();
   drawScoreboard();
@@ -1083,21 +1084,25 @@ function drawBoards() {
     tv.tex.needsUpdate = true;
   }
   if (boardData?.tasks?.length) {                     // the room's task board (chat.py task): to do, in progress, done, and the last fact
-    const {g, canvas: k} = wb; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);
+    const {g, canvas: k} = wb, f = k.lw / 512; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);
     const cols = [[`📝 ${L.bTodo}`, '#f5b400', 'open'], [`⚙️ ${L.bDoing}`, '#1e88e5', 'taken'], [`✅ ${L.bDone}`, '#43a047', 'done']], w = k.lw / 3;
+    const fact = boardData.facts?.[boardData.facts.length - 1], foot = fact ? 26 * f : 6 * f;
+    const head = 34 * f, cardH = 52 * f, gap = 6 * f, fit = Math.max(1, Math.floor((k.lh - head - 10 * f - foot) / (cardH + gap)));
     cols.forEach(([title, color, st], i) => {
-      g.fillStyle = color; g.fillRect(i * w + 5, 6, w - 10, 28); g.fillStyle = '#fff'; g.font = '700 15px sans-serif'; g.fillText(title, i * w + 11, 26);
-      let y = 42;
-      for (const t of boardData.tasks.filter(t => t.state === st).slice(st === 'done' ? -5 : 0, st === 'done' ? undefined : 5)) {
+      g.fillStyle = color; g.fillRect(i * w + 5 * f, 6 * f, w - 10 * f, 28 * f); g.fillStyle = '#fff'; g.font = `700 ${17 * f}px sans-serif`; g.fillText(title, i * w + 11 * f, 26 * f);
+      const list = boardData.tasks.filter(t => t.state === st), shown = st === 'done' ? list.slice(-fit) : list.slice(0, fit);
+      let y = head + 8 * f;
+      if (!list.length) { g.fillStyle = '#90a4ae'; g.font = `italic ${14 * f}px sans-serif`; g.fillText(L.bNone, i * w + 12 * f, y + 18 * f); }
+      for (const t of shown) {
         const who = t.owner || t.by;
-        g.fillStyle = (who ? DATA.profile(who).color : '#90a4ae') + '30'; g.fillRect(i * w + 7, y, w - 14, 46);
-        g.fillStyle = '#222'; g.font = '700 12px sans-serif'; g.fillText(`${t.id}${t.owner ? ' · ' + t.owner : ''}`, i * w + 12, y + 14);
-        g.font = '12px sans-serif'; wrapText(g, t.title, i * w + 12, y + 29, w - 24, 13, 2);
-        y += 51;
+        g.fillStyle = (who ? DATA.profile(who).color : '#90a4ae') + '30'; g.fillRect(i * w + 7 * f, y, w - 14 * f, cardH);
+        g.fillStyle = '#222'; g.font = `700 ${14 * f}px sans-serif`; g.fillText(`${t.id}${t.owner ? ' · ' + t.owner : ''}`, i * w + 12 * f, y + 16 * f);
+        g.font = `${14 * f}px sans-serif`; wrapText(g, t.title, i * w + 12 * f, y + 33 * f, w - 24 * f, 15 * f, 2);
+        y += cardH + gap;
       }
+      if (list.length > shown.length) { g.fillStyle = '#607d8b'; g.font = `700 ${13 * f}px sans-serif`; g.fillText(`+${list.length - shown.length}`, i * w + w - 40 * f, head - 2 * f); }
     });
-    const fact = boardData.facts?.[boardData.facts.length - 1];
-    if (fact) { g.fillStyle = '#37474f'; g.font = 'italic 13px sans-serif'; wrapText(g, `📌 ${fact.text}`, 10, k.lh - 22, k.lw - 20, 14, 1); }
+    if (fact) { g.fillStyle = '#e8e6df'; g.fillRect(0, k.lh - foot, k.lw, foot); g.fillStyle = '#37474f'; g.font = `italic ${14 * f}px sans-serif`; wrapText(g, `📌 ${fact.text}`, 10 * f, k.lh - 8 * f, k.lw - 20 * f, 15 * f, 1); }
     wb.tex.needsUpdate = true;
   } else {
     const {g, canvas: k} = wb; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);

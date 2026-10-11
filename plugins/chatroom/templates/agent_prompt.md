@@ -24,6 +24,7 @@ your message
   the PERCENTAGE of your part that is done, as a number followed by % (for example "60%" or "written 70% / verified 50%"):
   a status without it is refused, and nothing is posted.
 - a status can also be JSON (same --status, the text starts with {): {"task": "T3", "step": "what you do now", "pct": 60,
+  (for a report or evidence also "done", "evidence": [...], "risks"),
   "files": ["a.py"], "blocked_by": "...", "next": "...", "needs": "what you need and from whom"}; only pct is required. Prefer it:
   everyone, the board and the viewer read it at a glance, and it costs fewer words than prose.
 - THE TASK BOARD (shared plan; use it instead of announcing plans in prose):
@@ -33,6 +34,9 @@ your message
                                                                        taken task changes the same files, or its deps are open)
     python "{{CHAT}}" task done T3 --proof "what shows it works" --as {{NAME}} --room "{{ROOM}}"
     python "{{CHAT}}" task note T3 "text" --as {{NAME}} --room "{{ROOM}}"  |  task drop T3  |  task fact "a fact everyone must know"
+    python "{{CHAT}}" task handoff T3 NAME --note "decisions taken, files touched, what you tried" --as {{NAME}} --room "{{ROOM}}"
+                                                                       (pass a task on with its context: it tags NAME, send the ping)
+    python "{{CHAT}}" task decide "the decision and why" --as {{NAME}} --room "{{ROOM}}"   (the decision log everyone reads)
   Every change also appears in the chat as a [BOARD] line (no alert). Read the board when you join and before taking work.
 - go IDLE (rule 9): add --idle instead of --status, once, after reading the new messages.
 - attach PICTURES (photos, previews, screenshots, crops): add --image PATH to the post command, once per picture, always with a
