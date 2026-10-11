@@ -948,7 +948,7 @@ def clean_pb(p):
 
 
 def clean_pos(d):
-    """where a figure is: a point of the floor plan, its height (a seat), a heading, a pose, and whose office it is in
+    """where a figure is: a point of the floor plan, its height (a seat, a jump, or the floor of the arena, 4 m up), a heading, a pose, and whose office it is in
     ('home', or 'visit:NAME' while visiting NAME); anything else is dropped"""
     if not isinstance(d, dict):
         return None
@@ -959,7 +959,7 @@ def clean_pos(d):
     where = str(d.get('where') or 'home')
     if where != 'home' and not re.fullmatch(r'visit:[A-Za-z0-9_-]{1,24}', where):
         return None
-    return {'x': round(x, 2), 'y': round(min(2.0, max(-0.5, y)), 2), 'z': round(z, 2), 'rot': round(rot, 3),
+    return {'x': round(x, 2), 'y': round(min(8.0, max(-0.5, y)), 2), 'z': round(z, 2), 'rot': round(rot, 3),
             'pose': d.get('pose') if d.get('pose') in ('walk', 'stand', 'sit', 'sofa') else 'stand', 'where': where,
             'look': clean_avatar(d.get('look')), 'jump': int(max(0, min(1e9, float(d.get('jump') or 0)))), 'pb': clean_pb(d.get('pb'))}
 
@@ -1365,6 +1365,7 @@ def _prova():
                 continue
             raise AssertionError(f'a bad pool shot got in: {bad}')
         assert clean_rt({'k': 'q', 'g': 'ab12', 'c': 123456789.4})['c'] == 123456789                                  # a ping carries the page's clock: more than 5000 ms
+        assert clean_pos({'x': 1, 'y': 4.9, 'z': 2, 'where': 'home'})['y'] == 4.9 and clean_pos({'x': 1, 'y': 900, 'z': 2, 'where': 'home'})['y'] == 8.0      # the arena is 4 m up
         pk = clean_rt({'k': 'n', 'g': 'ab12', 't': 123456, 'a': 123400, 'd': '123450:16,123455:0'})                   # a lockstep packet goes through whole
         assert pk['t'] == 123456 and pk['d'] == '123450:16,123455:0' and clean_rt({'k': 'z', 'g': 'ab12', 'f': 119, 'h': 4000000000})['h'] == 4000000000
         for bad in ({'k': 'n', 'g': 'ab12', 't': -1}, {'k': 'n', 'g': 'ab12', 't': 5, 'd': 'drop table'}, {'k': 'n', 'g': 'ab12', 't': 2 ** 40}):

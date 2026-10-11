@@ -58,6 +58,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from github_data import GitHub
 
 HERE = Path(__file__).resolve().parent
 TV_DIR = Path.home() / '.claude' / 'chatroom' / 'tv'                    # the lounge TV: <channel>/*.mp4|webm, youtube.json
@@ -1710,6 +1711,8 @@ def cmd_serve(room, a):
                 if out is None:
                     return self.send(503, why, 'text/plain')
                 return self.send(200, json.dumps({'results': out}, ensure_ascii=False), 'application/json; charset=utf-8')
+            if path == '/github.json':                # the GitHub window: pull requests, CI runs, commits, issues of the project (local only: it never goes through the relay)
+                return self.send(200, json.dumps(github.get() if github else {'enabled': False}, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/tv.json':                    # the lounge TV's channels
                 return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')
             m = re.fullmatch(r'/tv/audio/([A-Za-z0-9_-]{11})', path)
@@ -2111,6 +2114,8 @@ def cmd_serve(room, a):
                 return self.send(200, json.dumps(config, ensure_ascii=False), 'application/json; charset=utf-8')
             self.send(404, 'not found', 'text/plain')
 
+    repo = Path(a.repo or str(room.config().get('repo') or '')).expanduser()
+    github = GitHub(str(repo)) if (a.repo or room.config().get('repo')) and repo.is_dir() else None
     server = ThreadingHTTPServer((a.host, a.port), Handler)
     unregister = register_room(room, a.port, a.host)
 
@@ -2173,6 +2178,7 @@ def main():
     p.add_argument('--reply', type=int, help='post: answer message #N; its author is tagged and gets the ping')
     p.add_argument('--focus', action='store_true', help='read: in full only what concerns you, the rest as a one-line digest per author')
     p.add_argument('--port', type=int, default=8765)
+    p.add_argument('--repo', default='', help='serve: the project folder the GitHub window on the office wall reads (gh and git run there); or "repo" in the room config')
     p.add_argument('--host', default='127.0.0.1')
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
     if a.command == 'rooms':

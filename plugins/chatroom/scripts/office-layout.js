@@ -127,7 +127,7 @@ export const DEFAULT_LAYOUT = {
     {type: 'confTable', x: 1, z: -6.6},
     ...[0, 1, 2].map(x => ({type: 'meetChair', x, z: -5.55, rot: 0})),
     {type: 'meetChair', x: -0.75, z: -6.6, rot: -PI / 2}, {type: 'meetChair', x: 2.75, z: -6.6, rot: PI / 2},
-    {type: 'plantTall', x: 1, z: -9.45},
+    {type: 'plantTall', x: 4.9, z: -9.45},
     // phone booths
     {type: 'smallDesk', x: 14.5, z: -2.8, rot: PI / 2}, {type: 'barStool', x: 13.95, z: -2.8, rot: PI / 2, tag: 'booth'},
     {type: 'smallDesk', x: 14.5, z: -0.3, rot: PI / 2}, {type: 'barStool', x: 13.95, z: -0.3, rot: PI / 2, tag: 'booth'},
@@ -187,7 +187,7 @@ export const DEFAULT_LAYOUT = {
     tv: {x: 3.5, y: 1.7, z: -9.85, rot: 0}, whiteboard: {x: -1.5, y: 1.6, z: -9.85, rot: 0},
     clock: {x: 9.75, y: 2.35, z: -9.85, rot: 0}, coffeeSign: {x: -14.85, y: 2.6, z: 5.8, rot: PI / 2},
     nameplate: {x: 12, y: 0.95, z: -7.21, rot: 0}, commonSign: {x: 4, y: 2.65, z: 4.97, rot: PI},
-    scoreboard: {x: -9.9, y: 1.75, z: -9.85, rot: 0},
+    scoreboard: {x: -9.9, y: 1.75, z: -9.85, rot: 0}, github: {x: 1.1, y: 1.6, z: -9.85, rot: 0},
   },
   // blocks of four cubicles (two open toward +z, two toward -z), all furnished; agents take the free desks in order
   // what the room under the mouse (or around you in first person) is called; the first match wins

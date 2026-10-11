@@ -147,7 +147,7 @@ const SFX = {
   bite: () => blip({f0: 200, f1: 80, type: 'sawtooth', dur: 0.12, gain: 0.18, nz: 0.6, nzF: 800}),
 };
 
-export function createPaintball({THREE, scene, camera, canvas, root, pov, me, players, sink, lang = () => 'it', say = () => {}, body = () => null, floor = null, size = [30, 20], enterPov = () => {}, renderer = null, atmosphere = {}, aim = () => true, report = () => {}}) {
+export function createPaintball({THREE, scene, camera, canvas, root, pov, me, players, sink, lang = () => 'it', say = () => {}, body = () => null, floor = null, size = [30, 20], enterPov = () => {}, renderer = null, atmosphere = {}, aim = () => true, report = () => {}, level = () => 0, onMode = () => {}, respawn = () => {}}) {
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   const hud = document.createElement('div'); hud.className = 'o-pnt'; hud.style.display = 'none';
   hud.innerHTML = `<div class="o-pnt-vig"></div><div class="o-pnt-flash"></div><div class="o-pnt-scope"><i></i></div><div class="o-pnt-cross"><i></i><i></i><i></i><i></i></div><div class="o-pnt-others"></div><div class="o-pnt-z"></div><div class="o-pnt-boss"><b></b><div class="o-pnt-bbar"><i></i></div></div>
@@ -164,6 +164,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
   const ask = document.createElement('div'); ask.className = 'o-pnt-ask'; ask.style.display = 'none'; ask.innerHTML = '<div class="o-pnt-ask-t"></div><div><button data-a="join"></button><button data-a="watch"></button></div>'; root.appendChild(ask);
   const wbadge = hud.querySelector('.o-pnt-wbadge');
   const T = () => TEXT[lang()] || TEXT.it;
+  const safeAbove = () => (level() ? 1.25 : ZOMBIES.safeAbove);                           // on the arena the platforms are 1 m high: the bite reaches up to there (the goo and the shockwave still find you)
 
   // scratch objects: nothing is allocated per frame
   const V3 = THREE.Vector3, M4 = THREE.Matrix4, Q = THREE.Quaternion, E = THREE.Euler, Col = THREE.Color;
@@ -264,7 +265,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
   }
   /** the boss's slam: a ring of dust running over the floor */
   function shockwave(point, radius) {
-    for (let k = 0; k < 30; k++) { const a = k / 30 * 6.283; spawn(bits, point.x, 0.08, point.z, Math.cos(a) * radius * 2, 0.15, Math.sin(a) * radius * 2, 0.5, 0.1, SHOCK, 0, 0, 0); }
+    for (let k = 0; k < 30; k++) { const a = k / 30 * 6.283; spawn(bits, point.x, point.y + 0.03, point.z, Math.cos(a) * radius * 2, 0.15, Math.sin(a) * radius * 2, 0.5, 0.1, SHOCK, 0, 0, 0); }
     for (let k = 0; k < 10; k++) { const a = rnd() * 6.283, d = rnd() * radius * 0.8; spawn(smoke, point.x + Math.cos(a) * d, 0.15, point.z + Math.sin(a) * d, 0, 0.6 + rnd() * 0.6, 0, 0.7, 0.25, '#b9a58a', 0, 0, 3);
     }
     SFX.boom(panOf(point), 1 / (1 + distTo(point) * 0.06));
@@ -309,8 +310,8 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     if (b.src !== 'zombie' && owner && zOn) aoeZombies(b.hp, b.area, b.ad);
     if (on && alive && !b.mine) {
       const m3 = body(); if (!m3) return; const dx = m3.x - b.hp.x, dz = m3.z - b.hp.z;
-      if (b.ground) { const d = Math.hypot(dx, dz); if (d <= b.area && (m3.y || 0) < ZOMBIES.safeAbove) hurt(Math.round(b.ad * (1 - 0.4 * d / b.area)), '🧟'); }
-      else { const d = Math.hypot(dx, m3.y + 1.0 - b.hp.y, dz); if (d <= b.area) hurt(Math.round(b.ad * (1 - 0.6 * d / b.area)), b.src === 'zombie' ? '🧟' : (b.friend || '🔫')); }
+      if (b.ground) { const d = Math.hypot(dx, dz); if (d <= b.area && (m3.y || 0) < safeAbove()) hurt(Math.round(b.ad * (1 - 0.4 * d / b.area)), '🧟'); }
+      else { const d = Math.hypot(dx, m3.y + level() + 1.0 - b.hp.y, dz); if (d <= b.area) hurt(Math.round(b.ad * (1 - 0.6 * d / b.area)), b.src === 'zombie' ? '🧟' : (b.friend || '🔫')); }
     }
   }
   function stepBalls(dt) {
@@ -387,7 +388,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     // the root: place, turn, and a fall onto the back when dead (it slides a little, then sinks and shrinks)
     _eu.set(-k * 1.45, z.yaw, 0, 'YXZ'); _q.setFromEuler(_eu);
     const dis = dead ? clamp((now - z.deadAt - 1.6) / 1.2, 0, 1) : 0, g = z.scale * (1 - dis * 0.9);
-    _mR.compose(_a.set(z.x, -dis * 0.35 + (dead ? 0.18 * k * sc[1] : 0), z.z), _q, _s.set(g * sc[0], g * sc[1], g * sc[2]));
+    _mR.compose(_a.set(z.x, level() - dis * 0.35 + (dead ? 0.18 * k * sc[1] : 0), z.z), _q, _s.set(g * sc[0], g * sc[1], g * sc[2]));
     // an attack in progress: the wind-up (0..1) and the strike that follows
     const wd = windOf(T0), at = z.atkT, wp = at >= 0 ? clamp(at / wd, 0, 1) : 0, st = at > wd ? clamp((at - wd) / 0.25, 0, 1) : 0;
     // the body sways: lean forward, roll with the steps, a hit throws it back
@@ -456,7 +457,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     const z = zombieAt(id); if (!z || z.state === 'dead') return;
     z.flash = 1; z.stagger = 0.25;
     const o = (z.nStains++ % 6) * 4, dx = point.x - z.x, dz = point.z - z.z, c = Math.cos(z.yaw), sn = Math.sin(z.yaw), lz = dx * sn + dz * c;
-    z.st[o] = clamp((dx * c - dz * sn) / z.sc[0], -0.25, 0.25); z.st[o + 1] = clamp(point.y / z.sc[1] - 0.88, 0.05, 0.62); z.st[o + 2] = lz < 0 ? -1 : 1; z.st[o + 3] = ci;
+    z.st[o] = clamp((dx * c - dz * sn) / z.sc[0], -0.25, 0.25); z.st[o + 1] = clamp((point.y - level()) / z.sc[1] - 0.88, 0.05, 0.62); z.st[o + 2] = lz < 0 ? -1 : 1; z.st[o + 3] = ci;
     paintBurst(point, _n.set(point.x - z.x, 0.3, point.z - z.z).normalize(), COLORS[ci], 4, 1.8);
     SFX.zhit(panOf(point), 1 / (1 + distTo(point) * 0.08));
     if (owner) {
@@ -469,7 +470,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     const now = performance.now() / 1000;
     for (const z of zs) {
       if (z.state === 'dead') continue;
-      const dx = z.x - p.x, dz = z.z - p.z, d = Math.hypot(dx, 0.9 * z.sc[1] - p.y, dz), reach = radius + 0.45 * z.sc[0];
+      const dx = z.x - p.x, dz = z.z - p.z, d = Math.hypot(dx, 0.9 * z.sc[1] + level() - p.y, dz), reach = radius + 0.45 * z.sc[0];
       if (d > reach) continue;
       z.flash = 1; z.stagger = 0.4; z.hp -= dmg * (1 - 0.6 * clamp(d / reach, 0, 1)); const dd = Math.hypot(dx, dz) || 1; z.vx += dx / dd * 3.5; z.vz += dz / dd * 3.5;
       if (z.hp <= 0) killZombie(z, now);
@@ -477,19 +478,19 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
   }
   function killZombie(z, now) {
     z.state = 'dead'; z.deadAt = now; z.atkT = -1; kills++; nextWaveAt = now + ZOMBIES.pause; SFX.zdie(panOf(_a.set(z.x, 1, z.z)), 1 / (1 + distTo(_a) * 0.08));
-    _b.set(z.x, 1.0 * z.sc[1], z.z); paintBurst(_b, UP, z.type === 3 ? TOXIC : '#7ea06a', 8, 2.6);
+    _b.set(z.x, 1.0 * z.sc[1] + level(), z.z); paintBurst(_b, UP, z.type === 3 ? TOXIC : '#7ea06a', 8, 2.6);
   }
   /** the targets of the zombies: me if I am up, and the friends who play the zombie mode and are up */
   const tgs = []; let tgN = 0;
   function targets(me3) {
     tgN = 0; const add = (x, y, z0, name) => { const t = tgs[tgN] || (tgs[tgN] = {x: 0, y: 0, z: 0, name: null}); t.x = x; t.y = y; t.z = z0; t.name = name; tgN++; };
     if (alive && me3) add(me3.x, me3.y || 0, me3.z, null);
-    if (others.size) { const roots = players(); for (const [n, o] of others) { const r = o.z && o.hp > 0 && roots.get(n); if (r) { r.getWorldPosition(_a); add(_a.x, _a.y, _a.z, n); } } }
+    if (others.size) { const roots = players(); for (const [n, o] of others) { const r = o.z && o.hp > 0 && roots.get(n); if (r) { r.getWorldPosition(_a); add(_a.x, _a.y - level(), _a.z, n); } } }
   }
   /** the spitter's goo: a ball that flies to where the target stands (or to the wall in between), bursts and hurts whoever is near */
   function spitAt(z, tg) {
     const S = ZT.spitter.spit;
-    _b.set(z.x + Math.sin(z.yaw) * 0.3, 1.45 * z.sc[1], z.z + Math.cos(z.yaw) * 0.3); _a.set(tg.x, tg.y + 1.1, tg.z); _d.copy(_a).sub(_b); const dist = _d.length(); _d.normalize();
+    _b.set(z.x + Math.sin(z.yaw) * 0.3, 1.45 * z.sc[1] + level(), z.z + Math.cos(z.yaw) * 0.3); _a.set(tg.x, tg.y + 1.1 + level(), tg.z); _d.copy(_a).sub(_b); const dist = _d.length(); _d.normalize();
     ray.set(_b, _d); ray.near = 0.2; ray.far = dist;
     const hit = ray.intersectObjects(scene.children, true).find(h => { for (let o = h.object; o; o = o.parent) if (o.userData.noShot || !o.visible) return false; return !h.object.isSprite && !h.object.isLine && !h.object.isPoints && !h.object.userData.person; });
     let n = null;
@@ -500,9 +501,9 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
   }
   /** the boss's blow: a shockwave on the floor around it; a jump over it is safe */
   function slamAt(z) {
-    const S = ZT.boss.slam; _a.set(z.x, 0.05, z.z);
+    const S = ZT.boss.slam; _a.set(z.x, 0.05 + level(), z.z);
     launch(_a, _a, 0, 999, 4, UP, {size: 0, area: S.radius, ad: S.dmg, src: 'zombie', ground: true});
-    out.push({id: ++shotId, o: [r2(z.x), 0.05, r2(z.z)], p: [r2(z.x), 0.05, r2(z.z)], n: [0, 1, 0], h: null, d: 0, c: 0, w: 8}); publish();
+    out.push({id: ++shotId, o: [r2(z.x), r2(0.05 + level()), r2(z.z)], p: [r2(z.x), r2(0.05 + level()), r2(z.z)], n: [0, 1, 0], h: null, d: 0, c: 0, w: 8}); publish();
   }
   function stepZombies(dt, now) {
     if (!zOn) return;
@@ -558,12 +559,12 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
           const sp = Math.hypot(z.vx, z.vz);
           if (sp > 0.05 && !hold) z.yaw = shortAng(z.yaw, Math.atan2(z.vx, z.vz), 1 - Math.exp(-8 * dt)); else if (tg) z.yaw = shortAng(z.yaw, Math.atan2(tg.x - z.x, tg.z - z.z), 1 - Math.exp(-6 * dt));
           z.phase += sp * dt * 5.5;
-          if (tg && z.atkT < 0 && dist <= T0.reach + 0.25 && tg.y < ZOMBIES.safeAbove && now - z.bite > T0.biteEvery && now - z.born > 0.8) {
+          if (tg && z.atkT < 0 && dist <= T0.reach + 0.25 && tg.y < safeAbove() && now - z.bite > T0.biteEvery && now - z.born > 0.8) {
             z.bite = now; SFX.bite();
             if (tg.name === null) hurt(T0.bite, '🧟');
             else { out.push({id: ++shotId, o: [r2(z.x), 1, r2(z.z)], p: [r2(z.x), 1, r2(z.z)], n: null, h: tg.name, d: T0.bite, c: 0, w: 9}); publish(); }
           }
-          if (now - lastGroan > 1.8 + rnd() * 2 && dist < 14 && rnd() < dt * 0.6) { lastGroan = now; SFX.groan(panOf(_a.set(z.x, 1.2, z.z)), 1 / (1 + dist * 0.12), z.type); }
+          if (now - lastGroan > 1.8 + rnd() * 2 && dist < 14 && rnd() < dt * 0.6) { lastGroan = now; SFX.groan(panOf(_a.set(z.x, 1.2 + level(), z.z)), 1 / (1 + dist * 0.12), z.type); }
         } else {                                                                           // a follower: glide to where the owner says it is
           const k = 1 - Math.exp(-9 * dt), ox = z.x, oz = z.z; z.x += (z.tx - z.x) * k; z.z += (z.tz - z.z) * k; z.vx = (z.x - ox) / Math.max(dt, 1e-3); z.vz = (z.z - oz) / Math.max(dt, 1e-3);
           const sp = Math.hypot(z.vx, z.vz); if (sp > 0.05) z.yaw = shortAng(z.yaw, z.tyaw, 1 - Math.exp(-8 * dt)); z.phase += sp * dt * 5.5;
@@ -587,7 +588,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
       if (z.state === 'dead') continue;
       const s = z.scale, sy = z.sc[1] * s, sr = Math.max(z.sc[0], z.sc[2]) * s;
       for (let k = 0; k < 4; k++) {
-        const cy = (k === 0 ? 1.62 : k === 1 ? 1.28 : k === 2 ? 0.9 : 0.4) * sy, r = (k === 0 ? 0.2 : k === 1 ? 0.3 : k === 2 ? 0.32 : 0.28) * sr;
+        const cy = (k === 0 ? 1.62 : k === 1 ? 1.28 : k === 2 ? 0.9 : 0.4) * sy + level(), r = (k === 0 ? 0.2 : k === 1 ? 0.3 : k === 2 ? 0.32 : 0.28) * sr;
         _a.set(z.x - origin.x, cy - origin.y, z.z - origin.z); const tca = _a.dot(dir); if (tca < 0) continue;
         const d2 = _a.lengthSq() - tca * tca; if (d2 > r * r) continue;
         const t = tca - Math.sqrt(r * r - d2); if (t < bt && t > 0.2) { bt = t; best = {z, t, head: k === 0}; }
@@ -872,14 +873,14 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
       if (next === on) return on;
       on = next; others.clear();
       if (on) {
-        hp = RULES.hp; alive = true; weapon = 0; out = []; WEAPONS.forEach((w, i) => { ammo[i] = w.mag; }); reloadUntil = 0; hud.style.display = ''; el.msg.textContent = ''; enterPov(); ac();
+        hp = RULES.hp; alive = true; weapon = 0; out = []; WEAPONS.forEach((w, i) => { ammo[i] = w.mag; }); reloadUntil = 0; hud.style.display = ''; el.msg.textContent = ''; enterPov(); ac(); onMode(true);
         zoomWant = false; zoomK = 0; spinUp = 0; spinA = spinT = 0; holding = false; kick = slideK = 0; pumpP = 1; lastX = null;
         for (const sp of splashes) sp.mesh.visible = true; balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = true; guns.forEach((g, i) => { g.g.visible = i === weapon; });
         guns[weapon].g.add(muzzle); { const t = guns[weapon].def.tip; muzzle.position.set(t[0] / 100, t[1] / 100, t[2] / 100); }
         precompile();
         say(T().on);
       } else {
-        reportRun(); reportPaint(); hud.style.display = 'none'; clearPaint(); clearBits(); balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = false; guns.forEach(g => { g.g.visible = false; }); muzzle.visible = false; holding = false; zoomWant = false; zoomK = 0;
+        reportRun(); reportPaint(); onMode(false); hud.style.display = 'none'; clearPaint(); clearBits(); balls.visible = trails.visible = bitsMesh.visible = smokeMesh.visible = false; guns.forEach(g => { g.g.visible = false; }); muzzle.visible = false; holding = false; zoomWant = false; zoomK = 0;
         if (zOn) { zOn = false; clearZombies(); el.z.style.display = 'none'; moodOff(); }
         for (const b of bolts) b.live = false; balls.count = trails.count = 0;
         el.flash.classList.remove('o-on'); el.vig.classList.remove('o-on', 'o-near'); el.msg.textContent = ''; el.cross.className = 'o-pnt-cross'; el.scope.style.display = 'none';
@@ -913,7 +914,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
       if (hitT && now > hitT + 0.15) { hitT = 0; el.cross.classList.remove('o-hit'); }
       if (!alive) {
         const left = Math.ceil(respawnAt - now);
-        if (left <= 0) { hp = RULES.hp; alive = true; WEAPONS.forEach((w, i) => { ammo[i] = w.mag; }); el.msg.textContent = ''; if (zOn && owner && !friendAlive()) restartZombies(now); drawHud(); publish(); } else if (!zOn || friendAlive()) el.msg.textContent = T().out(left);
+        if (left <= 0) { hp = RULES.hp; alive = true; WEAPONS.forEach((w, i) => { ammo[i] = w.mag; }); el.msg.textContent = ''; if (zOn && owner && !friendAlive()) restartZombies(now); respawn(); drawHud(); publish(); } else if (!zOn || friendAlive()) el.msg.textContent = T().out(left);
       }
       if (on) {
         // a button held down: an automatic weapon keeps firing; the minigun spins up while it is held and winds down after
