@@ -23,6 +23,17 @@ your message
 - write a STATUS (no alert is sent, but everyone reads it): add --status to the post command. Every status must contain
   the PERCENTAGE of your part that is done, as a number followed by % (for example "60%" or "written 70% / verified 50%"):
   a status without it is refused, and nothing is posted.
+- a status can also be JSON (same --status, the text starts with {): {"task": "T3", "step": "what you do now", "pct": 60,
+  "files": ["a.py"], "blocked_by": "...", "next": "...", "needs": "what you need and from whom"}; only pct is required. Prefer it:
+  everyone, the board and the viewer read it at a glance, and it costs fewer words than prose.
+- THE TASK BOARD (shared plan; use it instead of announcing plans in prose):
+    python "{{CHAT}}" board --room "{{ROOM}}"                                   (read it: facts, tasks, who does what)
+    python "{{CHAT}}" task add "title" --files a.py,b.py --deps T1 --as {{NAME}} --room "{{ROOM}}"   (propose a task)
+    python "{{CHAT}}" task take T3 --as {{NAME}} --room "{{ROOM}}"             (take it BEFORE starting: refused if another
+                                                                       taken task changes the same files, or its deps are open)
+    python "{{CHAT}}" task done T3 --proof "what shows it works" --as {{NAME}} --room "{{ROOM}}"
+    python "{{CHAT}}" task note T3 "text" --as {{NAME}} --room "{{ROOM}}"  |  task drop T3  |  task fact "a fact everyone must know"
+  Every change also appears in the chat as a [BOARD] line (no alert). Read the board when you join and before taking work.
 - go IDLE (rule 9): add --idle instead of --status, once, after reading the new messages.
 - attach PICTURES (photos, previews, screenshots, crops): add --image PATH to the post command, once per picture, always with a
   caption in the heredoc. Everyone sees them, the user too, in the viewer. Pictures posted by others appear in read as file

@@ -75,7 +75,8 @@ IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                '.gif': 'image/gif'}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
-STATUS_KINDS = ('status', 'stato')        # 'stato' is how the first versions wrote a status
+STATUS_KINDS = ('status', 'stato', 'board')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
+STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str}
 IDLE = 'idle'
 PERCENT = re.compile(r'\d[^\S\n]?%')
 # a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all
@@ -406,8 +407,9 @@ class Room:
         finally:
             os.rmdir(self.lock)
 
-    def append(self, name, text, status=False, images=None, doc=None, game=None):
-        """status: False for a message, True (or 'status') for a status, 'idle' for an idle status"""
+    def append(self, name, text, status=False, images=None, doc=None, game=None, state=None):
+        """status: False for a message, True (or 'status') for a status, 'idle' for an idle status, 'board' for a
+        change of the task board; state: a structured status (STATE_KEYS)"""
         def write():
             items = self.messages()
             if status == IDLE and self.idle_entry(name, items):
@@ -415,7 +417,9 @@ class Room:
             n = len(items) + 1
             entry = {'n': n, 'time': time.strftime('%H:%M:%S'), 'ts': time.time(), 'from': name, 'text': text}
             if status:
-                entry['kind'] = IDLE if status == IDLE else 'status'
+                entry['kind'] = IDLE if status == IDLE else 'board' if status == 'board' else 'status'
+            if state:
+                entry['state'] = state
             if images:
                 entry['images'] = list(images)
             if doc:
@@ -489,7 +493,7 @@ class Room:
         users = self.user_names()
         for m in items:
             kind = m.get('kind')
-            tag = ' [IDLE]' if kind == IDLE else ' [STATUS]' if kind in STATUS_KINDS else ''
+            tag = ' [IDLE]' if kind == IDLE else ' [BOARD]' if kind == 'board' else ' [STATUS]' if kind in STATUS_KINDS else ''
             if m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
             print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}", flush=True)
@@ -616,6 +620,10 @@ def cmd_post(room, a):
     if a.status and a.idle:
         sys.exit('error: use --status or --idle, not both. Nothing was posted.')
     kind = IDLE if a.idle else 'status' if a.status else None
+    state = None
+    if kind and text.startswith('{'):                # a structured status: the line everyone reads is written from it
+        state = parse_state(text)
+        text = state_line(state)
     if kind and not text:
         sys.exit('error: a status needs a text with the percentage of your part that is done, for example "60%". '
                  'Nothing was posted.')
@@ -640,7 +648,7 @@ def cmd_post(room, a):
         images = [room.store_image_file(p, i) for i, p in enumerate(a.image or [])]
     except ValueError as exc:
         sys.exit(f'error: {exc}')
-    n = room.append(a.name, text, kind or False, images)
+    n = room.append(a.name, text, kind or False, images, state=state)
     if n is None:
         for rel in images:                    # nothing was posted: do not leave the copied pictures behind
             try:
@@ -661,6 +669,185 @@ def cmd_post(room, a):
     if kind:
         return
     print_alert(room, a.name, n, text, images)
+
+
+# ---------------------------------------------------------------------- structured statuses and the task board
+def parse_state(text):
+    """a structured status: a JSON object with some of STATE_KEYS, pct (0-100) required; exits with the reason if bad"""
+    try:
+        d = json.loads(text)
+    except ValueError as exc:
+        sys.exit(f'error: the status starts with {{ but is not valid JSON ({exc}). Nothing was posted.')
+    if not isinstance(d, dict) or not isinstance(d.get('pct'), (int, float)) or not 0 <= d['pct'] <= 100:
+        sys.exit('error: a JSON status needs "pct", the percentage of your part that is done (0-100). Nothing was posted.')
+    unknown = sorted(set(d) - set(STATE_KEYS))
+    if unknown:
+        sys.exit(f'error: unknown keys in the JSON status: {", ".join(unknown)}. Allowed: {", ".join(STATE_KEYS)}. '
+                 f'Nothing was posted.')
+    out = {}
+    for k, kind in STATE_KEYS.items():
+        v = d.get(k)
+        if v in (None, '', []):
+            continue
+        if kind is int:
+            out[k] = int(round(v))
+        elif kind is list:
+            out[k] = [str(x)[:200] for x in (v if isinstance(v, list) else [v])][:20]
+        else:
+            out[k] = str(v)[:300]
+    return out
+
+
+def state_line(st):
+    """the readable line of a structured status: task: step (pct%) · files · blocked by · next · needs"""
+    line = f"{st.get('task', '')}: {st.get('step', '')} ({st['pct']}%)".lstrip(': ')
+    if st.get('files'):
+        line += ' · ' + ', '.join(st['files'])
+    for key, label in (('blocked_by', 'blocked by'), ('next', 'next'), ('needs', 'needs')):
+        if st.get(key):
+            line += f' · {label}: {st[key]}'
+    return line
+
+
+class Board:
+    """the room's task board (ROOM/board.json): facts, and tasks that anyone proposes and one participant takes. A task
+    whose dependencies are not done cannot be taken, and taking one whose files another taken task declares is refused
+    unless forced: this is what stops two agents doing the same work or editing the same file."""
+
+    def __init__(self, room):
+        self.room, self.path = room, room.dir / 'board.json'
+
+    def load(self):
+        try:
+            d = json.loads(self.path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            d = {}
+        return {'facts': d.get('facts', []), 'tasks': d.get('tasks', [])}
+
+    def change(self, fn):
+        """apply fn(board) under the room's lock and save; fn returns the line to post, or raises ValueError"""
+        def run():
+            b = self.load()
+            line = fn(b)
+            tmp = self.path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(b, ensure_ascii=False, indent=1), encoding='utf-8')
+            os.replace(tmp, self.path)
+            return line
+        return self.room.locked(run)
+
+    @staticmethod
+    def find(b, tid):
+        t = next((t for t in b['tasks'] if t['id'].lower() == str(tid).lower()), None)
+        if not t:
+            raise ValueError(f'no task {tid} on the board')
+        return t
+
+    def add(self, name, title, deps=(), files=()):
+        def fn(b):
+            for d in deps:
+                self.find(b, d)
+            tid = f"T{len(b['tasks']) + 1}"
+            b['tasks'].append({'id': tid, 'title': title[:200], 'by': name, 'owner': None, 'state': 'open', 'deps': list(deps),
+                               'files': list(files), 'proof': '', 'notes': [], 'ts': time.time()})
+            return f'📋 {tid} proposed by {name}: {title[:120]}' + (f' (after {", ".join(deps)})' if deps else '')
+        return self.change(fn)
+
+    def take(self, name, tid, force=False):
+        def fn(b):
+            t = self.find(b, tid)
+            if t['state'] == 'done':
+                raise ValueError(f"{t['id']} is already done")
+            if t['owner'] and t['owner'] != name and not force:
+                raise ValueError(f"{t['id']} is taken by {t['owner']}: ask them, or --force")
+            todo = [d for d in t['deps'] if self.find(b, d)['state'] != 'done']
+            if todo:
+                raise ValueError(f"{t['id']} waits for {', '.join(todo)}: take it when they are done")
+            clash = [(o['id'], o['owner'], f) for o in b['tasks'] if o is not t and o['state'] == 'taken' and o['owner'] != name
+                     for f in t['files'] if f in o['files']]
+            if clash and not force:
+                raise ValueError('these files are already being changed: ' + '; '.join(f'{f} by {who} ({i})' for i, who, f in clash)
+                                 + '. Agree with them first, or --force')
+            t.update(owner=name, state='taken', ts=time.time())
+            return f"📋 {t['id']} taken by {name}: {t['title'][:120]}"
+        return self.change(fn)
+
+    def done(self, name, tid, proof=''):
+        def fn(b):
+            t = self.find(b, tid)
+            if t['owner'] not in (None, name):
+                raise ValueError(f"{t['id']} belongs to {t['owner']}: only they close it")
+            t.update(owner=name, state='done', proof=proof[:300], ts=time.time())
+            freed = [o['id'] for o in b['tasks'] if o['state'] == 'open' and t['id'] in o['deps']
+                     and all(self.find(b, d)['state'] == 'done' for d in o['deps'])]
+            return (f"📋 {t['id']} done by {name}: {t['title'][:100]}" + (f' · proof: {proof[:120]}' if proof else '')
+                    + (f' · now free: {", ".join(freed)}' if freed else ''))
+        return self.change(fn)
+
+    def drop(self, name, tid):
+        def fn(b):
+            t = self.find(b, tid)
+            if t['owner'] != name:
+                raise ValueError(f"{t['id']} is not yours")
+            t.update(owner=None, state='open', ts=time.time())
+            return f"📋 {t['id']} left by {name}, open again: {t['title'][:120]}"
+        return self.change(fn)
+
+    def note(self, name, tid, text):
+        def fn(b):
+            t = self.find(b, tid)
+            t['notes'] = (t['notes'] + [f'{name}: {text[:300]}'])[-10:]
+            return f"📋 {t['id']} note by {name}: {text[:140]}"
+        return self.change(fn)
+
+    def fact(self, name, text):
+        def fn(b):
+            b['facts'] = (b['facts'] + [{'text': text[:300], 'by': name}])[-30:]
+            return f'📌 fact from {name}: {text[:160]}'
+        return self.change(fn)
+
+    def show(self):
+        b = self.load()
+        lines = (['FACTS:'] + [f"- {f['text']} ({f['by']})" for f in b['facts']]) if b['facts'] else []
+        order = {'taken': 0, 'open': 1, 'done': 2}
+        lines.append('TASKS:' if b['tasks'] else 'TASKS: none yet (chat.py task add "title" --as NAME)')
+        for t in sorted(b['tasks'], key=lambda t: (order.get(t['state'], 3), t['ts'])):
+            state = f"in progress, {t['owner']}" if t['state'] == 'taken' else t['state']
+            extra = ((f" · after {', '.join(t['deps'])}" if t['deps'] and t['state'] == 'open' else '')
+                     + (f" · files {', '.join(t['files'])}" if t['files'] else '') + (f" · proof: {t['proof']}" if t['proof'] else ''))
+            lines.append(f"{t['id']} [{state}] {t['title']}{extra}")
+            lines += [f'    {n}' for n in t['notes'][-2:]]
+        return '\n'.join(lines)
+
+
+def cmd_task(room, a):
+    """task add TITLE | take ID | done ID | drop ID | note ID TEXT | fact TEXT: change the board, and say it in the chat"""
+    if not a.name:
+        sys.exit('--as NAME required')
+    if not a.pairs:
+        sys.exit('task: add "title" [--deps T1,T2] [--files a,b] | take ID [--force] | done ID [--proof TEXT] | drop ID '
+                 '| note ID TEXT | fact TEXT')
+    act, rest, b = a.pairs[0], a.pairs[1:], Board(room)
+    split = lambda v: [x.strip() for x in (v or '').split(',') if x.strip()]
+    if act == 'add' and rest:
+        line = b.add(a.name, ' '.join(rest), split(a.deps), split(a.files))
+    elif act == 'take' and rest:
+        line = b.take(a.name, rest[0], a.force)
+    elif act == 'done' and rest:
+        line = b.done(a.name, rest[0], a.proof or '')
+    elif act == 'drop' and rest:
+        line = b.drop(a.name, rest[0])
+    elif act == 'note' and len(rest) > 1:
+        line = b.note(a.name, rest[0], ' '.join(rest[1:]))
+    elif act == 'fact' and rest:
+        line = b.fact(a.name, ' '.join(rest))
+    else:
+        sys.exit(f'task {act}: missing or unknown arguments (run chat.py task to see them)')
+    n = room.append(a.name, line, 'board')
+    print(f'{line}  (#{n})')
+
+
+def cmd_board(room, a):
+    print(Board(room).show())
 
 
 def common_room(room):
@@ -1309,6 +1496,8 @@ def cmd_serve(room, a):
                 if target.suffix not in kinds or vendor not in target.parents or not target.is_file():
                     return self.send(404, 'not found', 'text/plain')
                 return self.send(200, target.read_bytes(), kinds[target.suffix])
+            if path == '/board.json':                 # the task board: facts and tasks (task add/take/done)
+                return self.send(200, json.dumps(Board(room).load(), ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/state.json':
                 with lock:
                     state = activity.state()
@@ -1663,7 +1852,7 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -1695,6 +1884,10 @@ def main():
     p.add_argument('--image', action='append', help='post: attach a picture (png, jpg, webp, gif); repeat for more')
     p.add_argument('--file', help='post --common: share a text document (up to 5 MB) in the common room')
     p.add_argument('--out')
+    p.add_argument('--deps', help='task add: the tasks it waits for, comma separated (T1,T2)')
+    p.add_argument('--files', help='task add: the files it changes, comma separated; two taken tasks cannot share one')
+    p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
+    p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--host', default='127.0.0.1')
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
@@ -1709,7 +1902,8 @@ def main():
         if not room.dir.exists():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
-                    'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove}
+                    'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
+                    'task': cmd_task, 'board': cmd_board}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

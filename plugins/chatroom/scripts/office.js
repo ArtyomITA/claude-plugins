@@ -1033,6 +1033,15 @@ function events() {
 let printJob = 0;
 
 // ------------------------------------------------------------------ boards: TV, whiteboard, coffee sign, nameplate, clock
+// the task board (chat.py task / board.json), read every 3 s; the whiteboard shows it when it has tasks
+let boardData = null, boardSig = '';
+if (!VISIT) setInterval(async () => {
+  try {
+    const r = await fetch('board.json', {cache: 'no-store'}); if (!r.ok) return;
+    const text = await r.text(); if (text === boardSig) return;
+    boardSig = text; boardData = JSON.parse(text); if (DATA.loaded) drawBoards();
+  } catch (e) {}
+}, 3000);
 function drawBoards() {
   const c = DATA.config, L = ui.t();
   {
@@ -1047,7 +1056,24 @@ function drawBoards() {
     }
     tv.tex.needsUpdate = true;
   }
-  {
+  if (boardData?.tasks?.length) {                     // the room's task board (chat.py task): to do, in progress, done, and the last fact
+    const {g, canvas: k} = wb; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);
+    const cols = [[`📝 ${L.bTodo}`, '#f5b400', 'open'], [`⚙️ ${L.bDoing}`, '#1e88e5', 'taken'], [`✅ ${L.bDone}`, '#43a047', 'done']], w = k.lw / 3;
+    cols.forEach(([title, color, st], i) => {
+      g.fillStyle = color; g.fillRect(i * w + 5, 6, w - 10, 28); g.fillStyle = '#fff'; g.font = '700 15px sans-serif'; g.fillText(title, i * w + 11, 26);
+      let y = 42;
+      for (const t of boardData.tasks.filter(t => t.state === st).slice(st === 'done' ? -5 : 0, st === 'done' ? undefined : 5)) {
+        const who = t.owner || t.by;
+        g.fillStyle = (who ? DATA.profile(who).color : '#90a4ae') + '30'; g.fillRect(i * w + 7, y, w - 14, 46);
+        g.fillStyle = '#222'; g.font = '700 12px sans-serif'; g.fillText(`${t.id}${t.owner ? ' · ' + t.owner : ''}`, i * w + 12, y + 14);
+        g.font = '12px sans-serif'; wrapText(g, t.title, i * w + 12, y + 29, w - 24, 13, 2);
+        y += 51;
+      }
+    });
+    const fact = boardData.facts?.[boardData.facts.length - 1];
+    if (fact) { g.fillStyle = '#37474f'; g.font = 'italic 13px sans-serif'; wrapText(g, `📌 ${fact.text}`, 10, k.lh - 22, k.lw - 20, 14, 1); }
+    wb.tex.needsUpdate = true;
+  } else {
     const {g, canvas: k} = wb; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);
     const cols = [['🙋', '#e53935', n => D.per[n].a?.waiting], ['⚙️', '#1e88e5', n => !D.per[n].idle && !D.per[n].a?.waiting], ['💤', '#78909c', n => D.per[n].idle], ['🗳', '#43a047', n => D.per[n].vote]];
     const w = k.lw / cols.length;
