@@ -8,10 +8,10 @@
 //   items: the furniture groups (an array, or a function returning the current one); extra: more groups to bake (the city);
 //   skip: a Set of objects, or a function(object) -> true, that must not be touched (moving, animated, textured by code).
 // A mesh is baked only if it is visible, plain (one material, no map, not transparent, not instanced or skinned) and its
-// geometry is made of position, normal and optionally color and uv.
+// geometry is made of position, normal and optionally color, uv and vox.
 
 const CELL = 10;                                       // metres: a baked piece covers at most this much floor, so it can still leave the view
-const NAMES = ['position', 'normal', 'color', 'uv'];
+const NAMES = ['position', 'normal', 'color', 'uv', 'vox'];         // vox: voxel coordinates for the grain, copied as they are
 
 export function mergeStatic({THREE, scene, items = [], extra = [], skip = () => false}) {
   const isSkipped = typeof skip === 'function' ? skip : o => skip.has(o);

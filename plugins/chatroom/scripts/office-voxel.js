@@ -29,35 +29,61 @@ export class Vox {
         }
     return this;
   }
-  /** geometry with flat normals, vertex colours, AO and jitter; pivot in voxel units, scale in metres */
+  /** geometry with flat normals, vertex colours, AO and a per-voxel grain; pivot in voxel units, scale in metres.
+   *  Faces of the same colour and even AO are merged into rectangles (greedy meshing: a flat desk top is one quad,
+   *  not hundreds); a face with uneven AO stays one voxel wide. The grain is drawn by the shader from the `vox`
+   *  attribute (voxel coordinates, and the grain's strength), so merging keeps the look of one shade per voxel. */
   geometry({pivot = [0, 0, 0], scale = VS, jitter = 0.06, ao = true, glow = 1} = {}) {
-    const pos = [], nor = [], col = [], c = new THREE.Color(), corner = [0, 0, 0, 0];
-    for (const [x, y, z, hex] of this.m.values()) {
+    const pos = [], nor = [], col = [], vox = [], c = new THREE.Color(), corner = [0, 0, 0, 0];
+    const quad = (n, p4, cs, hex) => {                 // p4: corners (0,0) (1,0) (1,1) (0,1) in voxel units; cs: their AO
       c.set(hex);
-      const j = 1 + (hash(x, y, z) - 0.5) * 2 * jitter;
-      for (const {n, u, v} of FACES) {
+      // split along the brighter diagonal so AO does not smear
+      const order = cs[0] + cs[2] < cs[1] + cs[3] ? [1, 2, 3, 1, 3, 0] : [0, 1, 2, 0, 2, 3];
+      for (const k of order) {
+        const p = p4[k], f = AO[cs[k]] * glow;
+        pos.push((p[0] - pivot[0]) * scale, (p[1] - pivot[1]) * scale, (p[2] - pivot[2]) * scale);
+        nor.push(n[0], n[1], n[2]);
+        col.push(c.r * f, c.g * f, c.b * f);
+        vox.push(p[0] - n[0] / 2, p[1] - n[1] / 2, p[2] - n[2] / 2, jitter);   // half a voxel inwards: floor() is the voxel
+      }
+    };
+    for (const {n, u, v} of FACES) {
+      const ax = n[0] ? 0 : n[1] ? 1 : 2, au = u.indexOf(1), av = v.indexOf(1);
+      const slices = new Map();                        // the plane's position along n -> cells "u,v" -> an even face
+      for (const [x, y, z, hex] of this.m.values()) {
         if (this.has(x + n[0], y + n[1], z + n[2])) continue;
-        const b = [x + Math.max(n[0], 0), y + Math.max(n[1], 0), z + Math.max(n[2], 0)];
-        const pts = [];
+        const p = [x, y, z], b = [x + Math.max(n[0], 0), y + Math.max(n[1], 0), z + Math.max(n[2], 0)];
         for (let k = 0; k < 4; k++) {
           const a = k === 1 || k === 2 ? 1 : 0, bb = k >= 2 ? 1 : 0;
-          pts.push([b[0] + a * u[0] + bb * v[0], b[1] + a * u[1] + bb * v[1], b[2] + a * u[2] + bb * v[2]]);
-          if (ao) {
-            const su = a ? 1 : -1, sv = bb ? 1 : -1, o = [x + n[0], y + n[1], z + n[2]];
-            const s1 = this.has(o[0] + su * u[0], o[1] + su * u[1], o[2] + su * u[2]) ? 1 : 0;
-            const s2 = this.has(o[0] + sv * v[0], o[1] + sv * v[1], o[2] + sv * v[2]) ? 1 : 0;
-            const cr = this.has(o[0] + su * u[0] + sv * v[0], o[1] + su * u[1] + sv * v[1], o[2] + su * u[2] + sv * v[2]) ? 1 : 0;
-            corner[k] = s1 && s2 ? 0 : 3 - (s1 + s2 + cr);
-          } else corner[k] = 3;
+          if (!ao) { corner[k] = 3; continue; }
+          const su = a ? 1 : -1, sv = bb ? 1 : -1, o = [x + n[0], y + n[1], z + n[2]];
+          const s1 = this.has(o[0] + su * u[0], o[1] + su * u[1], o[2] + su * u[2]) ? 1 : 0;
+          const s2 = this.has(o[0] + sv * v[0], o[1] + sv * v[1], o[2] + sv * v[2]) ? 1 : 0;
+          const cr = this.has(o[0] + su * u[0] + sv * v[0], o[1] + su * u[1] + sv * v[1], o[2] + su * u[2] + sv * v[2]) ? 1 : 0;
+          corner[k] = s1 && s2 ? 0 : 3 - (s1 + s2 + cr);
         }
-        // corners 0..3 = (0,0) (1,0) (1,1) (0,1); split along the brighter diagonal so AO does not smear
-        const order = corner[0] + corner[2] < corner[1] + corner[3] ? [1, 2, 3, 1, 3, 0] : [0, 1, 2, 0, 2, 3];
-        for (const k of order) {
-          const p = pts[k];
-          pos.push((p[0] - pivot[0]) * scale, (p[1] - pivot[1]) * scale, (p[2] - pivot[2]) * scale);
-          nor.push(n[0], n[1], n[2]);
-          const f = AO[corner[k]] * j * glow;
-          col.push(c.r * f, c.g * f, c.b * f);
+        if (corner[0] === corner[1] && corner[1] === corner[2] && corner[2] === corner[3]) {
+          if (!slices.has(p[ax])) slices.set(p[ax], new Map());
+          slices.get(p[ax]).set(p[au] + ',' + p[av], {p, b, hex, a: corner[0], done: false});
+        } else {
+          const pts = [0, 1, 2, 3].map(k => { const a = k === 1 || k === 2 ? 1 : 0, bb = k >= 2 ? 1 : 0;
+            return [b[0] + a * u[0] + bb * v[0], b[1] + a * u[1] + bb * v[1], b[2] + a * u[2] + bb * v[2]]; });
+          quad(n, pts, [...corner], hex);
+        }
+      }
+      for (const cells of slices.values()) {          // greedy: grow each face along u, then the whole row along v
+        const same = (f, cu, cv) => { const g = cells.get(cu + ',' + cv); return g && !g.done && g.hex === f.hex && g.a === f.a; };
+        const sorted = [...cells.values()].sort((A, B) => A.p[av] - B.p[av] || A.p[au] - B.p[au]);
+        for (const f of sorted) {
+          if (f.done) continue;
+          const cu = f.p[au], cv = f.p[av];
+          let w = 1, h = 1;
+          while (same(f, cu + w, cv)) w++;
+          grow: for (;;) { for (let i = 0; i < w; i++) if (!same(f, cu + i, cv + h)) break grow; h++; }
+          for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) cells.get((cu + i) + ',' + (cv + j)).done = true;
+          const b = f.b, pts = [0, 1, 2, 3].map(k => { const a = (k === 1 || k === 2 ? 1 : 0) * w, bb = (k >= 2 ? 1 : 0) * h;
+            return [b[0] + a * u[0] + bb * v[0], b[1] + a * u[1] + bb * v[1], b[2] + a * u[2] + bb * v[2]]; });
+          quad(n, pts, [f.a, f.a, f.a, f.a], f.hex);
         }
       }
     }
@@ -65,6 +91,7 @@ export class Vox {
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('vox', new THREE.Float32BufferAttribute(vox, 4));
     g.computeBoundingSphere();
     return g;
   }
@@ -73,6 +100,17 @@ export class Vox {
 export const MAT = {
   solid: new THREE.MeshStandardMaterial({vertexColors: true, roughness: 0.82, metalness: 0.02}),
   glow: new THREE.MeshBasicMaterial({vertexColors: true, toneMapped: false}),
+};
+// The grain, drawn per pixel: one shade per voxel (floor(vox.xyz) is the voxel, vox.w how strong), and over it a finer
+// one in 5 cm texels of the model's own space, like a high-resolution texture pack: more pixels on every block at no
+// cost in triangles (the texels move with the model, so figures do not swim through their own pattern)
+MAT.solid.onBeforeCompile = sh => {
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 vox;\nvarying vec4 vVox;\nvarying vec3 vTex;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvVox = vox;\nvTex = (position - normal * 0.01) * 20.0;');
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec4 vVox;\nvarying vec3 vTex;\n'
+      + 'float voxHash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }')
+    .replace('#include <color_fragment>', '#include <color_fragment>\n'
+      + 'diffuseColor.rgb *= (1.0 + (voxHash(floor(vVox.xyz)) - 0.5) * 2.0 * vVox.w) * (1.0 + (voxHash(floor(vTex)) - 0.5) * vVox.w * 1.2);');
 };
 
 /** a mesh from a Vox, casting and receiving shadows */

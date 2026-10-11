@@ -13,6 +13,7 @@ import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
 import {createTV, createRadio} from './office-tv.js';
+import {buildFloor} from './office-floor.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
 import {mergeStatic} from './office-merge.js';
@@ -75,7 +76,7 @@ function applyQuality() {
   renderer.shadowMap.enabled = quality !== 'bassa';
   bloom.enabled = quality === 'alta';                                          // the glow costs about 14 ms a frame and barely shows: high quality only
   renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;   // redrawn on a schedule (see frame)
-  sun.shadow.mapSize.setScalar(quality === 'alta' ? 4096 : 2048);
+  sun.shadow.mapSize.setScalar(2048);                                          // 4096 cost four times the fill for edges nobody sees
   sun.shadow.map?.dispose(); sun.shadow.map = null;
   for (const rt of [composer.renderTarget1, composer.renderTarget2]) { const ms = quality === 'alta' ? 4 : 2; if (rt.samples !== ms) { rt.samples = ms; rt.dispose(); } }
   resize();
@@ -122,23 +123,7 @@ const PLACED = resolve(LAYOUT, {packSize: V.packSize}), FLOOR = floorPlan(LAYOUT
 const [SIZE_X, SIZE_Z] = LAYOUT.size;
 const add = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); m.rotation.y = ry; scene.add(m); return m; };
 
-const ZONE = {
-  carpet: (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 2 ? '#5b626d' : '#555c67',
-  parquet: (i, j) => j % 2 ? '#a87443' : '#9c6a3d', parquetLight: (i, j) => j % 2 ? '#b98b5f' : '#ad7f53',
-  tiles: (i, j) => (i + j) % 2 ? '#e3dfd6' : '#d6d1c6',
-  rug: (i, j, z) => i === z.i0 || i === z.i1 || j === z.j0 || j === z.j1 ? '#574a5e' : '#6b5b73',
-  game: (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 2 ? '#3f5a4c' : '#395246',
-  booth: (i, j) => (i + j) % 2 ? '#4a5260' : '#454c59', mat: () => '#34363c',
-  common: (i, j) => i % 3 === 0 ? '#9c7353' : j % 2 ? '#b0835c' : '#a67a55', stone: (i, j) => (i + j) % 2 ? '#bdb8ae' : '#b3ada3',
-};
-{
-  const tile = (v, half) => Math.round((v + half) * 2);
-  const zones = LAYOUT.floor.zones.map(z => ({...z, i0: tile(z.x0, SIZE_X / 2), i1: tile(z.x1, SIZE_X / 2) - 1, j0: tile(z.z0, SIZE_Z / 2), j1: tile(z.z1, SIZE_Z / 2) - 1}));
-  scene.add(V.zoneFloor(SIZE_X * 2, SIZE_Z * 2, (i, j) => {
-    const z = zones.findLast(z => i >= z.i0 && i <= z.i1 && j >= z.j0 && j <= z.j1);
-    return (ZONE[z ? z.kind : LAYOUT.floor.base] || ZONE.carpet)(i, j, z);
-  }));
-}
+scene.add(buildFloor({THREE, renderer, size: LAYOUT.size, base: LAYOUT.floor.base, zones: LAYOUT.floor.zones}));   // pixel-art textures per zone
 const cutaway = [];
 for (const w of PLACED.walls) {
   const cells = Math.round(w.len / 0.25), c = ([u, v]) => [Math.floor(u / 0.25 + 0.01), Math.ceil(v / 0.25 - 0.01) - 1];
@@ -1434,6 +1419,22 @@ function placeTags() {
   badge(DATA.config.title || DATA.config.topic || 'Chat room', D.waiting.size, DATA.config.icon);
 }
 
+// ------------------------------------------------------------------ lights: only the nearest few
+// Every point light costs every lit pixel, near or not, and the office has about thirty (lamps, the bridge, a beacon
+// on each desk, most of them off). Only the LIGHT_POOL nearest that are on stay in the scene, always that many so the
+// shaders never change; the others reach 3-8 m and are too far to show anyway.
+const LIGHT_POOL = 6;
+let pointLights = [], lightsAt = -1, lightsListedAt = -1;
+const _lp = new THREE.Vector3();
+function nearestLights(t) {
+  if (t - lightsListedAt > 3) { lightsListedAt = t; pointLights = []; scene.traverse(o => { if (o.isPointLight) pointLights.push(o); }); }
+  if (t - lightsAt < 0.25 || pointLights.length <= LIGHT_POOL) return;
+  lightsAt = t;
+  const from = pov ? camera.position : controls.target;
+  for (const l of pointLights) { l.getWorldPosition(_lp); l.userData.k = (l.intensity > 0 ? 0 : 1e6) + _lp.distanceToSquared(from); }
+  pointLights.sort((a, b) => a.userData.k - b.userData.k).forEach((l, i) => { l.visible = i < LIGHT_POOL; });
+}
+
 // ------------------------------------------------------------------ loop
 const FORCE = /[?&]force\b/.test(location.search);              // keep drawing in a hidden tab (screenshots, tests)
 let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0, lastInput = 0, shadowAt = 0, speed = 'idle';
@@ -1441,15 +1442,17 @@ for (const ev of ['pointerdown', 'pointermove', 'wheel']) root.addEventListener(
 const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sp = new THREE.Vector3();
 function frame(now) {
   requestAnimationFrame(frame);
+  const startAt = performance.now();
   if (mode === 'chat' || (document.hidden && !FORCE)) { last = now; return; }
   // how fast to draw: full speed while you use the office (mouse, keys, your figure walking), calmer while agents work, slow when all is idle
   if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); climb = null; }
   const using = now - lastInput < 4000 || tween || flyHome || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
   const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || pov;
   speed = using ? 'use' : working ? 'work' : 'idle';
-  const fps = {use: quality === 'alta' ? 45 : quality === 'media' ? 30 : 24, work: quality === 'alta' ? 24 : 20, idle: 10}[speed];
+  // smooth first: 60 while you use it or agents work (a 144 Hz screen would only burn the GPU), 30 when nothing moves
+  const fps = {use: 60, work: quality === 'bassa' ? 30 : 60, idle: quality === 'bassa' ? 15 : 30}[speed];
   acc += now - last; last = now;
-  if (acc < 1000 / fps) return;
+  if (acc < 1000 / fps - 2) return;                                             // 2 ms slack: a 60 cap on a 60 Hz screen must not drop to 30
   const dt = Math.min(0.1, acc / 1000); acc = 0; frameT = now / 1000;
   const t = now / 1000, d = new Date(), hour = d.getHours() + d.getMinutes() / 60;
   if (Math.floor(hour * 4) !== hourDrawn) { hourDrawn = Math.floor(hour * 4); drawSky(hour); }
@@ -1495,9 +1498,12 @@ function frame(now) {
   uiAcc += dt;
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
-  if (now - shadowAt > (speed === 'use' ? 66 : speed === 'work' ? 120 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not
+  if (now - shadowAt > (speed === 'use' ? 33 : speed === 'work' ? 66 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not: shadows keep up at 30 a second
+  nearestLights(t);
   camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); paintball.update(dt);
+  const drawAt = performance.now();
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
+  if (FORCE) window.__officeTimes = {logic: drawAt - startAt, draw: performance.now() - drawAt};   // measuring: where a frame's time goes
 }
 
 // the dollhouse view: an outer wall drops to its stub when the camera is outside it; in first person (camera below
