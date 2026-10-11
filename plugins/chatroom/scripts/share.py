@@ -132,6 +132,12 @@ def _clean_game(g):
         if not isinstance(groups, list) or len(groups) != 2 or any(x not in (None, 'solids', 'stripes') for x in groups):
             raise ValueError('pool groups are solids, stripes or nothing, for the two players')
         out['groups'] = groups
+        if g.get('cue') is not None:                     # the cue it was played with, and for the spin which way
+            if g.get('cue') not in ('classic', 'power', 'precise', 'spin'):
+                raise ValueError('a pool cue is classic, power, precise or spin')
+            out['cue'] = g['cue']
+            if g['cue'] == 'spin':
+                out['sp'] = -1 if g.get('sp') == -1 else 1
         out['turn'] = int(num(g.get('turn'), 0, 1))
         if g.get('win') is not None:
             out['win'] = int(num(g.get('win'), 0, 1))
@@ -760,6 +766,28 @@ def clean_avatar(a):
     return out or None
 
 
+def clean_pb(p):
+    """a friend's paintball snapshot (office-paintball.js): playing, HP, weapon, deaths and their last 12 shots; numbers bounded,
+    coordinates a finite point of the office, the name of whoever was hit cleaned; None when they are not playing"""
+    if not isinstance(p, dict) or p.get('on') is not True:
+        return None
+    vec = lambda v: [round(max(-120.0, min(120.0, float(x))), 2) for x in v][:3] if isinstance(v, (list, tuple)) and len(v) == 3 else None
+    shots = []
+    for s in (p.get('shots') if isinstance(p.get('shots'), list) else [])[-12:]:
+        try:
+            o, q = vec(s['o']), vec(s['p'])
+            if o and q:
+                shots.append({'id': int(max(0, min(1e9, float(s['id'])))), 'o': o, 'p': q, 'n': vec(s.get('n')), 'h': clean_name(s['h']) if s.get('h') else None,
+                              'd': int(max(0, min(60, float(s.get('d') or 0)))), 'c': int(max(0, min(7, float(s.get('c') or 0))))})
+        except (TypeError, ValueError, KeyError, OverflowError):
+            pass
+    try:
+        return {'on': True, 'hp': int(max(0, min(100, float(p.get('hp') or 0)))), 'w': int(max(0, min(2, float(p.get('w') or 0)))),
+                'k': int(max(0, min(1e6, float(p.get('k') or 0)))), 'shots': shots}
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def clean_pos(d):
     """where a figure is: a point of the floor plan, its height (a seat), a heading, a pose, and whose office it is in
     ('home', or 'visit:NAME' while visiting NAME); anything else is dropped"""
@@ -774,7 +802,7 @@ def clean_pos(d):
         return None
     return {'x': round(x, 2), 'y': round(min(2.0, max(-0.5, y)), 2), 'z': round(z, 2), 'rot': round(rot, 3),
             'pose': d.get('pose') if d.get('pose') in ('walk', 'stand', 'sit', 'sofa') else 'stand', 'where': where,
-            'look': clean_avatar(d.get('look'))}
+            'look': clean_avatar(d.get('look')), 'jump': int(max(0, min(1e9, float(d.get('jump') or 0)))), 'pb': clean_pb(d.get('pb'))}
 
 
 def clean_name(name):
@@ -1118,7 +1146,8 @@ def _prova():
             raise AssertionError(f'a bad tv move got in: {bad}')
         shot = {'type': 'pool', 'op': 'shot', 'id': 'p1', 'a': 1.5, 'p': 0.5, 'end': [[100, 200]] + [None] * 15, 'groups': [None, 'solids'], 'turn': 1}
         assert clean_game(shot)['end'][0] == [100.0, 200.0] and clean_game({**shot, 'win': 0})['win'] == 0
-        for bad in ({**shot, 'a': float('nan')}, {**shot, 'p': 2}, {**shot, 'end': shot['end'][:15]}, {**shot, 'end': [[1e9, 5]] + [None] * 15},
+        assert clean_game({**shot, 'cue': 'spin', 'sp': -1})['sp'] == -1 and clean_game({**shot, 'cue': 'power'})['cue'] == 'power' and 'cue' not in clean_game(shot)
+        for bad in ({**shot, 'cue': 'laser'}, {**shot, 'a': float('nan')}, {**shot, 'p': 2}, {**shot, 'end': shot['end'][:15]}, {**shot, 'end': [[1e9, 5]] + [None] * 15},
                     {**shot, 'end': [[1]] + [None] * 15}, {**shot, 'end': [5] + [None] * 15}, {**shot, 'groups': ['evens', None]}, {**shot, 'turn': 2}):
             try:
                 clean_game(bad)

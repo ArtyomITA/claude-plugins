@@ -134,6 +134,15 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-help { position: absolute; left: 12px; bottom: 60px; max-width: min(400px, 46%); padding: 7px 11px; border-radius: 9px; background: #14151de6; box-shadow: 0 6px 16px #0004;
   font-size: 11.5px; line-height: 1.45; pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; z-index: 2; }
 #office .o-help.o-show { opacity: 1; transform: none; }
+#office .o-more { position: relative; }
+#office .o-menu { position: absolute; right: 0; bottom: calc(100% + 8px); min-width: 220px; display: none; flex-direction: column; gap: 2px; padding: 8px; background: #14151df2;
+  border: 1px solid #ffffff14; border-radius: 12px; box-shadow: 0 10px 28px #0007; z-index: 3; }
+#office .o-menu.o-open { display: flex; animation: o-in .14s ease-out; }
+#office .o-menu h5 { margin: 6px 6px 2px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }
+#office .o-menu h5:first-child { margin-top: 2px; }
+#office .o-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; background: transparent; border-color: transparent; padding: 6px 9px; }
+#office .o-menu button:hover { background: #ffffff1f; }
+#office .o-menu button.o-on { background: #f5b400; color: #1b1b22; }
 @keyframes o-in { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes blink { 50% { opacity: .55; } }
@@ -163,8 +172,8 @@ export const L = {
        games: 'Games', tris: 'Tic-tac-toe', morra: 'Rock paper scissors', dice: 'Dice', rolls: 'rolls the dice', opens: g => `opens a game of ${g}`,
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
-       quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first', helpBtn: 'Help',
-       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
+       quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first', more: 'More', gamesTitle: 'Games', toolsTitle: 'Tools', pingPong: 'Ping pong', helpBtn: 'Help',
+       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', cue_classic: 'Classic', cue_power: 'Power', cue_precise: 'Precise', cue_spin: 'Spin', cue_classic_tip: 'The cue as it is', cue_power_tip: '+40% force, but the aim trembles ', cue_precise_tip: '-20% force, a long aim line with the bounce', cue_spin_tip: 'The cue ball curves (press 4 again to turn the other way)', goal: 'GOAL!', points: 'pts', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
        pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
@@ -206,8 +215,8 @@ export const L = {
        games: 'Giochi', tris: 'Tris', morra: 'Morra cinese', dice: 'Dadi', rolls: 'tira i dadi', opens: g => `apre una partita a ${g}`,
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
-       quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita', helpBtn: 'Aiuto',
-       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
+       quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita', more: 'Altro', gamesTitle: 'Giochi', toolsTitle: 'Strumenti', pingPong: 'Ping pong', helpBtn: 'Aiuto',
+       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', cue_classic: 'Classica', cue_power: 'Potente', cue_precise: 'Precisa', cue_spin: 'Effetto', cue_classic_tip: 'La stecca di sempre', cue_power_tip: '+40% di forza, ma la mira trema ', cue_precise_tip: '-20% di forza, linea di mira lunga con il rimbalzo', cue_spin_tip: 'La bianca curva (premi di nuovo 4 per girare dall altra parte)', goal: 'GOL!', points: 'punti', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
        pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
@@ -293,7 +302,7 @@ const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b
 const revealed = new Set();
 
 export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
-                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onAnswer}) {
+                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onAnswer, onExtra}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   root.insertAdjacentHTML('beforeend', `<div class="o-tags"></div>
@@ -301,9 +310,11 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       <span class="o-chip" data-k="work"></span><span class="o-chip" data-k="idle"></span><span class="o-chip" data-k="plan" hidden></span><span class="o-chip" data-k="src"></span>
 </div>
     <div class="o-btns"><div class="o-grp o-seg"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button></div>
-      <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button><button data-b="look"></button></div>
-      <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button><button data-b="follow"></button><button data-b="reset"></button></div>
-      <div class="o-grp"><button data-b="quality"></button><button data-b="notify"></button><button data-b="help"></button></div></div>
+      <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button></div>
+      <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button></div>
+      <div class="o-more"><div class="o-grp"><button data-b="more"></button></div><div class="o-menu"><h5 data-k="games"></h5><div data-k="games-list"></div>
+        <h5 data-k="tools"></h5><button data-b="look"></button><button data-b="follow"></button><button data-b="reset"></button><button data-b="quality"></button>
+        <button data-b="notify"></button><button data-b="help"></button></div></div></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
   const cp = root.querySelector('.o-common');
@@ -312,7 +323,10 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
   const t = () => L[lang] || L.en;
   btns.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.x) { closeMenu(); const f = extras.get(b.dataset.x)?.fn; return f ? f() : onExtra?.(b.dataset.x); }
     const k = b.dataset.b;
+    if (k === 'more') return menuEl.classList.toggle('o-open');
+    if (b.closest('.o-menu')) closeMenu();
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
     else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
@@ -333,6 +347,11 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
   const showHelp = ms => { helpEl.classList.add('o-show'); clearTimeout(helpTimer); helpTimer = setTimeout(() => helpEl.classList.remove('o-show'), ms); };
   root.addEventListener('pointerdown', e => { if (!e.target.closest('.o-btns')) { clearTimeout(helpTimer); helpEl.classList.remove('o-show'); } }, true);
   setTimeout(() => showHelp(14000), 1500);
+  // "More": the games and the less used tools in one drop-down; a game or mode that arrives later adds itself with addExtra
+  const menuEl = btns.querySelector('.o-menu'), extras = new Map();
+  const closeMenu = () => menuEl.classList.remove('o-open');
+  root.addEventListener('pointerdown', e => { if (!e.target.closest('.o-more')) closeMenu(); }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   const labels = new Map(), itemLabels = new Map();
 
   function label(name) {
@@ -350,6 +369,8 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
   }
 
   return {
+    /** a game or mode that adds itself to the "More" menu: key, icon, text, and what to do when chosen */
+    addExtra(key, icon, text, fn) { extras.set(key, {icon, text, fn}); },
     setLang(x) { lang = x === 'en' ? 'en' : 'it'; },
     t,
     /** place a tag at screen x, y (CSS pixels); visible false hides it */
@@ -382,6 +403,11 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       setBtn('edit', '🛠', L.edit, '', !!d.edit); setBtn('common', '🛋', L.common, '', cp.classList.contains('o-open')); setBtn('look', '👤', L.look);
       setBtn('pov', '👁', 'POV', '', !!d.pov); setBtn('run', '🏃', 'x2', L.run + ' (Shift)', !!d.run);
       setBtn('follow', '🎯', L.follow, '', !!d.follow); setBtn('reset', '🎥', L.reset);
+      setBtn('more', '⋯', L.more + ' ▾', '', menuEl.classList.contains('o-open'));
+      const hk = k => menuEl.querySelector(`[data-k="${k}"]`); hk('games').textContent = L.gamesTitle; hk('tools').textContent = L.toolsTitle;
+      const gl = hk('games-list'), items = [['pingPong', '🏓', L.pingPong], ['foosball', '⚽', L.foosball], ['poolTable', '🎱', L.pool], ...[...extras].map(([k, v]) => [k, v.icon, v.text])];
+      const gkey = items.map(i => i.join()).join('|');
+      if (gl.dataset.key !== gkey) { gl.dataset.key = gkey; gl.innerHTML = items.map(([k, ic, tx]) => `<button data-x="${esc(k)}"><span class="o-ic">${ic}</span><span>${esc(tx)}</span></button>`).join(''); }
       setBtn('quality', '✨', L.quality(d.quality)); setBtn('notify', '🔔', L.notify, '', notifyOn()); setBtn('help', '❓', L.helpBtn);
       const ht = d.pov ? t().povHelp : t().help; if (helpEl.textContent !== ht) helpEl.textContent = ht;
     },

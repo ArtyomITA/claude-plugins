@@ -14,6 +14,7 @@ import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office
 import {createEditor} from './office-edit.js';
 import {createTV} from './office-tv.js';
 import {createGames} from './office-games.js';
+import {createPaintball} from './office-paintball.js';
 import {mergeStatic} from './office-merge.js';
 import {createUI, replayGames, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
 
@@ -468,11 +469,18 @@ class Person {
     const built = V.person({name, shirt: shirt || p.color, kind, scale: kind === 'intern' ? 0.62 : 1, look});
     this.lookKey = JSON.stringify(look);
     Object.assign(this, built, {name, kind, spot, pos: spot.pos.clone(), rot: spot.rot, path: [], act: 'idle', t: Math.random() * 10,
-                                look: null, spawn: spawn ? 0 : 1, bubbleUntil: 0, pose: spot.pose});
+                                look: null, spawn: spawn ? 0 : 1, bubbleUntil: 0, pose: spot.pose, jumpY: 0, jumpV: 0, jumps: 0, flip: -1});
     this.root.position.copy(this.pos); this.root.rotation.y = this.rot;
     this.root.traverse(o => { o.userData.person = name; if (o.isMesh) raycastables.push(o); });
     scene.add(this.root);
     if (spawn) emit(60, this.pos.clone().add(new THREE.Vector3(0, 2.6, 0)), {color: [p.color, '#ffffff', '#9be7ff'], to: this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), life: 0.9, size: 0.09});
+  }
+  /** Space: up, and once more in the air; false when seated or already used both */
+  jump() {
+    if (this.pose === 'sit' || this.pose === 'sofa' || this.jumps >= 2) return false;
+    this.jumpV = this.jumps === 0 ? 5 : 4.4; this.jumps++;
+    if (this.jumps === 2) this.flip = 0;
+    return true;
   }
   goTo(spot) {
     if (this.spot === spot || (this.spot.pos.equals(spot.pos) && this.spot.rot === spot.rot)) { this.spot = spot; return; }
@@ -492,7 +500,7 @@ class Person {
       const target = this.path[0], d = target.clone().sub(this.pos); d.y = 0;
       const dist = d.length(), step = 1.9 * dt * (this.speed || 1);
       if (dist <= step) { this.pos.x = target.x; this.pos.z = target.z; this.path.shift(); if (!this.path.length) { this.pos.y = this.spot.pos.y; this.pose = this.spot.pose; } }
-      else { this.pos.addScaledVector(d.normalize(), step); this.rot = angLerp(this.rot, Math.atan2(d.x, d.z), Math.min(1, dt * 10)); this.pos.y = 0; }
+      else { this.pos.addScaledVector(d.normalize(), step); this.rot = angLerp(this.rot, Math.atan2(d.x, d.z), Math.min(1, dt * 10)); this.pos.y = lerp(this.pos.y, target.y || 0, Math.min(1, dt * 12)); }
     } else this.rot = angLerp(this.rot, this.faceRot ?? this.spot.rot, Math.min(1, dt * 6));
     this.root.position.copy(this.pos); this.root.rotation.y = this.rot;
     // pose targets
@@ -529,6 +537,7 @@ class Person {
         T.headY = Math.max(-1, Math.min(1, ((want + Math.PI * 3) % (Math.PI * 2)) - Math.PI)); T.headX = -0.05;
       }
     }
+    if (this.jumpY > 0.02) { T.armL = T.armR = -2.5; T.armLz = -0.1; T.armRz = 0.1; T.legL = -0.7; T.legR = 0.25; }       // in the air: arms up, legs tucked
     const k = Math.min(1, dt * 10);
     P_.legL.rotation.x = lerp(P_.legL.rotation.x, T.legL, k); P_.legR.rotation.x = lerp(P_.legR.rotation.x, T.legR, k);
     P_.armL.rotation.x = lerp(P_.armL.rotation.x, T.armL, k); P_.armR.rotation.x = lerp(P_.armR.rotation.x, T.armR, k);
@@ -537,6 +546,18 @@ class Person {
     P_.head.rotation.x = lerp(P_.head.rotation.x, T.headX, k); P_.head.rotation.y = lerp(P_.head.rotation.y, T.headY, k * 0.8);
     P_.head.rotation.z = lerp(P_.head.rotation.z, T.headZ, k);
     this.body.position.y = lerp(this.body.position.y, T.bob, Math.min(1, dt * 14));
+    // a jump (Space); a second press in the air is a double jump with a somersault, level in first person where the camera follows the head
+    if (this.jumpV !== 0 || this.jumpY > 0) {
+      this.jumpV -= 14 * dt; this.jumpY = Math.max(0, this.jumpY + this.jumpV * dt);
+      if (this.jumpY === 0) { this.jumpV = 0; this.jumps = 0; }
+    }
+    this.root.position.y = this.pos.y + this.jumpY;
+    if (this.flip >= 0) {
+      this.flip += dt / 0.62;
+      const a = this.flip >= 1 || (pov && this === boss) ? 0 : this.flip * Math.PI * 2;
+      this.body.rotation.x = a; this.body.position.y = 0.8 * (1 - Math.cos(a)); this.body.position.z = -0.8 * Math.sin(a);
+      if (this.flip >= 1) { this.flip = -1; this.body.rotation.x = 0; this.body.position.z = 0; }
+    }
     // the mug in the hand of whoever is on a coffee break (the user's own mug is set by tendMe), with a little steam
     if (this !== boss) {
       const hold = !walking && this.act === 'coffee';
@@ -702,7 +723,8 @@ const outCache = new Map();
 const outOf = s => { if (!outCache.has(s)) outCache.set(s, nearestFree(s.pos)); return outCache.get(s).clone(); };
 const seated = p => !p.path.length && (p.pose === 'sit' || p.pose === 'sofa');
 function walkTo(goal, spot, then = null) {
-  const from = seated(boss) ? outOf(boss.spot) : boss.pos;
+  if (boss.pos.y > 0.01) { boss.jumpY += boss.pos.y; boss.pos.y = 0; }                  // from the top of a desk: down, then walk
+  const from = seated(boss) ? outOf(boss.spot) : blocked(boss.pos.x, boss.pos.z) ? nearestFree(boss.pos) : boss.pos;
   const pts = route(from, goal);
   if (!pts) return;
   if (seated(boss)) pts.unshift(from.clone());
@@ -785,7 +807,33 @@ function goToPoint(p) {
 }
 let leaving = false, doorToast = 0;
 /** W/S walk, A/D turn; looking around with the mouse turns the body once you walk */
+let climb = null;
+function climbList() {
+  if (climb) return climb;
+  climb = [];
+  const box = new THREE.Box3(), add = o => {
+    box.setFromObject(o);
+    const w = box.max.x - box.min.x, d = box.max.z - box.min.z, top = box.max.y;
+    if (top >= 0.3 && top <= 1.2 && w * d >= 0.35 && w < 8 && d < 8) climb.push({x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, top});
+  };
+  for (const m of ITEM_MESHES) add(m);
+  for (const d of DESKS) for (const o of d.g.userData.kit || []) add(o);
+  return climb;
+}
+/** the top of the piece of furniture under (x, z), grown by m metres, that a figure at height alt is above (null: none) */
+function climbTop(x, z, alt, m = 0) {
+  let best = null;
+  for (const b of climbList()) if (x > b.x0 - m && x < b.x1 + m && z > b.z0 - m && z < b.z1 + m && alt >= b.top - 0.05 && (best === null || b.top > best)) best = b.top;
+  return best;
+}
+/** your figure stands on the floor or on what it is above; walking off an edge it falls, jumping onto a top it lands there */
+function settleBoss() {
+  if (!boss || boss.pose === 'sit' || boss.pose === 'sofa') return;
+  const alt = boss.pos.y + boss.jumpY, gh = climbTop(boss.pos.x, boss.pos.z, alt) ?? 0;
+  if (gh !== boss.pos.y) { boss.jumpY = Math.max(0, alt - gh); boss.pos.y = gh; }
+}
 function drive(dt) {
+  settleBoss();
   const f = (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0), turn = (keys.has('a') ? 1 : 0) - (keys.has('d') ? 1 : 0);
   if (!pov || !boss || (!f && !turn)) { if (boss && boss.pose === 'walk' && !boss.path.length) boss.pose = 'stand'; return; }
   if (seated(boss)) return standUp();
@@ -800,9 +848,10 @@ function drive(dt) {
     const d = Math.hypot(p.pos.x - x, p.pos.z - z);
     return d < 0.55 && d < Math.hypot(p.pos.x - boss.pos.x, p.pos.z - boss.pos.z);
   });
-  if (!blocked(nx, boss.pos.z) && !bump(nx, boss.pos.z)) boss.pos.x = nx;
-  if (!blocked(boss.pos.x, nz) && !bump(boss.pos.x, nz)) boss.pos.z = nz;
-  boss.pos.y = 0; boss.pose = f ? 'walk' : 'stand'; boss.faceRot = null;
+  const alt = boss.pos.y + boss.jumpY, free = (x, z) => !blocked(x, z) || climbTop(x, z, alt, 0.3) !== null;     // above a piece of furniture you may walk over it
+  if (free(nx, boss.pos.z) && !bump(nx, boss.pos.z)) boss.pos.x = nx;
+  if (free(boss.pos.x, nz) && !bump(boss.pos.x, nz)) boss.pos.z = nz;
+  boss.pose = f ? 'walk' : 'stand'; boss.faceRot = null;
   boss.spot = {pos: boss.pos.clone(), rot: boss.rot, pose: 'stand'};
 }
 /** the far end of the bridge: into the friend's office or back home; as host, into a guest's (choose if several) */
@@ -1040,9 +1089,11 @@ function drawScreen(name, act, t) {
 let mode = pref('mode', window.innerWidth >= 1000 ? 'split' : 'office'), selected = null, follow = false;
 // first person: the camera is the user's figure's eyes; leaving it flies back to the overview before the orbit resumes
 let pov = pref('pov', false), flyHome = false, povLocked = false;
+let paintball = null;                                                      // office-paintball.js, created at the end; while it is on the view stays in first person
 const povLook = HOME.target.clone(), _look = new THREE.Vector3(), _eye = new THREE.Vector3();
 controls.enabled = !pov;
 function setPov(on) {
+  if (!on && paintball?.active()) return paintball.lockMessage();
   pov = on; setPref('pov', on); povLocked = false; keys.clear();
   if (on) { povLook.copy(controls.target); tween = null; follow = false; flyHome = false; controls.enabled = false; me.yaw = 0; me.pitch = -0.08; }
   else flyHome = true;
@@ -1070,6 +1121,12 @@ document.addEventListener('keydown', e => {
   else if (k === 'q' && !e.repeat) { wave(); e.preventDefault(); }
 });
 document.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+let jumpSeq = 0;                                                            // how many jumps you made: a friend's side plays the new ones
+document.addEventListener('keydown', e => {
+  if (e.key !== ' ' || e.repeat || !boss || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || editor.active() || games.active() || loungeTv.open()) return;
+  if (e.target.closest?.('input, textarea, select, button, a, [contenteditable]')) return;
+  if (boss.jump()) { jumpSeq++; e.preventDefault(); }
+});
 window.addEventListener('blur', () => { keys.clear(); shiftHeld = false; });
 document.addEventListener('keydown', e => { if (e.key === 'Shift') shiftHeld = true; });
 document.addEventListener('keydown', e => {
@@ -1086,6 +1143,7 @@ renderer.domElement.addEventListener('pointermove', e => {                    //
   me.pitch = Math.max(-1.1, Math.min(0.7, me.pitch - e.movementY * 0.004));
 });
 const ui = createUI(root, {
+  onExtra: k => { if (k === 'pingPong' || k === 'foosball' || k === 'poolTable') openGame(k); },
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
   onPov: () => setPov(!pov),
   onLook: () => ui.lookPanel(myLook, V.LOOK, setMyLook),
@@ -1096,9 +1154,9 @@ const ui = createUI(root, {
   onJoin: async (url, pin) => { const r = await post('join', url === null ? {leave: true} : {url, pin}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
   onCommonWrite: async text => { await post('common/post', {text}); pollCommon(); },
   onGame: async (game, text) => {
-    const r = await post('common/post', {text, game});
+    const before = myPool()?.id, r = await post('common/post', {text, game});
     if (r && !r.ok) { ui.roomTip(await r.text(), 20, 120); return pollCommon(); }
-    if (game.type === 'pool' && (game.op === 'new' || game.op === 'join')) return openMyPool();            // the panel's pool button opens the table too
+    if (game.type === 'pool' && (game.op === 'new' || game.op === 'join')) return openMyPool(before);            // the panel's pool button opens the table too
     pollCommon();
   },
   onAnswer: async (id, ok, extra) => { const r = await post('join/answer', {id: +id, ok, ...extra}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
@@ -1190,10 +1248,10 @@ function syncRemote() {
 }
 // where your figure is goes to the other side while the room is shared or joined, or while you visit
 const linked = () => VISIT || !!(commonState?.share?.sharing || commonState?.bridge?.joined);
-let presenceSent = '', presence = null, oldServerSaid = false;
+let presenceSent = '', presence = null, oldServerSaid = false, myPb = null;          // myPb: my paintball snapshot, sent with my position
 setInterval(() => {
   if (!boss || !linked()) return;
-  const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home', look: myLook};
+  const pos = {x: boss.pos.x, y: boss.pos.y, z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home', look: myLook, jump: jumpSeq, pb: myPb};
   const key = JSON.stringify(pos, (k, v) => typeof v === 'number' ? Math.round(v * 20) / 20 : v);
   if (key !== presenceSent) {
     presenceSent = key;
@@ -1212,6 +1270,7 @@ function placeOthers() {
     if (owner && hostFigure && JSON.stringify(p.pos?.look || null) !== hostFigure.lookKey) rebuild(hostFigure, p.pos?.look || null, rr => { hostFigure = rr; });
     if (owner && hostFigure) hostFigure.root.visible = !!(p.pos && p.pos.where === 'home');
     const now = owner ? hostFigure : fig;                                       // a new look may have rebuilt it
+    paintball?.receive(p.name, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos.pb : null);   // their paintball, if we are in the same office
     if (now) walkWhere(now, p.pos && (owner ? p.pos.where === 'home' : p.pos.where === here) ? p.pos : null);
   }
 }
@@ -1220,11 +1279,16 @@ function walkWhere(fig, pos) {
   if (!pos) { if (fig.follow) { fig.follow = null; fig.speed = 1; fig.goTo(fig.home || OWNER_SEAT); } return; }
   const to = new THREE.Vector3(pos.x, pos.y || 0, pos.z), spot = {pos: to, rot: pos.rot, pose: pos.pose === 'walk' ? 'stand' : pos.pose};
   fig.follow = pos; fig.act = 'idle';
+  if (pos.jump !== undefined) {                                               // the friend jumped: the same jump here (up to two between two looks)
+    const n = pos.jump - (fig.seenJump ?? pos.jump);
+    if (n > 0 && n <= 2) { fig.jump(); if (n === 2) setTimeout(() => fig.jump(), 280); }
+    fig.seenJump = pos.jump;
+  }
   const far = Math.hypot(fig.pos.x - to.x, fig.pos.z - to.z);
   if (far > 6) { fig.pos.copy(to); fig.path = []; fig.spot = spot; fig.pose = spot.pose; fig.rot = pos.rot; return; }
   fig.spot = spot;
   if (far < 0.05) { if (!fig.path.length) { fig.pose = spot.pose; fig.pos.y = to.y; } return; }
-  fig.path = [to.clone().setY(0)]; fig.pose = 'walk'; fig.speed = 1.4;
+  fig.path = [to.clone()]; fig.pose = 'walk'; fig.speed = 1.4;
 }
 /** a figure again with another look, where the old one was */
 function rebuild(old, look, put) {
@@ -1376,7 +1440,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (mode === 'chat' || (document.hidden && !FORCE)) { last = now; return; }
   // how fast to draw: full speed while you use the office (mouse, keys, your figure walking), calmer while agents work, slow when all is idle
-  if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); }
+  if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); climb = null; }
   const using = now - lastInput < 4000 || tween || flyHome || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
   const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || pov;
   speed = using ? 'use' : working ? 'work' : 'idle';
@@ -1429,7 +1493,7 @@ function frame(now) {
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
   if (now - shadowAt > (speed === 'use' ? 66 : speed === 'work' ? 120 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not
-  camera.updateMatrixWorld(); loungeTv.update(t);
+  camera.updateMatrixWorld(); loungeTv.update(t); paintball.update(dt);
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
 }
 
@@ -1475,11 +1539,15 @@ function flyCamera(dt) {
 if (FORCE) window.__officeStep = t => frame(t ?? performance.now());
 if (FORCE) Object.assign(window, {                                        // tests: walk by script, see who is where
   __officeWalk: (x, z) => goToPoint(new THREE.Vector3(x, 0, z)),
-  __officeMe: () => boss && {x: boss.pos.x, z: boss.pos.z, pose: boss.pose, path: boss.path.length, speed: boss.speed},
+  __officeMe: () => boss && {x: boss.pos.x, y: boss.pos.y, jumpY: boss.jumpY, z: boss.pos.z, pose: boss.pose, path: boss.path.length, speed: boss.speed},
+  __officeKey: (k, on) => { if (on) keys.add(k); else keys.delete(k); },
+  __officeJump: () => boss.jump() && jumpSeq++,
+  __officeTele: (x, z, rot = 0) => { boss.pos.set(x, 0, z); boss.rot = rot; boss.path = []; boss.jumpY = 0; boss.jumpV = 0; boss.jumps = 0; boss.spot = {pos: boss.pos.clone(), rot, pose: 'stand'}; },
   __officeOthers: () => [...remote.values(), hostFigure].filter(Boolean).map(p => ({name: p.name, x: +p.pos.x.toFixed(2), z: +p.pos.z.toFixed(2), pose: p.pose, follow: !!p.follow})),
   __officeSeats: () => sitSpots().length,
   __officeCam: (x, y, z, tx, ty, tz) => { tween = null; camera.position.set(x, y, z); controls.target.set(tx, ty, tz); controls.update(); },
   __officeBrew: () => brew(),
+  __officeOpen: k => openGame(k), __officePaintball: () => paintball,
   __officeScene: scene, __officeRenderer: renderer, __officeMeta: () => ({quality, speed, mode, pov, people: people.size, machine: MACHINE.toArray(), brew: [BREW.pos.x, BREW.pos.z]}),   // measuring: draw calls, who owns them
   __officeFreeDesk: () => { const d = DESKS.find(d => !d.owner); return d && {x: d.seat.pos.x, z: d.seat.pos.z}; },
   __officeSync: async () => { await pollCommon(); const r = await fetch('presence.json', {cache: 'no-store'}); presence = await r.json(); placeOthers(); },
@@ -1532,11 +1600,11 @@ function openPoolTable(g) {
   games.openPool(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎱 ${myName()} ${ui.t().quits}`, game: {type: 'pool', op: 'quit', id: g.id}}).then(() => pollCommon())});
 }
 /** my pool game as soon as its line is back: from a guest it goes out and returns through the host, a few seconds at most */
-async function openMyPool() {
+async function openMyPool(before = null) {                                 // before: the game I had, which the new one must replace (not that table again)
   for (let i = 0; i < 16; i++) {
     await pollCommon();
     const g = myPool();
-    if (g) return openPoolTable(g);
+    if (g && g.id !== before) return openPoolTable(g);
     await new Promise(done => setTimeout(done, 400));
   }
   ui.roomTip(ui.t().poolLate, 20, 120);
@@ -1551,7 +1619,7 @@ function openGame(type) {
     if (op === 'open') return openPoolTable(mine);
     const r = await post('common/post', {text: `🎱 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: 'pool', op, id: op === 'join' ? join.id : Math.random().toString(16).slice(2, 10)}});
     if (r && !r.ok) return ui.roomTip(await r.text(), 20, 120);
-    return openMyPool();
+    return openMyPool(mine?.id);
   };
   games.poolMenu({friends: linked() && !busyOther, open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null, waiting: mine?.players.length === 1, restart: mine?.players.length === 2 && !mine.shots.length,
                   friend: friendName(), join: join ? join.players[0] : null,           // join is false (not undefined) when I already have a game: join?.players[0] threw and the table did nothing
@@ -1577,6 +1645,12 @@ function poolFromFriends() {
 const baked = mergeStatic({THREE, scene, items: ITEM_MESHES, extra: () => [...DESKS.map(d => d.g), city],
                            skip: o => !!o.userData.person || !!(o.parent?.userData.kit && !o.parent.userData.kit.has(o))});
 let bakedEditing = false;
+// ------------------------------------------------------------------ paintball and zombies (office-paintball.js), switched on from the "Altro" menu
+paintball = createPaintball({THREE, scene, camera, canvas: renderer.domElement, root, pov: () => pov && povLocked, me: myName, lang: () => DATA.config.lang,
+  players: () => new Map([...remote].filter(([, f]) => f.root.visible).map(([n, f]) => [n, f.root]).concat(hostFigure?.root.visible ? [[hostFigure.name, hostFigure.root]] : [])),
+  sink: pb => { myPb = pb; }, say: t => ui.placeName(t), body: () => boss?.pos, floor: FLOOR, size: LAYOUT.size || [30, 20], enterPov: () => { if (!pov) setPov(true); }});
+ui.addExtra('paintball', '🔫', 'Paintball', () => paintball.toggle());
+ui.addExtra('zombie', '🧟', 'Zombie', () => paintball.zombies());
 applyMode(); applyQuality();
 drawSky(new Date().getHours()); drawClock();
 pollState();

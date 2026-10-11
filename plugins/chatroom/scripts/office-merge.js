@@ -92,7 +92,7 @@ export function mergeStatic({THREE, scene, items = [], extra = [], skip = () => 
       mesh.castShadow = first.castShadow; mesh.receiveShadow = first.receiveShadow;
       mesh.matrixAutoUpdate = false; mesh.userData.merged = true;
       // clicks and the TV's line of sight ray-cast the scene: do it on the small originals (as before), not on every triangle of the big piece
-      mesh.raycast = (rc, hits) => { const found = []; for (const o of group) o.raycast(rc, found); for (const h of found) { h.object = mesh; hits.push(h); } };
+      mesh.raycast = (rc, hits) => { const found = []; for (const o of group) o.raycast(rc, found); for (const h of found) { const o = h.object; if (h.face) h.face = {...h.face, normal: h.face.normal.clone().transformDirection(o.matrixWorld)}; h.object = mesh; hits.push(h); } };   // the face normal now in world space: the baked piece has no transform of its own
       holder.add(mesh);
       for (const o of group) { o.visible = false; hidden.push(o); }
       pieces++;
