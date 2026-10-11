@@ -60,9 +60,67 @@ def person(d):
             'state': 'break' if d.get('state') == 'break' else 'work'}
 
 
+class Mailbox:
+    """the messages of a match in real time, numbered, kept for a moment; a reader asks for what is newer than n and may wait a little for it.
+    The host numbers them; a guest keeps a mirror of the host's with the same numbers"""
+
+    def __init__(self):
+        self.items, self.n, self.cond = deque(maxlen=400), 0, threading.Condition()
+
+    def reset(self):
+        with self.cond:
+            self.items.clear()
+            self.n = 0
+            self.cond.notify_all()
+
+    def add(self, frm, m):
+        with self.cond:
+            self.n += 1
+            self.items.append({'n': self.n, 'from': frm, 'm': m})
+            self.cond.notify_all()
+            return self.n
+
+    def mirror(self, items):
+        with self.cond:
+            have = {it['n'] for it in self.items}
+            for it in sorted(items, key=lambda x: x['n']):
+                if it['n'] not in have:
+                    self.items.append(it)
+                    self.n = max(self.n, it['n'])
+            self.cond.notify_all()
+
+    def since(self, n, wait=0.0, skip=None):
+        """what is newer than n (not written by skip), waiting up to `wait` seconds for the first; returns (items, the number to ask next time)"""
+        end = time.time() + wait
+        with self.cond:
+            while True:
+                out = [it for it in self.items if it['n'] > n and it['from'] != skip]
+                if out or time.time() >= end:
+                    return out[:100], self.n
+                self.cond.wait(max(0.001, end - time.time()))
+
+
+RT_KINDS = {'p': ('y', 'c'), 'b': ('n', 'x', 'y', 'vx', 'vy', 'sp', 'a', 'b', 'w', 'm', 'sv'), 'f': ('n', 'x', 'y', 'vx', 'vy', 'a', 'b', 'w', 'm'),
+            'q': ('c',), 'o': ('c',), 's': ()}   # paddle or rods, ping-pong ball, foosball ball, ping, pong, start
+
+
+def clean_rt(m):
+    """a realtime message of a match, checked: the match, the kind, and only the numbers that kind carries"""
+    if not isinstance(m, dict):
+        raise ValueError('a realtime message is an object')
+    k, g = str(m.get('k', '')), re.sub(r'[^a-z0-9]', '', str(m.get('g', '')))[:12]
+    if k not in RT_KINDS or not g:
+        raise ValueError('unknown realtime message')
+    out = {'k': k, 'g': g}
+    for f in RT_KINDS[k]:
+        if f in m:
+            out[f] = round(num(m[f], -5000, 5000), 3)
+    return out
+
+
 GONE = 15                                                   # seconds without a word: a guest (or the host) is gone
 GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play', 'pause', 'seek'),
-         'pool': ('new', 'join', 'shot', 'quit')}
+         'pool': ('new', 'join', 'shot', 'quit'), 'pingpong': ('new', 'join', 'quit'), 'foos': ('new', 'join', 'quit')}
 POOL_W, POOL_H = 800, 440                                   # the pool table's canvas (office-games.js)
 
 
@@ -138,6 +196,8 @@ def _clean_game(g):
             out['cue'] = g['cue']
             if g['cue'] == 'spin':
                 out['sp'] = -1 if g.get('sp') == -1 else 1
+        if g.get('fl') is not None:                       # a foul: one point less for the one who shot
+            out['fl'] = 1 if g.get('fl') in (1, True) else 0
         out['turn'] = int(num(g.get('turn'), 0, 1))
         if g.get('win') is not None:
             out['win'] = int(num(g.get('win'), 0, 1))
@@ -191,6 +251,7 @@ class Share:
         self.state = state                                   # share.json: port, PIN, tunnel, guests, kept across restarts
         self.room = room                                     # the room's own chat for friends: allowed(), read(since), config(), post(name, text)
         self.requests = []                                   # help asked by guests: {id, guest, text, ts, status, ...}
+        self.rt = Mailbox()                                  # the realtime messages of a match with a guest
         self.asks = []                                       # help the host asks a guest for: {id, to, text, ts, status, helper, ...}
         self.on_ask = self.on_line = None                    # chat.py hooks: a request came in (lend it by itself?), a guest line came in
         self.me_pos = None                                   # where the host's own figure is, from the viewer
@@ -361,6 +422,22 @@ class Share:
         if line:
             self._line({'from': who, 'text': line['text'], 'doc': line.get('doc')})
         return n
+
+    def rt_exchange(self, g, msgs, since, wait):
+        """a guest brings its realtime messages (at most 160 a second) and gets the newer ones from the others, waiting a little if there are none"""
+        now, q = time.time(), g.setdefault('rtq', deque())
+        while q and now - q[0] > 1:
+            q.popleft()
+        for m in (msgs if isinstance(msgs, list) else [])[:40]:
+            if len(q) >= 160:
+                break
+            try:
+                self.rt.add(g['name'], clean_rt(m))
+                q.append(now)
+            except ValueError:
+                pass
+        items, top = self.rt.since(int(num(since, 0, 1e9)), num(wait, 0, 0.15), skip=g['name'])
+        return {'items': items, 'n': top}
 
     def room_post(self, g, text, cid=None):
         """a friend writes in the room's own chat: same limits as the common room, taken once per cid"""
@@ -576,6 +653,8 @@ def make_handler(share):
                     except (ValueError, TypeError):
                         raise ValueError('the document must be base64')
                     return self.send(200, {'n': share.doc(g, body.get('from'), body.get('name'), data, body.get('cid'))})
+                if path == '/share/rt':               # a guest's realtime messages in, the others' out (a match in real time)
+                    return self.send(200, share.rt_exchange(g, body.get('msgs'), body.get('since', 0), body.get('wait', 0)))
                 if path == '/share/request':          # a guest asks the host to lend an agent
                     return self.send(200, share.ask(g, body.get('text', '')))
                 if path == '/share/askanswer':        # a guest answers an ask of the host
@@ -778,13 +857,25 @@ def clean_pb(p):
             o, q = vec(s['o']), vec(s['p'])
             if o and q:
                 shots.append({'id': int(max(0, min(1e9, float(s['id'])))), 'o': o, 'p': q, 'n': vec(s.get('n')), 'h': clean_name(s['h']) if s.get('h') else None,
-                              'd': int(max(0, min(60, float(s.get('d') or 0)))), 'c': int(max(0, min(7, float(s.get('c') or 0))))})
+                              'd': int(max(0, min(60, float(s.get('d') or 0)))), 'c': int(max(0, min(7, float(s.get('c') or 0)))),
+                              'zi': int(max(0, min(1e9, float(s.get('zi') or 0)))), 'zd': int(max(0, min(80, float(s.get('zd') or 0))))})
         except (TypeError, ValueError, KeyError, OverflowError):
             pass
     try:
-        return {'on': True, 'hp': int(max(0, min(100, float(p.get('hp') or 0)))), 'w': int(max(0, min(2, float(p.get('w') or 0)))),
-                'k': int(max(0, min(1e6, float(p.get('k') or 0)))), 'shots': shots}
-    except (TypeError, ValueError, OverflowError):
+        out = {'on': True, 'hp': int(max(0, min(100, float(p.get('hp') or 0)))), 'w': int(max(0, min(2, float(p.get('w') or 0)))),
+               'k': int(max(0, min(1e6, float(p.get('k') or 0)))), 'shots': shots}
+        if p.get('z'):                    # zombie mode: when it started (who runs them), the wave, the kills, and the zombies themselves when they are this player's
+            out.update({'z': 1, 'zt': int(max(0, min(2.1e9, float(p.get('zt') or 0)))), 'zw': int(max(0, min(1e4, float(p.get('zw') or 0)))), 'zk': int(max(0, min(1e6, float(p.get('zk') or 0))))})
+            if isinstance(p.get('zs'), list):
+                out['zs'] = []
+                for f in p['zs'][:16]:        # a malformed zombie is skipped, the others stay
+                    try:
+                        out['zs'].append({'i': int(max(0, min(1e9, float(f['i'])))), 'x': round(max(-80.0, min(80.0, float(f['x']))), 2), 'z': round(max(-80.0, min(80.0, float(f['z']))), 2),
+                                          'r': round(max(-7.0, min(7.0, float(f.get('r') or 0))), 2), 'h': int(max(0, min(200, float(f.get('h') or 0)))), 's': int(max(0, min(2, float(f.get('s') or 0))))})
+                    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+                        pass
+        return out
+    except (TypeError, ValueError, KeyError, OverflowError):
         return None
 
 
@@ -931,6 +1022,7 @@ class Bridge:
         self.token = self.title = self.host = self.error = None
         self.n, self.people, self.requests, self.stopped = 0, [], [], threading.Event()
         self.asks, self.on_asks, self.asks_seen = [], None, set()         # the host's asks for help; on_asks(new pending ones)
+        self.rt_box, self.rt_out, self.rt_until, self.rt_n, self.rt_ev = None, deque(maxlen=300), 0.0, 0, threading.Event()   # realtime: the local mirror, what waits to go, until when it runs, the host's number
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def start(self, token=None, title='', host=''):
@@ -949,6 +1041,7 @@ class Bridge:
         (self.dir / 'link.json').write_text(json.dumps({'role': 'guest', 'url': self.url, 'host': self.host, 'title': self.title, 'token': self.token}),
                                            encoding='utf-8')
         threading.Thread(target=self.run, daemon=True).start()
+        threading.Thread(target=self.rt_run, daemon=True).start()
 
     def run(self):
         last_presence = last_office = 0
@@ -1024,6 +1117,54 @@ class Bridge:
                     self.people = []
             self.stopped.wait(0.3)                             # often enough for the figures to walk smoothly
         (self.dir / 'link.json').unlink(missing_ok=True)
+
+    def rt_send(self, m):
+        """a realtime message of the viewer, on its way to the host at once"""
+        self.rt_out.append(m)
+        self.rt_until = time.time() + 15
+        self.rt_ev.set()
+
+    def _rt_call(self, batch, wait):
+        r = call(self.url, '/share/rt', self.token, {'since': self.rt_n, 'msgs': batch, 'wait': wait}, timeout=6)
+        items = []
+        for it in (r.get('items') or [])[:100]:
+            if isinstance(it, dict):
+                try:
+                    items.append({'n': int(it['n']), 'from': clean_name(it.get('from')), 'm': clean_rt(it.get('m'))})
+                except (ValueError, KeyError, TypeError):
+                    pass
+        if self.rt_box:
+            self.rt_box.mirror(items)
+        self.rt_n = max(self.rt_n, int(num(r.get('n', 0), 0, 1e9)))
+
+    def rt_run(self):
+        """while a match runs (the viewer sends or asks), two requests keep going: one that carries what the viewer sends the moment it is
+        written, one that asks for what is new and is held by the host for up to 80 ms when there is nothing: a message crosses in about
+        half a round trip of the tunnel, whichever way it goes"""
+        def sender():
+            while not self.stopped.is_set():
+                self.rt_ev.wait(0.25)
+                self.rt_ev.clear()
+                if not self.rt_out:
+                    continue
+                batch = [self.rt_out.popleft() for _ in range(min(40, len(self.rt_out)))]
+                try:
+                    self._rt_call(batch, 0)
+                except PermissionError:
+                    return
+                except (ValueError, OSError):
+                    self.stopped.wait(0.3)
+        threading.Thread(target=sender, daemon=True).start()
+        while not self.stopped.is_set():
+            if time.time() > self.rt_until:
+                self.stopped.wait(0.25)
+                continue
+            try:
+                self._rt_call([], 0.08)
+            except PermissionError:
+                break
+            except (ValueError, OSError):
+                self.stopped.wait(0.4)
 
     def push(self):
         """send what the guest's side wrote; a line is dropped only once the host took it"""

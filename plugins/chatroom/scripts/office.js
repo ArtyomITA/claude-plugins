@@ -428,7 +428,7 @@ function addWorkstation() {
   const out = {boxes: [], desks: []};
   workstation(out, best.x, best.z, 0);
   FLOOR.addBoxes(out.boxes); outCache.clear();
-  const d = buildDesk(out.desks[0], DESKS.length); DESKS.push(d);
+  const d = buildDesk(out.desks[0], DESKS.length); DESKS.push(d); climb = null;
   return d;
 }
 function deskLayout(names) {
@@ -454,7 +454,7 @@ class Person {
     const built = V.person({name, shirt: shirt || p.color, kind, scale: kind === 'intern' ? 0.62 : 1, look});
     this.lookKey = JSON.stringify(look);
     Object.assign(this, built, {name, kind, spot, pos: spot.pos.clone(), rot: spot.rot, path: [], act: 'idle', t: Math.random() * 10,
-                                look: null, spawn: spawn ? 0 : 1, bubbleUntil: 0, pose: spot.pose, jumpY: 0, jumpV: 0, jumps: 0, flip: -1});
+                                look: null, spawn: spawn ? 0 : 1, bubbleUntil: 0, pose: spot.pose, jumpY: 0, jumpV: 0, jumps: 0, flip: -1, vaulting: 0});
     this.root.position.copy(this.pos); this.root.rotation.y = this.rot;
     this.root.traverse(o => { o.userData.person = name; if (o.isMesh) raycastables.push(o); });
     scene.add(this.root);
@@ -522,7 +522,10 @@ class Person {
         T.headY = Math.max(-1, Math.min(1, ((want + Math.PI * 3) % (Math.PI * 2)) - Math.PI)); T.headX = -0.05;
       }
     }
-    if (this.jumpY > 0.02) { T.armL = T.armR = -2.5; T.armLz = -0.1; T.armRz = 0.1; T.legL = -0.7; T.legR = 0.25; }       // in the air: arms up, legs tucked
+    if (this.vaulting > 0) {                                               // climbing onto a desk: arms up on the edge, the body leans over it, the legs swing across
+      const u = this.vaulting, sw = Math.sin(Math.PI * u);
+      T.armL = T.armR = -2.9 + 1.4 * u; T.armLz = -0.12; T.armRz = 0.12; T.torso = 0.45 * sw; T.legL = -1.1 * sw; T.legR = -0.35 * sw; T.headX = 0.2 * sw;
+    } else if (this.jumpY > 0.02) { T.armL = T.armR = -2.5; T.armLz = -0.1; T.armRz = 0.1; T.legL = -0.7; T.legR = 0.25; }       // in the air: arms up, legs tucked
     const k = Math.min(1, dt * 10);
     P_.legL.rotation.x = lerp(P_.legL.rotation.x, T.legL, k); P_.legR.rotation.x = lerp(P_.legR.rotation.x, T.legR, k);
     P_.armL.rotation.x = lerp(P_.armL.rotation.x, T.armL, k); P_.armR.rotation.x = lerp(P_.armR.rotation.x, T.armR, k);
@@ -532,10 +535,11 @@ class Person {
     P_.head.rotation.z = lerp(P_.head.rotation.z, T.headZ, k);
     this.body.position.y = lerp(this.body.position.y, T.bob, Math.min(1, dt * 14));
     // a jump (Space); a second press in the air is a double jump with a somersault, level in first person where the camera follows the head
-    if (this.jumpV !== 0 || this.jumpY > 0) {
+    if (!this.vaulting && (this.jumpV !== 0 || this.jumpY > 0)) {
       this.jumpV -= 14 * dt; this.jumpY = Math.max(0, this.jumpY + this.jumpV * dt);
       if (this.jumpY === 0) { this.jumpV = 0; this.jumps = 0; }
     }
+    if (pov && this === boss && this.pos.y + this.jumpY > 1.1) { this.jumpY = Math.max(0, 1.1 - this.pos.y); if (this.jumpV > 0) this.jumpV = 0; }     // the camera never goes through the ceiling
     this.root.position.y = this.pos.y + this.jumpY;
     if (this.flip >= 0) {
       this.flip += dt / 0.62;
@@ -758,6 +762,7 @@ function interact() {
   if (t.kind === 'coffee') return walkTo(BREW.pos, BREW, brew);
   if (t.kind === 'sit') return walkTo(outOf(t.seat), t.seat);
   if (t.kind === 'talk') return talkTo(t.name);
+  if (t.kind === 'zap' || t.kind === 'game') document.exitPointerLock?.();        // a menu needs the mouse back
   if (t.kind === 'zap') return loungeTv.menu();
   if (t.kind === 'radio') return radio.menu();
   if (t.kind === 'game') return openGame(t.game);
@@ -794,51 +799,92 @@ function goToPoint(p) {
 }
 let leaving = false, doorToast = 0;
 /** W/S walk, A/D turn; looking around with the mouse turns the body once you walk */
-let climb = null;
+let climb = null, small = [], floorN = null;
+/** the pieces of furniture you can stand on (desks, tables, sofas, counters: 0.3 to 1.2 m high, at least 0.35 m2), the small things on them
+ *  (a monitor, a lamp, a plant: they stop you at any height they reach), and the floor plan of what can NOT be climbed (plants, cabinets, walls) */
 function climbList() {
   if (climb) return climb;
-  climb = [];
+  climb = []; small = [];
   const box = new THREE.Box3(), add = o => {
     box.setFromObject(o);
-    const w = box.max.x - box.min.x, d = box.max.z - box.min.z, top = box.max.y;
-    if (top >= 0.3 && top <= 1.2 && w * d >= 0.35 && w < 8 && d < 8) climb.push({x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, top});
+    const w = box.max.x - box.min.x, d = box.max.z - box.min.z, top = box.max.y, e = {x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, top};
+    if (top >= 0.3 && top <= 1.2 && w * d >= 0.35 && w < 8 && d < 8) climb.push(e);
+    else if (top > 0.15 && w < 3 && d < 3) small.push(e);
   };
-  for (const m of ITEM_MESHES) add(m);
+  for (const m of ITEM_MESHES) if (!m.isGroup) add(m);
   for (const d of DESKS) for (const o of d.g.userData.kit || []) add(o);
+  floorN = floorPlan(LAYOUT, {...PLACED, boxes: PLACED.boxes.filter(k => !climb.some(c => k.x > c.x0 - 0.15 && k.x < c.x1 + 0.15 && k.z > c.z0 - 0.15 && k.z < c.z1 + 0.15))});
   return climb;
 }
+/** a small thing at (x, z) that a figure whose feet are at `feet` (head 1.7 m higher) would walk into */
+const smallBlocks = (x, z, feet) => { climbList(); return small.some(e => x > e.x0 - 0.12 && x < e.x1 + 0.12 && z > e.z0 - 0.12 && z < e.z1 + 0.12 && e.top > feet + 0.05 && e.y0 < feet + 1.7); };
 /** the top of the piece of furniture under (x, z), grown by m metres, that a figure at height alt is above (null: none) */
 function climbTop(x, z, alt, m = 0) {
   let best = null;
   for (const b of climbList()) if (x > b.x0 - m && x < b.x1 + m && z > b.z0 - m && z < b.z1 + m && alt >= b.top - 0.05 && (best === null || b.top > best)) best = b.top;
   return best;
 }
-/** your figure stands on the floor or on what it is above; walking off an edge it falls, jumping onto a top it lands there */
-function settleBoss() {
-  if (!boss || boss.pose === 'sit' || boss.pose === 'sofa') return;
-  const alt = boss.pos.y + boss.jumpY, gh = climbTop(boss.pos.x, boss.pos.z, alt) ?? 0;
-  if (gh !== boss.pos.y) { boss.jumpY = Math.max(0, alt - gh); boss.pos.y = gh; }
+/** your figure stands on the floor or on what it is above: a step of up to 45 cm is climbed smoothly, a jump lands on the top it is above,
+ *  walking off an edge it falls */
+function settleBoss(dt = 0.02) {
+  if (!boss || vault || boss.pose === 'sit' || boss.pose === 'sofa') return;
+  const air = boss.jumpY > 0.02, alt = boss.pos.y + boss.jumpY, gh = climbTop(boss.pos.x, boss.pos.z, alt + (air ? 0 : 0.45)) ?? 0;
+  if (gh > boss.pos.y) {
+    if (air) { boss.jumpY = Math.max(0, alt - gh); boss.pos.y = gh; }
+    else boss.pos.y = Math.min(gh, boss.pos.y + Math.max(0.015, (gh - boss.pos.y) * Math.min(1, dt * 14)));
+  } else if (gh < boss.pos.y) { boss.jumpY = Math.max(0, alt - gh); boss.pos.y = gh; }
+}
+let vault = null;
+/** Space in front of a desk, a table, a sofa or a counter (up to about a metre above your feet): you climb onto it with your hands on the edge, smoothly */
+function tryVault() {
+  if (!boss || !pov || vault || boss.pose === 'sit' || boss.pose === 'sofa' || boss.path.length) return false;
+  const alt = boss.pos.y + boss.jumpY, dx = Math.sin(boss.rot), dz = Math.cos(boss.rot), at = d => climbTop(boss.pos.x + dx * d, boss.pos.z + dz * d, 99);
+  let enter = null;
+  for (let d = 0.25; d <= 0.95 && enter === null; d += 0.1) { const top = at(d); if (top !== null && top > alt + 0.12 && top - alt <= 1.15 && top <= 1.1) enter = d; }
+  if (enter === null) return false;
+  const target = at(enter);
+  let land = null;                                                                          // a spot on that top, a little way in and clear of what stands on it
+  for (const off of [0, 0.25, -0.25, 0.5, -0.5]) for (let d = enter + 0.15; d <= enter + 0.55 && !land; d += 0.1) {
+    const x = boss.pos.x + dx * d + dz * off, z = boss.pos.z + dz * d - dx * off, top = climbTop(x, z, 99);
+    if (top !== null && Math.abs(top - target) < 0.05 && !floorN.blocked(x, z, 0.1) && !smallBlocks(x, z, top)) land = {x, z, top};
+  }
+  if (!land) return false;
+  vault = {t: 0, dur: 0.62, x0: boss.pos.x, z0: boss.pos.z, y0: alt, x1: land.x, z1: land.z, top: land.top};
+  boss.jumpV = 0; boss.jumpY = 0; boss.pos.y = alt; boss.jumps = 0;
+  return true;
+}
+function stepVault(dt) {
+  vault.t += dt;
+  const u = Math.min(1, vault.t / vault.dur), e = u * u * (3 - 2 * u), rise = 1 - Math.pow(1 - Math.min(1, u * 1.35), 3);
+  boss.pos.x = vault.x0 + (vault.x1 - vault.x0) * e; boss.pos.z = vault.z0 + (vault.z1 - vault.z0) * e;
+  boss.pos.y = vault.y0 + (vault.top - vault.y0) * rise + 0.08 * Math.sin(Math.PI * u);
+  boss.jumpY = 0; boss.jumpV = 0; boss.vaulting = u || 0.001; boss.pose = 'stand';
+  if (u >= 1) { boss.pos.y = vault.top; boss.vaulting = 0; boss.spot = {pos: boss.pos.clone(), rot: boss.rot, pose: 'stand'}; vault = null; }
 }
 function drive(dt) {
-  settleBoss();
-  const f = (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0), turn = (keys.has('a') ? 1 : 0) - (keys.has('d') ? 1 : 0);
-  if (!pov || !boss || (!f && !turn)) { if (boss && boss.pose === 'walk' && !boss.path.length) boss.pose = 'stand'; return; }
+  if (vault) return stepVault(dt);
+  settleBoss(dt);
+  const f = (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0), side = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);        // W/S forward and back, A/D a step to the left or right
+  if (!pov || !boss || (!f && !side)) { if (boss && boss.pose === 'walk' && !boss.path.length) boss.pose = 'stand'; return; }
   if (seated(boss)) return standUp();
   if (boss.path.length) { if (me.rising) return; boss.path = []; me.then = null; }
   if (me.act === 'brew') me.act = 'idle';
   watching = null;
-  if (f) { boss.rot += me.yaw; me.yaw = 0; }
-  boss.rot += turn * dt * 2.4;
-  const step = f * dt * (f > 0 ? 2.0 : 1.2) * (boss.speed || 1), nx = boss.pos.x + Math.sin(boss.rot) * step, nz = boss.pos.z + Math.cos(boss.rot) * step;
+  boss.rot += me.yaw; me.yaw = 0; boss.faceRot = null;                                // the body follows the view
+  // forward is (sin, cos) of the heading, the right hand is (-cos, sin); diagonals are no faster than straight
+  let mx = f * Math.sin(boss.rot) - side * Math.cos(boss.rot), mz = f * Math.cos(boss.rot) + side * Math.sin(boss.rot);
+  const len = Math.hypot(mx, mz) || 1, step = dt * (f > 0 ? 2.0 : f < 0 ? 1.2 : 1.6) * (boss.speed || 1), nx = boss.pos.x + mx / len * step, nz = boss.pos.z + mz / len * step;
   const others = [...people.values(), ...remote.values(), assistant, hostFigure].filter(p => p && p !== boss);
   const bump = (x, z) => others.some(p => {                                   // people are solid: you cannot walk into them
     const d = Math.hypot(p.pos.x - x, p.pos.z - z);
     return d < 0.55 && d < Math.hypot(p.pos.x - boss.pos.x, p.pos.z - boss.pos.z);
   });
-  const alt = boss.pos.y + boss.jumpY, free = (x, z) => !blocked(x, z) || climbTop(x, z, alt, 0.3) !== null;     // above a piece of furniture you may walk over it
+  climbList();
+  const feet = boss.pos.y + boss.jumpY, alt = feet + (boss.jumpY > 0.02 ? 0 : 0.45), up = feet > 0.2;
+  const free = (x, z) => !floorN.blocked(x, z) && (!blocked(x, z) || climbTop(x, z, alt, 0.3) !== null) && !(up && smallBlocks(x, z, feet));      // above a piece of furniture (or a low step) you may walk over it, never through a plant or a cabinet
   if (free(nx, boss.pos.z) && !bump(nx, boss.pos.z)) boss.pos.x = nx;
   if (free(boss.pos.x, nz) && !bump(boss.pos.x, nz)) boss.pos.z = nz;
-  boss.pose = f ? 'walk' : 'stand'; boss.faceRot = null;
+  boss.pose = 'walk'; boss.faceRot = null;
   boss.spot = {pos: boss.pos.clone(), rot: boss.rot, pose: 'stand'};
 }
 /** the far end of the bridge: into the friend's office or back home; as host, into a guest's (choose if several) */
@@ -1081,6 +1127,7 @@ const povLook = HOME.target.clone(), _look = new THREE.Vector3(), _eye = new THR
 controls.enabled = !pov;
 function setPov(on) {
   if (!on && paintball?.active()) return paintball.lockMessage();
+  if (!on) document.exitPointerLock?.();
   pov = on; setPref('pov', on); povLocked = false; keys.clear();
   if (on) { povLook.copy(controls.target); tween = null; follow = false; flyHome = false; controls.enabled = false; me.yaw = 0; me.pitch = -0.08; }
   else flyHome = true;
@@ -1112,7 +1159,7 @@ let jumpSeq = 0;                                                            // h
 document.addEventListener('keydown', e => {
   if (e.key !== ' ' || e.repeat || !boss || mode === 'chat' || e.ctrlKey || e.metaKey || e.altKey || editor.active() || games.active() || loungeTv.open()) return;
   if (e.target.closest?.('input, textarea, select, button, a, [contenteditable]')) return;
-  if (boss.jump()) { jumpSeq++; e.preventDefault(); }
+  if (tryVault() || boss.jump()) { jumpSeq++; e.preventDefault(); }
 });
 window.addEventListener('blur', () => { keys.clear(); shiftHeld = false; });
 document.addEventListener('keydown', e => { if (e.key === 'Shift') shiftHeld = true; });
@@ -1120,15 +1167,20 @@ document.addEventListener('keydown', e => {
   if (e.key.toLowerCase() !== 't' || e.repeat || e.ctrlKey || e.metaKey || e.altKey || mode === 'chat' || !boss) return;
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (typing && typing.offsetParent !== null) return;
-  if (loungeTv.nearTv(boss.pos) < 8) { e.preventDefault(); loungeTv.menu(); }
+  if (loungeTv.nearTv(boss.pos) < 8) { e.preventDefault(); document.exitPointerLock?.(); loungeTv.menu(); }
 });
 document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftHeld = false; });
-renderer.domElement.addEventListener('pointermove', e => {                    // first person: drag to look around
-  if (!pov || !(e.buttons & 1)) return;
+const SENS = [0.0015, 0.0024, 0.0036, 0.0052];                              // mouse sensitivity (radians per pixel): slow, medium, fast, very fast
+let sensIdx = Math.max(0, Math.min(SENS.length - 1, +pref('sens', 1) || 0));
+const locked = () => document.pointerLockElement === renderer.domElement;
+renderer.domElement.addEventListener('pointermove', e => {                    // first person: the mouse looks (captured pointer), or a drag looks around
+  if (!pov || !(locked() || (e.buttons & 1))) return;
   watching = null;
-  me.yaw = (me.yaw - e.movementX * 0.005 + Math.PI * 3) % (Math.PI * 2) - Math.PI;
-  me.pitch = Math.max(-1.1, Math.min(0.7, me.pitch - e.movementY * 0.004));
+  if (locked() && povLocked && boss && !seated(boss) && !vault && !boss.path.length) { boss.rot = boss.faceRot = (boss.rot - e.movementX * SENS[sensIdx] + Math.PI * 3) % (Math.PI * 2) - Math.PI; }
+  else me.yaw = (me.yaw - e.movementX * (locked() ? SENS[sensIdx] : 0.005) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+  me.pitch = Math.max(-1.3, Math.min(1.2, me.pitch - e.movementY * (locked() ? SENS[sensIdx] : 0.004)));
 });
+document.addEventListener('pointerlockchange', () => { if (!locked()) keys.clear(); });
 const ui = createUI(root, {
   onExtra: k => { if (k === 'pingPong' || k === 'foosball' || k === 'poolTable') openGame(k); },
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
@@ -1141,13 +1193,14 @@ const ui = createUI(root, {
   onJoin: async (url, pin) => { const r = await post('join', url === null ? {leave: true} : {url, pin}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
   onCommonWrite: async text => { await post('common/post', {text}); pollCommon(); },
   onGame: async (game, text) => {
-    const before = myPool()?.id, r = await post('common/post', {text, game});
+    const before = myGameOf(game.type)?.id, r = await post('common/post', {text, game});
     if (r && !r.ok) { ui.roomTip(await r.text(), 20, 120); return pollCommon(); }
-    if (game.type === 'pool' && (game.op === 'new' || game.op === 'join')) return openMyPool(before);            // the panel's pool button opens the table too
+    if (['pool', 'pingpong', 'foos'].includes(game.type) && (game.op === 'new' || game.op === 'join')) return openMyGame(game.type, before);   // the panel's button opens the table too
     pollCommon();
   },
   onAnswer: async (id, ok, extra) => { const r = await post('join/answer', {id: +id, ok, ...extra}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon(); },
   onOpenPool: () => { const g = myPool(); if (g) openPoolTable(g); },
+  onOpenGame: type => { const g = myGameOf(type); if (g) openGameTable(g); },
   onCommonDoc: async (name, data, error) => {
     if (error) return ui.roomTip(error, 20, 120);
     const r = await post('common/doc', {name, data}); if (r && !r.ok) ui.roomTip(await r.text(), 20, 120); pollCommon();
@@ -1160,6 +1213,7 @@ const ui = createUI(root, {
   },
   onReset: () => { follow = false; if (pov) setPov(false); else tween = {pos: HOME.pos.clone(), target: HOME.target.clone()}; },
   onFollow: () => { follow = !follow && !!selected; },
+  onSens: () => { sensIdx = (sensIdx + 1) % SENS.length; setPref('sens', sensIdx); },
   onQuality: () => { quality = QUALITY[(QUALITY.indexOf(quality) + 1) % QUALITY.length]; setPref('quality', quality); applyQuality(); },
   onSelect: n => select(n),
   onTag: n => { if (mode === 'office') { mode = 'split'; applyMode(); } window.chatroom?.tag(n); },
@@ -1275,7 +1329,7 @@ function walkWhere(fig, pos) {
   if (far > 6) { fig.pos.copy(to); fig.path = []; fig.spot = spot; fig.pose = spot.pose; fig.rot = pos.rot; return; }
   fig.spot = spot;
   if (far < 0.05) { if (!fig.path.length) { fig.pose = spot.pose; fig.pos.y = to.y; } return; }
-  fig.path = [to.clone()]; fig.pose = 'walk'; fig.speed = 1.4;
+  fig.path = [to.clone()]; fig.pose = 'walk'; fig.speed = Math.max(1.2, Math.min(4, far / 0.35));      // far behind: faster, so a friend who runs (x2) is not left behind and then thrown forward
 }
 /** a figure again with another look, where the old one was */
 function rebuild(old, look, put) {
@@ -1341,13 +1395,14 @@ renderer.domElement.addEventListener('pointermove', e => {
 });
 renderer.domElement.addEventListener('pointerleave', () => { hoverRoom = null; });
 renderer.domElement.addEventListener('click', e => {
+  if (pov && povLocked && !editor.active() && !locked() && !games.active() && !loungeTv.open()) renderer.domElement.requestPointerLock?.();
   if (editor.active()) return;
   if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   const r = renderer.domElement.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
-  if (hit?.object.userData.remote) return loungeTv.menu();                       // the TV's remote: its menu
+  if (hit?.object.userData.remote) { document.exitPointerLock?.(); return loungeTv.menu(); }                       // the TV's remote: its menu
   if (hit?.object.userData.radio) return radio.menu();                           // the radio: its stations
   if (hit?.object.userData.game) return openGame(hit.object.userData.game);       // a games table: play
   const name = hit?.object.userData.person;
@@ -1409,7 +1464,7 @@ function placeTags() {
   const st = DATA.state, src = st.mod && Date.now() / 1000 - st.mod < 120 ? L.mod : Object.keys(st.agents || {}).length ? L.tail : L.nodata;
   ui.hud({title: `${DATA.config.icon || '💬'} ${DATA.config.title || DATA.config.topic || 'Chat room'}`, pct: pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null,
           waiting: D.waiting.size, working: work, idle, plan: D.closed ? `✅ ${L.done} v${D.closed.v}` : D.plan ? `🗳 ${L.plan(D.plan.v)}: ${L.votes(yes, D.names.length - yes)}` : '',
-          src: '📡 ' + src, mode, follow, quality, pov, run: running, edit: editor.active()});
+          src: '📡 ' + src, mode, follow, quality, pov, run: running, edit: editor.active(), sens: sensIdx});
   // labels the user gave to pieces of furniture, a little above each
   ui.itemLabels(ITEM_MESHES.filter(m => m.userData.label).map(m => {
     _v.copy(m.position); _v.y += 1.25; _v.project(camera);
@@ -1549,9 +1604,11 @@ if (FORCE) window.__officeStep = t => frame(t ?? performance.now());
 if (FORCE) Object.assign(window, {                                        // tests: walk by script, see who is where
   __officeWalk: (x, z) => goToPoint(new THREE.Vector3(x, 0, z)),
   __officeMe: () => boss && {x: boss.pos.x, y: boss.pos.y, jumpY: boss.jumpY, z: boss.pos.z, pose: boss.pose, path: boss.path.length, speed: boss.speed},
+  __officeVault: () => tryVault(), __officeRt: () => rt,
+  __officeClimb: (x, z) => ({climb: climbList().length, small: small.length, top: climbTop(x, z, 99), floorN: floorN.blocked(x, z, 0.1), floor: blocked(x, z), smallB: smallBlocks(x, z, 0.71), pose: boss.pose, path: boss.path.length, rot: boss.rot, pov}),
   __officeKey: (k, on) => { if (on) keys.add(k); else keys.delete(k); },
   __officeJump: () => boss.jump() && jumpSeq++,
-  __officeTele: (x, z, rot = 0) => { boss.pos.set(x, 0, z); boss.rot = rot; boss.path = []; boss.jumpY = 0; boss.jumpV = 0; boss.jumps = 0; boss.spot = {pos: boss.pos.clone(), rot, pose: 'stand'}; },
+  __officeTele: (x, z, rot = 0) => { boss.pos.set(x, 0, z); boss.pose = 'stand'; boss.rot = rot; boss.path = []; boss.jumpY = 0; boss.jumpV = 0; boss.jumps = 0; boss.spot = {pos: boss.pos.clone(), rot, pose: 'stand'}; },
   __officeOthers: () => [...remote.values(), hostFigure].filter(Boolean).map(p => ({name: p.name, x: +p.pos.x.toFixed(2), z: +p.pos.z.toFixed(2), pose: p.pose, follow: !!p.follow})),
   __officeSeats: () => sitSpots().length,
   __officeCam: (x, y, z, tx, ty, tz) => { tween = null; camera.position.set(x, y, z); controls.target.set(tx, ty, tz); controls.update(); },
@@ -1609,26 +1666,71 @@ const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(
   const near = p => { const x = p.x - m.position.x, z = p.z - m.position.z; return Math.hypot(Math.max(Math.abs(x * c - z * s) - w / 2, 0), Math.max(Math.abs(x * s + z * c) - d / 2, 0)); };
   return {type, near};
 });
-const myPool = () => replayGames(commonState?.games || []).games.find(x => x.type === 'pool' && !x.done && x.players.includes(myName()));
+/** the real-time channel for a match: rt.send(msg) goes to the friend's side in about half a round trip of the tunnel, rt.on(fn) gets (msg, from) for everything the others
+ *  send (the first request only notes where we are: what was said before is not replayed); the listener is removed by the function on() returns */
+const rt = (() => {
+  const handlers = new Set();
+  let running = false, n = null;
+  async function loop() {
+    running = true;
+    while (handlers.size) {
+      try {
+        const r = await fetch(`rt/poll?since=${n ?? 0}&wait=${n === null ? 0 : 0.2}`, {cache: 'no-store'});
+        if (!r.ok) throw new Error('rt');
+        const j = await r.json(), first = n === null;
+        n = j.n;
+        if (!first) for (const it of j.items) for (const h of [...handlers]) h(it.m, it.from);
+      } catch (e) { await new Promise(done => setTimeout(done, 500)); }
+    }
+    running = false; n = null;
+  }
+  return {
+    send: m => { fetch('rt/post', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(m)}).catch(() => {}); },
+    on(h) { handlers.add(h); if (!running) loop(); return () => handlers.delete(h); },
+  };
+})();
+const myGameOf = type => replayGames(commonState?.games || []).games.find(x => x.type === type && !x.done && x.players.includes(myName()));
+const myPool = () => myGameOf('pool');
 /** the friend a table waits for: the guest of our shared room, or the host whose room we joined */
 const friendName = () => commonState?.bridge?.joined ? commonState.bridge.host : commonState?.share?.guests?.[0]?.name || null;
 /** a table with a friend: open with both players, or waiting for the friend (one player); it turns into the game by itself when the friend comes in */
 function openPoolTable(g) {
   games.openPool(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎱 ${myName()} ${ui.t().quits}`, game: {type: 'pool', op: 'quit', id: g.id}}).then(() => pollCommon())});
 }
-/** my pool game as soon as its line is back: from a guest it goes out and returns through the host, a few seconds at most */
-async function openMyPool(before = null) {                                 // before: the game I had, which the new one must replace (not that table again)
+/** ping pong or foosball with a friend: the table waits for the friend, then the match runs on the real-time channel (office-games.js) */
+function openNetTable(g) {
+  games.openNet(g, {friend: friendName(), cancel: () => post('common/post', {text: `🎮 ${myName()} ${ui.t().quits}`, game: {type: g.type, op: 'quit', id: g.id}}).then(() => pollCommon()),
+                    send: m => rt.send({g: g.id, ...m}), on: fn => rt.on((m, from) => { if (m.g === g.id) fn(m, from); })});
+}
+const openGameTable = g => g.type === 'pool' ? openPoolTable(g) : openNetTable(g);
+/** my game of a kind as soon as its line is back: from a guest it goes out and returns through the host, a few seconds at most */
+async function openMyGame(type, before = null) {                           // before: the game I had, which the new one must replace (not that table again)
   for (let i = 0; i < 16; i++) {
     await pollCommon();
-    const g = myPool();
-    if (g && g.id !== before) return openPoolTable(g);
+    const g = myGameOf(type);
+    if (g && g.id !== before) return openGameTable(g);
     await new Promise(done => setTimeout(done, 400));
   }
   ui.roomTip(ui.t().poolLate, 20, 120);
 }
+const openMyPool = before => openMyGame('pool', before);
+/** the menu of a ping pong or foosball table: against the computer, or live with a friend */
+function matchMenu(kind) {
+  const me = myName(), all = replayGames(commonState?.games || []).games, mine = myGameOf(kind);
+  const busyOther = all.some(x => !x.done && x.type !== kind && x.players.length === 2 && x.players.includes(me));
+  const join = !mine && !busyOther && all.find(x => x.type === kind && !x.done && x.players.length === 1 && x.players[0] !== me);
+  const act = async op => {
+    if (op === 'open') return openNetTable(mine);
+    const r = await post('common/post', {text: `🎮 ${me} ${op === 'new' ? ui.t().poolOpens : ui.t().poolJoins}`, game: {type: kind, op, id: op === 'join' ? join.id : Math.random().toString(16).slice(2, 10)}});
+    if (r && !r.ok) return ui.roomTip(await r.text(), 20, 120);
+    return openMyGame(kind, mine?.id);
+  };
+  games.poolMenu({kind, friends: linked() && !busyOther, open: mine?.players.length === 2 ? mine.players.find(p => p !== me) : null, waiting: mine?.players.length === 1, restart: false,
+                  friend: friendName(), join: join ? join.players[0] : null, start: k => act(k === 'join' ? 'join' : k === 'new' ? 'new' : 'open')});
+}
 function openGame(type) {
-  if (type === 'pingPong') return games.pingPong();
-  if (type === 'foosball') return games.foosball();
+  if (type === 'pingPong') return matchMenu('pingpong');
+  if (type === 'foosball') return matchMenu('foos');
   const me = myName(), all = replayGames(commonState?.games || []).games, mine = myPool();
   const busyOther = all.some(x => !x.done && x.type !== 'pool' && x.players.length === 2 && x.players.includes(me));
   const join = !mine && !busyOther && all.find(x => x.type === 'pool' && !x.done && x.players.length === 1 && x.players[0] !== me);
@@ -1655,7 +1757,7 @@ function poolFromFriends() {
   const oid = games.openId(), og = oid && all.find(x => x.id === oid);
   if (og?.done?.quit && og.done.quit !== myName()) { games.close(); ui.placeName(ui.t().quitBy(og.done.quit)); }     // the friend left the table
   const wid = games.waitingId(), g = wid && all.find(x => x.id === wid);
-  if (g && !g.done && g.players.length === 2) { openPoolTable(g); ui.placeName(ui.t().poolStarts); }
+  if (g && !g.done && g.players.length === 2) { openGameTable(g); ui.placeName(ui.t().poolStarts); }
 }
 // fewer draw calls: the furniture, the desks' fixed pieces and the city are baked into a few big meshes while you look at them
 // (the editor sees the originals and bakes again when it closes)
@@ -1663,9 +1765,9 @@ const baked = mergeStatic({THREE, scene, items: ITEM_MESHES, extra: () => [...DE
                            skip: o => !!o.userData.person || !!(o.parent?.userData.kit && !o.parent.userData.kit.has(o))});
 let bakedEditing = false;
 // ------------------------------------------------------------------ paintball and zombies (office-paintball.js), switched on from the "Altro" menu
-paintball = createPaintball({THREE, scene, camera, canvas: renderer.domElement, root, pov: () => pov && povLocked, me: myName, lang: () => DATA.config.lang,
+paintball = createPaintball({THREE, scene, camera, canvas: renderer.domElement, root, rt, pov: () => pov && povLocked, me: myName, lang: () => DATA.config.lang,
   players: () => new Map([...remote].filter(([, f]) => f.root.visible).map(([n, f]) => [n, f.root]).concat(hostFigure?.root.visible ? [[hostFigure.name, hostFigure.root]] : [])),
-  sink: pb => { myPb = pb; }, say: t => ui.placeName(t), body: () => boss?.pos, floor: FLOOR, size: LAYOUT.size || [30, 20], enterPov: () => { if (!pov) setPov(true); }});
+  sink: pb => { myPb = pb; }, say: t => ui.placeName(t), body: () => boss && {x: boss.pos.x, y: boss.pos.y + (boss.jumpY || 0), z: boss.pos.z}, floor: FLOOR, size: LAYOUT.size || [30, 20], enterPov: () => { if (!pov) setPov(true); }, renderer, atmosphere: {hemi, sun, lamps}});
 ui.addExtra('paintball', '🔫', 'Paintball', () => paintball.toggle());
 ui.addExtra('zombie', '🧟', 'Zombie', () => paintball.zombies());
 applyMode(); applyQuality();

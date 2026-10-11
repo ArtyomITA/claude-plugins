@@ -157,7 +157,8 @@ export const L = {
        working: n => `${n} working`, idles: n => `${n} idle`, done: 'CLOSED', plan: v => `plan v${v}`, votes: (y, n) => `${y} yes / ${n} to vote`,
        split: 'Split', office: 'Office', chat: 'Chat', reset: 'View', follow: 'Follow', quality: q => `Quality: ${q}`,
        notify: 'Alerts', help: 'drag: orbit · wheel: zoom · click someone: inspect · click the floor, a chair or the coffee machine: go there · ←→: next agent · F: follow · Esc', tag: '@ Tag',
-       povHelp: 'W/S: walk · A/D: turn · drag: look around · E: what the hint says · Q: wave · click someone: inspect · Esc',
+       povHelp: 'WASD: walk (A/D sideways) · mouse: look (click to capture it, Esc frees it) · Shift: run · Space: jump, or climb a desk · E: what the hint says · Q: wave · Esc',
+       sensName: i => 'Mouse: ' + ['slow', 'medium', 'fast', 'very fast'][i || 0],
        common: 'Common room', commonAll: 'open to the whole room', commonSome: n => `open to ${n}`, commonClosed: 'by invitation',
        commonWho: 'Who may take a break here', commonAllLabel: 'the whole room', commonShare: 'share with connected friends',
        commonShareNote: 'works once friends can connect (coming)', friendOffice: 'Connected office',
@@ -173,7 +174,8 @@ export const L = {
        joins: 'joins game', puts: (m, c) => `puts ${m} on ${c}`, chose: 'has chosen', shows: 'shows', joinGame: 'Play', yourTurn: 'your turn',
        theirTurn: n => `${n}'s turn`, won: n => `${n} wins!`, draw: 'draw', waitingPlayer: 'waiting for an opponent',
        quitGame: 'Quit', quits: 'quits game', quitBy: n => `${n} quit`, oneGame: 'Finish or quit your game first', more: 'More', gamesTitle: 'Games', toolsTitle: 'Tools', pingPong: 'Ping pong', helpBtn: 'Help',
-       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', cue_classic: 'Classic', cue_power: 'Power', cue_precise: 'Precise', cue_spin: 'Spin', cue_classic_tip: 'The cue as it is', cue_power_tip: '+40% force, but the aim trembles ', cue_precise_tip: '-20% force, a long aim line with the bounce', cue_spin_tip: 'The cue ball curves (press 4 again to turn the other way)', goal: 'GOAL!', points: 'pts', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
+       poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', pingpong: 'Ping pong', foos: 'Foosball', theyWin: n => `${n} wins`, newMatch: 'Play with a friend, live', joinMatch: n => `Play with ${n}`,
+       matchFriends: 'Link with a friend to play together', liveMatch: 'live match', poolFouls: 'fouls: -1 point each', cue_classic: 'Classic', cue_power: 'Power', cue_precise: 'Precise', cue_spin: 'Spin', cue_classic_tip: 'The cue as it is', cue_power_tip: '+40% force, but the aim trembles ', cue_precise_tip: '-20% force, a long aim line with the bounce', cue_spin_tip: 'The cue ball curves (press 4 again to turn the other way)', goal: 'GOAL!', points: 'pts', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
        pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
@@ -200,7 +202,8 @@ export const L = {
        working: n => `${n} lavorano`, idles: n => `${n} idle`, done: 'CHIUSO', plan: v => `piano v${v}`, votes: (y, n) => `${y} sì / ${n} da votare`,
        split: 'Diviso', office: 'Ufficio', chat: 'Chat', reset: 'Vista', follow: 'Segui', quality: q => `Qualità: ${q}`,
        notify: 'Avvisi', help: 'trascina: ruota · rotella: zoom · clic su qualcuno: dettagli · clic sul pavimento, su una sedia o sulla macchinetta: ci vai · ←→: agente dopo · F: segui · Esc', tag: '@ Tagga',
-       povHelp: 'W/S: cammina · A/D: gira · trascina: guardati intorno · E: quello che dice il suggerimento · Q: saluta · clic su qualcuno: dettagli · Esc',
+       povHelp: 'WASD: cammina (A/D di lato) · mouse: guarda (clic per catturarlo, Esc lo libera) · Maiusc: corri · Spazio: salta o sali sulla scrivania · E: quello che dice il suggerimento · Q: saluta · Esc',
+       sensName: i => 'Mouse: ' + ['lento', 'medio', 'veloce', 'rapidissimo'][i || 0],
        common: 'Sala comune', commonAll: 'aperta a tutta la stanza', commonSome: n => `aperta a ${n}`, commonClosed: 'solo su invito',
        commonWho: 'Chi può fare la pausa qui', commonAllLabel: 'tutta la stanza', commonShare: 'condividi con gli amici collegati',
        commonShareNote: 'funziona quando gli amici potranno collegarsi (in arrivo)', friendOffice: 'Ufficio collegato',
@@ -216,7 +219,8 @@ export const L = {
        joins: 'entra nella partita', puts: (m, c) => `mette ${m} in ${c}`, chose: 'ha scelto', shows: 'mostra', joinGame: 'Gioca', yourTurn: 'tocca a te',
        theirTurn: n => `tocca a ${n}`, won: n => `vince ${n}!`, draw: 'pareggio', waitingPlayer: 'aspetta un avversario',
        quitGame: 'Abbandona', quits: 'abbandona la partita', quitBy: n => `${n} ha abbandonato`, oneGame: 'Prima finisci o abbandona la tua partita', more: 'Altro', gamesTitle: 'Giochi', toolsTitle: 'Strumenti', pingPong: 'Ping pong', helpBtn: 'Aiuto',
-       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', cue_classic: 'Classica', cue_power: 'Potente', cue_precise: 'Precisa', cue_spin: 'Effetto', cue_classic_tip: 'La stecca di sempre', cue_power_tip: '+40% di forza, ma la mira trema ', cue_precise_tip: '-20% di forza, linea di mira lunga con il rimbalzo', cue_spin_tip: 'La bianca curva (premi di nuovo 4 per girare dall altra parte)', goal: 'GOL!', points: 'punti', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
+       poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', pingpong: 'Ping pong', foos: 'Biliardino', theyWin: n => `Vince ${n}`, newMatch: 'Gioca con un amico, in diretta', joinMatch: n => `Gioca con ${n}`,
+       matchFriends: 'Collegati a un amico per giocare insieme', liveMatch: 'partita in diretta', poolFouls: 'falli: -1 punto ciascuno', cue_classic: 'Classica', cue_power: 'Potente', cue_precise: 'Precisa', cue_spin: 'Effetto', cue_classic_tip: 'La stecca di sempre', cue_power_tip: '+40% di forza, ma la mira trema ', cue_precise_tip: '-20% di forza, linea di mira lunga con il rimbalzo', cue_spin_tip: 'La bianca curva (premi di nuovo 4 per girare dall altra parte)', goal: 'GOL!', points: 'punti', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
        pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
@@ -302,7 +306,7 @@ const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b
 const revealed = new Set();
 
 export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
-                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onAnswer, onExtra}) {
+                                onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onOpenGame, onAnswer, onExtra, onSens}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   root.insertAdjacentHTML('beforeend', `<div class="o-tags"></div>
@@ -313,7 +317,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button></div>
       <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button></div>
       <div class="o-more"><div class="o-grp"><button data-b="more"></button></div><div class="o-menu"><h5 data-k="games"></h5><div data-k="games-list"></div>
-        <h5 data-k="tools"></h5><button data-b="look"></button><button data-b="follow"></button><button data-b="reset"></button><button data-b="quality"></button>
+        <h5 data-k="tools"></h5><button data-b="look"></button><button data-b="follow"></button><button data-b="reset"></button><button data-b="quality"></button><button data-b="sens"></button>
         <button data-b="notify"></button><button data-b="help"></button></div></div></div>
     <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
@@ -326,6 +330,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     if (b.dataset.x) { closeMenu(); const f = extras.get(b.dataset.x)?.fn; return f ? f() : onExtra?.(b.dataset.x); }
     const k = b.dataset.b;
     if (k === 'more') return menuEl.classList.toggle('o-open');
+    if (k === 'sens') return onSens();
     if (b.closest('.o-menu')) closeMenu();
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
     else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
@@ -408,7 +413,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       const gl = hk('games-list'), items = [['pingPong', '🏓', L.pingPong], ['foosball', '⚽', L.foosball], ['poolTable', '🎱', L.pool], ...[...extras].map(([k, v]) => [k, v.icon, v.text])];
       const gkey = items.map(i => i.join()).join('|');
       if (gl.dataset.key !== gkey) { gl.dataset.key = gkey; gl.innerHTML = items.map(([k, ic, tx]) => `<button data-x="${esc(k)}"><span class="o-ic">${ic}</span><span>${esc(tx)}</span></button>`).join(''); }
-      setBtn('quality', '✨', L.quality(d.quality)); setBtn('notify', '🔔', L.notify, '', notifyOn()); setBtn('help', '❓', L.helpBtn);
+      setBtn('quality', '✨', L.quality(d.quality)); setBtn('sens', '🖱', L.sensName(d.sens)); setBtn('notify', '🔔', L.notify, '', notifyOn()); setBtn('help', '❓', L.helpBtn);
       const ht = d.pov ? t().povHelp : t().help; if (helpEl.textContent !== ht) helpEl.textContent = ht;
     },
     inspect(d) {
@@ -450,7 +455,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
           <h4>🙋 ${esc(L.helpTitle)}</h4><textarea data-ask maxlength="1500" placeholder="${esc(L.askPlaceholder)}"></textarea>
           <button data-j="ask">${esc(L.askGo)}</button><div class="o-c-gstat o-meta"></div></div>
         <hr><h4>🎮 ${esc(L.games)}</h4><div class="o-grid"><button data-g="tris">⭕ ${esc(L.tris)}</button><button data-g="morra">✊ ${esc(L.morra)}</button>
-          <button data-g="pool">🎱 ${esc(L.pool)}</button><button data-g="dadi">🎲 ${esc(L.dice)}</button></div><div class="o-c-games"></div>
+          <button data-g="pool">🎱 ${esc(L.pool)}</button><button data-g="pingpong">🏓 ${esc(L.pingpong)}</button><button data-g="foos">⚽ ${esc(L.foos)}</button><button data-g="dadi">🎲 ${esc(L.dice)}</button></div><div class="o-c-games"></div>
         <hr><h4>💬 ${esc(L.commonChat)}</h4><div class="o-c-msgs"></div>
         <div class="o-write"><input type="text" data-w="text" placeholder="${esc(L.commonWrite)}" maxlength="32000">
           <label class="o-attach" title="${esc(L.attach)}">📎<input type="file" data-w="file" accept=".md,.txt,.json,.diff,.patch,.py,.js,.ts,.csv,.yaml,.yml,.toml,.sh,.ps1" hidden></label></div>`;
@@ -504,6 +509,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
         }
         else if (b.dataset.gm === 'join') onGame({type: b.dataset.type, op: 'join', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.joins} #${b.dataset.id}`);
         else if (b.dataset.gm === 'openpool') onOpenPool();
+        else if (b.dataset.gm === 'opengame') onOpenGame(b.dataset.type);
         else if (b.dataset.gm === 'quit') onGame({type: b.dataset.type, op: 'quit', id: b.dataset.id}, `🎮 ${lastCommon?.me} ${L.quits} #${b.dataset.id}`);
         else if (b.dataset.gm === 'move') onGame({type: 'tris', op: 'move', id: b.dataset.id, cell: +b.dataset.cell},
                                                  `🎮 ${lastCommon?.me} ${L.puts(b.dataset.mark, +b.dataset.cell + 1)}`);
@@ -580,7 +586,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       // the games: the latest ones first, with what you can do now
       const {games, dice} = replayGames(s.games || []), me = s.me, gbox = cp.querySelector('.o-c-games');
       const busy = games.some(x => !x.done && x.players.includes(me));
-      for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"], [data-g="pool"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
+      for (const b of cp.querySelectorAll('[data-g="tris"], [data-g="morra"], [data-g="pool"], [data-g="pingpong"], [data-g="foos"]')) { b.disabled = busy; b.title = busy ? L.oneGame : ''; }
       const ghtml = games.slice(0, 4).map(x => {
         const vs = x.players.map(esc).join(' – ') || '?', mine = x.players.includes(me), status = x.done
           ? (x.done.quit ? L.quitBy(x.done.quit) : x.done.draw ? L.draw : L.won(x.done.winner)) : x.players.length < 2 ? L.waitingPlayer : '';
@@ -591,6 +597,10 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
           const cells = x.board.map((v, i) => `<button class="o-cell${x.done?.line?.includes(i) ? ' o-win' : ''}" ${myTurn && !v ? `data-gm="move" data-id="${esc(x.id)}" data-cell="${i}" data-mark="${mark}"` : 'disabled'}>${v || ''}</button>`).join('');
           const turn = !x.done && x.players.length === 2 ? (myTurn ? L.yourTurn : L.theirTurn(x.players[x.turn])) : '';
           return `<div class="o-game"><b>⭕ ${esc(L.tris)}</b> <span class="o-meta">${vs}</span><div class="o-tris">${cells}</div><div class="o-meta">${esc(status || turn)}</div>${join}</div>`;
+        }
+        if (x.type === 'pingpong' || x.type === 'foos') {
+          const open = !x.done && mine ? `<button data-gm="opengame" data-type="${x.type}">${x.players.length === 2 ? '▶' : '⏳'} ${esc(L.openTable)}</button> ` : '';
+          return `<div class="o-game"><b>${x.type === 'foos' ? '⚽ ' + esc(L.foosball) : '🏓 Ping pong'}</b> <span class="o-meta">${vs}</span><div class="o-meta">${esc(status || (x.players.length === 2 ? L.liveMatch : ''))}</div>${open}${join}</div>`;
         }
         if (x.type === 'pool') {
           const myTurn = !x.done && x.players.length === 2 && x.players[x.turn] === me;

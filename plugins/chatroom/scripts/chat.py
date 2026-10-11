@@ -1084,6 +1084,7 @@ def cmd_serve(room, a):
     host = sharing.Share(common, room.config().get('title') or room.config().get('topic', ''), me()['name'], people=here_people,
                          office=office_for_visit, room=friends_room, search=tv_search, state=common.dir / 'share.json')
     lend_log = common.dir / 'lend.jsonl'
+    rt_box = host.rt                                         # a match in real time: its messages, here (host) or mirrored from the host (guest)
 
     def prepare_helper(rid, helper, who, text, model, effort, minutes):
         """a lent helper's prompt file and the LEND line for the lead, who spawns it; who is the friend it works for"""
@@ -1382,6 +1383,16 @@ def cmd_serve(room, a):
                 return self.send(200, json.dumps({**(b.room_cfg or {}), 'user_name': me()['name'], 'self_names': [], 'heartbeat': 120,
                                                   'leads': (b.room_cfg or {}).get('self_names', [])}, ensure_ascii=False),
                                  'application/json; charset=utf-8')
+            if path == '/rt/poll':                  # the viewer: the newer messages of the match, waiting a moment (up to a quarter second) for the first
+                q = urllib.parse.parse_qs(self.path.partition('?')[2])
+                try:
+                    since, wait = int(q.get('since', ['0'])[0]), min(0.25, max(0.0, float(q.get('wait', ['0'])[0])))
+                except ValueError:
+                    since, wait = 0, 0.0
+                if guest['bridge']:
+                    guest['bridge'].rt_until = time.time() + 15
+                items, top = rt_box.since(since, wait, skip=me()['name'])
+                return self.send(200, json.dumps({'items': items, 'n': top}), 'application/json')
             if path == '/presence.json':           # where everyone on the other side is, for figures that walk
                 b = guest['bridge']
                 people = host.people() if host.pin else (b.people if b else [])
@@ -1508,6 +1519,7 @@ def cmd_serve(room, a):
                     if act == 'start':
                         if guest['bridge']:
                             raise ValueError('leave the friend\'s room first')
+                        rt_box.reset()
                         host.start(str(body.get('via', 'cloudflared')))
                         set_shared(True)
                     elif act == 'stop':
@@ -1547,6 +1559,16 @@ def cmd_serve(room, a):
                     return self.send(200, json.dumps(b.room_post(body['text'])), 'application/json')
                 except (ValueError, PermissionError, OSError) as exc:
                     return self.send(502, str(exc), 'text/plain')
+            if path == '/rt/post':                 # the viewer: a message of a match in real time (a paddle, the ball...)
+                try:
+                    m = sharing.clean_rt(body)
+                except (ValueError, TypeError) as exc:
+                    return self.send(400, str(exc), 'text/plain')
+                if guest['bridge']:
+                    guest['bridge'].rt_send(m)
+                else:
+                    rt_box.add(me()['name'], m)
+                return self.send(200, '{}', 'application/json')
             if path == '/presence':                # the viewer: where the user's own figure is (and whose office)
                 pos = sharing.clean_pos(body)
                 host.me_pos = pos
@@ -1581,6 +1603,8 @@ def cmd_serve(room, a):
                 b = sharing.Bridge(common.dir, str(body.get('url', '')), str(body.get('pin', '')), me(), people=here_people,
                                    office=office_for_visit, outgoing=to_helpers, arrived=from_helpers)
                 b.on_asks, guest['lent'] = auto_answer, []
+                rt_box.reset()
+                b.rt_box = rt_box
                 tag_seen['n'] = None
                 try:
                     b.start()

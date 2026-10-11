@@ -18,6 +18,8 @@ const css = `
 .o-pb.o-str { background: linear-gradient(180deg, #f5f5f5 0 28%, var(--c) 28% 72%, #f5f5f5 72% 100%); }
 .o-pb.o-off { background: #ffffff1a; box-shadow: none; }
 .o-pb.o-eight { background: #111; color: #fff; font: 700 8px/11px sans-serif; text-align: center; }
+.o-pcue { font-size: 13px; }
+.o-pp small { color: #ef5350; font-size: 11px; }
 .o-pp { margin-left: auto; font-weight: 700; color: #ffd54f; white-space: nowrap; }
 .o-game-wait { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 0 2px; font-weight: 600; }
 .o-game-ov { position: absolute; inset: 0; background: rgba(8,10,16,.72); display: flex; align-items: center; justify-content: center; z-index: 30; }
@@ -196,39 +198,94 @@ export function createGames({root, t, me, sendShot}) {
   }
   const loop = fn => { let id = 0, last = performance.now(); const tick = now => { fn(Math.min(0.033, (now - last) / 1000)); last = now; id = requestAnimationFrame(tick); }; id = requestAnimationFrame(tick); return () => cancelAnimationFrame(id); };
 
-  // ping pong: your paddle on the left follows the mouse; where you hit the ball sets its angle, your paddle's speed its spin
-  function pingPong() {
-    const box = shell('🏓 Ping pong · ' + t().vsCpu), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
-    const s = {me: H / 2, cpu: H / 2, meV: 0, bx: W / 2, by: H / 2, vx: 0, vy: 0, spin: 0, pts: [0, 0], serve: 0, wait: 1, msg: ''}, trail = [];
-    let mouseY = H / 2;
+  // ---------------------------------------------------------------- ping pong and foosball: against the computer, or with a friend in real time.
+  // With a friend each side moves its own paddle (or rods) at once and sends where it is about 25 times a second; both sides simulate the ball with
+  // the same physics, so nothing waits for the tunnel; the creator of the game (net.role 0) is the referee: it sends the ball's state about fifteen
+  // times a second and at every bounce and point, and the other side moves its ball gently towards it (or snaps when it is far off). The other side
+  // guesses how old a snapshot is from a ping (half the round trip). Points are the referee's: the other side holds the ball at the edge until it hears.
+  /** the glue of a match in real time: send / listen, ping, the other's paddle, the rematch; `net` comes from the page (see office.js) */
+  function netSession(net, s, onSnap, onStart) {
+    const out = {rtt: 120, lastP: 0, lastY: null, oppAt: 0, off: null, sent: 0};
+    out.send = (m) => net.send(m);
+    out.off = net.on((m, from) => {
+      if (m.k === 'p') {                                                       // the other's paddle or rods
+        const now = performance.now(), dt = Math.max(0.02, (now - out.oppAt) / 1000);
+        if (out.oppAt) s.oppV = Math.max(-900, Math.min(900, (m.y - s.oppT) / dt)) * 0.5 + s.oppV * 0.5;
+        out.oppAt = now; s.oppT = m.y; if (m.c !== undefined) s.oppC = m.c;
+      } else if (m.k === 'q') net.send({k: 'o', c: m.c});                       // a ping: answered at once
+      else if (m.k === 'o') out.rtt = Math.max(10, Math.min(900, performance.now() - m.c));
+      else if (m.k === 's') onStart(m);
+      else onSnap(m);
+    });
+    const ping = setInterval(() => net.send({k: 'q', c: performance.now()}), 1000);
+    return {rtt: () => out.rtt, send: m => net.send(m), close() { out.off(); clearInterval(ping); },
+            /** your paddle, throttled: when it moved, at most every 40 ms, and now and then if it did not */
+            paddle(y, c) {
+              const now = performance.now();
+              if (now - out.lastP > 40 && (out.lastY === null || Math.abs(y - out.lastY) > 0.8 || now - out.lastP > 250 || c !== out.lastC)) {
+                out.lastP = now; out.lastY = y; out.lastC = c; net.send(c === undefined ? {k: 'p', y: +y.toFixed(1)} : {k: 'p', y: +y.toFixed(1), c});
+              }
+            }};
+  }
+
+  function pingPong(net = null) {
+    const role = net ? net.role : 0, X = x => role ? W - x : x;                // canonical: player 0 on the left; the second player sees the table turned round
+    const box = shell('🏓 Ping pong · ' + (net ? net.friend : t().vsCpu)), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
+    const s = {me: H / 2, opp: H / 2, oppT: H / 2, meV: 0, oppV: 0, bx: W / 2, by: H / 2, vx: 0, vy: 0, spin: 0, pts: [0, 0], serve: 0, wait: 1, msg: 0, hold: false, started: !net}, trail = [];
+    let mouseY = H / 2, seq = 0, lastSnap = 0;
     c.addEventListener('pointermove', e => { mouseY = pt(e)[1]; });
-    c.addEventListener('pointerdown', unlock);
-    const PH = 70, PW = 10, SP = 330;
-    const serve = () => { s.bx = W / 2; s.by = H / 2; const dir = s.serve ? 1 : -1; s.vx = dir * SP; s.vy = (Math.random() - 0.5) * 180; s.spin = 0; s.wait = 0.9; };
-    serve();
-    stop = loop(dt => {
+    const PH = 70, PW = 10, SP = 330, ref = !net || role === 0;                  // the referee decides points and serves
+    const serve = () => { s.bx = W / 2; s.by = H / 2; const dir = s.serve ? 1 : -1; s.vx = dir * SP; s.vy = (Math.random() - 0.5) * 180; s.spin = 0; s.wait = 0.9; s.hold = false; };
+    const snap = () => { lastSnap = performance.now(); if (net) ns.send({k: 'b', n: ++seq, x: +s.bx.toFixed(1), y: +s.by.toFixed(1), vx: +s.vx.toFixed(1), vy: +s.vy.toFixed(1), sp: +s.spin.toFixed(1), a: s.pts[0], b: s.pts[1], w: +Math.max(0, s.wait).toFixed(2), m: s.msg, sv: s.serve}); };
+    const reset = () => { s.pts = [0, 0]; s.msg = 0; s.serve = 0; serve(); };
+    const ns = net && netSession(net, s, m => {                                 // the referee's snapshot: the ball, the points, the serve
+      if (m.k !== 'b' || role === 0) return;
+      const d = Math.min(0.3, ns.rtt() / 2000), tx = m.x + (m.w > 0 ? 0 : m.vx * d), ty = m.y + (m.w > 0 ? 0 : m.vy * d), err = Math.hypot(tx - s.bx, ty - s.by);
+      if (s.hold || err > 60 || m.w > 0 || !s.started) { s.bx = tx; s.by = ty; } else { s.bx += (tx - s.bx) * 0.5; s.by += (ty - s.by) * 0.5; }
+      s.vx = m.vx; s.vy = m.vy; s.spin = m.sp; s.pts = [m.a, m.b]; s.wait = m.w; s.msg = m.m; s.serve = m.sv; s.hold = false; s.started = true;
+    }, () => {                                                                  // 's': the other is ready (or asks for another game); the referee starts, the other follows
+      if (role === 0) { if (!s.started || s.msg) { s.started = true; reset(); snap(); ns.send({k: 's'}); } }
+      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; }
+    });
+    if (ref && !net) serve();
+    let readyAt = 0;
+    c.addEventListener('pointerdown', () => { unlock(); if (s.msg) { if (net) { if (role === 0) { reset(); snap(); ns.send({k: 's'}); } else ns.send({k: 's'}); } else pingPong(); } });
+    const stopLoop = loop(dt => {
       const prev = s.me; s.me += (Math.max(PH / 2, Math.min(H - PH / 2, mouseY)) - s.me) * Math.min(1, dt * 18); s.meV = (s.me - prev) / dt;
-      const aim = s.by + (s.vx > 0 ? 0 : (H / 2 - s.by) * 0.6);                    // the computer watches the ball, a little late
-      s.cpu += Math.max(-260 * dt, Math.min(260 * dt, aim - s.cpu));
-      if (s.wait > 0) s.wait -= dt;
-      else if (!s.msg) {
-        s.vy += s.spin * dt; s.spin *= 0.985; s.bx += s.vx * dt; s.by += s.vy * dt;
-        if (s.by < 8 || s.by > H - 8) { s.vy *= -1; s.by = Math.max(8, Math.min(H - 8, s.by)); sound('rail', 3); }
-        const hit = (px, py, dir) => {
-          if (Math.abs(s.bx - px) > PW || Math.abs(s.by - py) > PH / 2 + 6 || Math.sign(s.vx) !== -dir) return;
-          const off = (s.by - py) / (PH / 2), sp = Math.min(760, Math.abs(s.vx) * 1.06 + 12);
-          s.vx = dir * sp; s.vy = off * 300 + (dir > 0 ? s.meV * 0.25 : 0); s.spin = dir > 0 ? -s.meV * 0.6 : (Math.random() - 0.5) * 200; s.bx = px + dir * PW; sound('hit', 7);
-        };
-        hit(30, s.me, 1); hit(W - 30, s.cpu, -1);
-        if (s.bx < -10 || s.bx > W + 10) {
-          s.pts[s.bx < 0 ? 1 : 0]++; s.serve = s.bx < 0 ? 0 : 1; sound('pot', 6);
-          if (Math.max(...s.pts) >= 11 && Math.abs(s.pts[0] - s.pts[1]) >= 2) s.msg = s.pts[0] > s.pts[1] ? t().youWin : t().cpuWins; else serve();
-        }
+      if (net) {
+        ns.paddle(s.me);
+        s.opp += (s.oppT - s.opp) * Math.min(1, dt * 20);
+        if (!s.started && role === 1 && performance.now() - readyAt > 400) { readyAt = performance.now(); ns.send({k: 's'}); }     // "I am here": until the referee's first snapshot
+      } else {
+        const aim = s.by + (s.vx > 0 ? 0 : (H / 2 - s.by) * 0.6);                    // the computer watches the ball, a little late
+        s.opp += Math.max(-260 * dt, Math.min(260 * dt, aim - s.opp));
       }
+      if (s.started && s.wait > 0) s.wait -= dt;
+      else if (s.started && !s.msg && !s.hold) {
+        s.vy += s.spin * dt; s.spin *= 0.985; s.bx += s.vx * dt; s.by += s.vy * dt;
+        let event = false;
+        if (s.by < 8 || s.by > H - 8) { s.vy *= -1; s.by = Math.max(8, Math.min(H - 8, s.by)); sound('rail', 3); event = true; }
+        const hit = (px, side, dir) => {
+          if (Math.abs(s.bx - px) > PW || Math.abs(s.by - (side === role ? s.me : s.opp)) > PH / 2 + 6 || Math.sign(s.vx) !== -dir) return;
+          const py = side === role ? s.me : s.opp, v = side === role ? s.meV : net ? s.oppV : 0, off = (s.by - py) / (PH / 2), sp = Math.min(760, Math.abs(s.vx) * 1.06 + 12);
+          s.vx = dir * sp; s.vy = off * 300 + v * 0.25; s.spin = net || side === role ? -v * 0.6 : (Math.random() - 0.5) * 200; s.bx = px + dir * PW; sound('hit', 7); event = true;
+        };
+        hit(30, 0, 1); hit(W - 30, 1, -1);
+        if (s.bx < -10 || s.bx > W + 10) {
+          if (ref) {
+            s.pts[s.bx < 0 ? 1 : 0]++; s.serve = s.bx < 0 ? 0 : 1; sound('pot', 6);
+            if (Math.max(...s.pts) >= 11 && Math.abs(s.pts[0] - s.pts[1]) >= 2) { s.msg = s.pts[0] > s.pts[1] ? 1 : 2; } else serve();
+            event = true;
+          } else { s.hold = true; s.vx = s.vy = 0; s.bx = s.bx < 0 ? -10 : W + 10; }                                // wait for the referee's word
+        }
+        if (net && role === 0 && (event || performance.now() - lastSnap > 66)) snap();
+      }
+      if (net && role === 0 && s.started && (s.wait > 0 || s.msg) && performance.now() - lastSnap > 150) snap();                   // keep the other informed while nothing moves
+      // the table, as the player sees it: own side on the left, the net, the score as faint figures behind
       let gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#1976d2'); gr.addColorStop(1, '#0a3b86'); g.fillStyle = gr; g.fillRect(0, 0, W, H);
       g.strokeStyle = 'rgba(255,255,255,.92)'; g.lineWidth = 4; g.strokeRect(10, 10, W - 20, H - 20); g.lineWidth = 2; g.beginPath(); g.moveTo(10, H / 2); g.lineTo(W - 10, H / 2); g.stroke();
-      g.font = '800 130px Segoe UI'; g.textAlign = 'center'; g.fillStyle = 'rgba(255,255,255,.07)'; g.fillText(s.pts[0], W * 0.25, H / 2 + 45); g.fillText(s.pts[1], W * 0.75, H / 2 + 45); g.textAlign = 'left';
-      g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(W / 2 - 9, 0, 18, H);                                  // the net: its shadow, the band, the mesh and the posts
+      g.font = '800 130px Segoe UI'; g.textAlign = 'center'; g.fillStyle = 'rgba(255,255,255,.07)'; g.fillText(s.pts[role], W * 0.25, H / 2 + 45); g.fillText(s.pts[1 - role], W * 0.75, H / 2 + 45); g.textAlign = 'left';
+      g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(W / 2 - 9, 0, 18, H);
       g.fillStyle = 'rgba(245,245,245,.92)'; g.fillRect(W / 2 - 2, 0, 4, H);
       g.fillStyle = '#b0bec5'; for (let y = 12; y < H; y += 10) g.fillRect(W / 2 - 3, y, 6, 2);
       g.fillStyle = '#78909c'; for (const y of [4, H - 4]) { g.beginPath(); g.arc(W / 2, y, 6, 0, 7); g.fill(); }
@@ -238,77 +295,117 @@ export function createGames({root, t, me, sendShot}) {
         g.fillStyle = rubber; rr(dir > 0 ? x - PW : x, y - PH / 2, PW, PH, 5); g.fill();
         g.fillStyle = 'rgba(255,255,255,.22)'; g.fillRect((dir > 0 ? x - PW : x) + 2, y - PH / 2 + 4, 2, PH - 8);
       };
-      paddle(30, s.me, '#e53935', 1); paddle(W - 30, s.cpu, '#263238', -1);
-      trail.push([s.bx, s.by]); if (trail.length > 9) trail.shift();
+      paddle(30, s.me, '#e53935', 1); paddle(W - 30, s.opp, '#263238', -1);                                  // (your paddle is always the left one on your screen)
+      const bx = role ? W - s.bx : s.bx;
+      if (!s.hold) { trail.push([bx, s.by]); if (trail.length > 9) trail.shift(); }
       trail.forEach(([x, y], i) => { g.fillStyle = `rgba(255,245,157,${(i + 1) / 40})`; g.beginPath(); g.arc(x, y, 2 + i * 0.55, 0, 7); g.fill(); });
-      g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(s.bx + 3, s.by + 5, 7, 5, 0, 0, 7); g.fill();
-      gr = g.createRadialGradient(s.bx - 2, s.by - 2, 1, s.bx, s.by, 8); gr.addColorStop(0, '#ffffff'); gr.addColorStop(1, '#ffeb3b'); g.fillStyle = gr; g.beginPath(); g.arc(s.bx, s.by, 7, 0, 7); g.fill();
-      score.textContent = `${t().you} ${s.pts[0]} – ${s.pts[1]} CPU`;
-      if (s.msg) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 30px Segoe UI'; g.textAlign = 'center'; g.fillText(s.msg + ' · ' + t().clickAgain, W / 2, H / 2 + 10); }
+      if (!s.hold && s.started) {
+        g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(bx + 3, s.by + 5, 7, 5, 0, 0, 7); g.fill();
+        gr = g.createRadialGradient(bx - 2, s.by - 2, 1, bx, s.by, 8); gr.addColorStop(0, '#ffffff'); gr.addColorStop(1, '#ffeb3b'); g.fillStyle = gr; g.beginPath(); g.arc(bx, s.by, 7, 0, 7); g.fill();
+      }
+      score.textContent = net ? `${s.pts[role]} – ${s.pts[1 - role]} ${net.friend}${!s.started ? ' · ⏳' : ''}` : `${t().you} ${s.pts[0]} – ${s.pts[1]} CPU`;
+      if (s.msg) { const won = s.msg - 1 === role; g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 30px Segoe UI'; g.textAlign = 'center'; g.fillText((won ? t().youWin : net ? t().theyWin(net.friend) : t().cpuWins) + ' · ' + t().clickAgain, W / 2, H / 2 + 10); g.textAlign = 'left'; }
     });
-    c.addEventListener('pointerdown', () => { if (s.msg) pingPong(); });
+    stop = () => { stopLoop(); ns?.close(); };
   }
 
-  // foosball: your rods (red) move together with the mouse, a click kicks; the computer (blue) does the same
-  function foosball() {
-    const box = shell('⚽ ' + t().foosball + ' · ' + t().vsCpu), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
-    const GOAL = 70, rods = [  // x, players, gap, team (0 = you, attacking right)
+  // foosball: your rods follow the mouse, a click kicks; against the computer or a friend (the same scheme as ping pong: you move your own rods at once)
+  function foosball(net = null) {
+    const role = net ? net.role : 0, X = x => role ? W - x : x, mine = role;      // team 0 attacks right (the creator of the game), team 1 left; the second player sees the table turned round
+    const box = shell('⚽ ' + t().foosball + ' · ' + (net ? net.friend : t().vsCpu)), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
+    const GOAL = 70, rods = [  // x, players, gap, team
       [50, 1, 0, 0], [130, 2, 120, 1], [200, 2, 140, 0], [310, 5, 70, 1], [400, 5, 70, 0], [490, 3, 110, 1], [600, 2, 140, 1], [670, 3, 110, 0], [750, 1, 0, 1]];
-    const s = {y: [0, 0], ball: {x: W / 2, y: H / 2, vx: 0, vy: 0}, kick: [0, 0], pts: [0, 0], msg: '', wait: 1, flash: 0}, trail = [];
-    let mouseY = H / 2;
+    const s = {y: [0, 0], ball: {x: W / 2, y: H / 2, vx: 0, vy: 0}, kick: [0, 0], pts: [0, 0], msg: 0, wait: 1, flash: 0, oppT: 0, oppV: 0, oppC: 0, hold: false, started: !net}, trail = [];
+    let mouseY = H / 2, kc = 0, seq = 0, lastSnap = 0, readyAt = 0;
+    const ref = !net || role === 0;
     c.addEventListener('pointermove', e => { mouseY = pt(e)[1]; });
-    c.addEventListener('pointerdown', () => { unlock(); if (s.msg) return foosball(); s.kick[0] = 0.18; });
-    const reset = toward => { s.ball = {x: W / 2, y: H / 2, vx: toward * 60, vy: (Math.random() - 0.5) * 120}; s.wait = 0.8; };
-    reset(Math.random() < 0.5 ? 1 : -1);
-    stop = loop(dt => {
-      s.y[0] += ((mouseY - H / 2) - s.y[0]) * Math.min(1, dt * 14);
-      s.y[1] += Math.max(-220 * dt, Math.min(220 * dt, (s.ball.y - H / 2) * 0.9 - s.y[1]));
+    const reset = toward => { s.ball = {x: W / 2, y: H / 2, vx: toward * 60, vy: (Math.random() - 0.5) * 120}; s.wait = 0.8; s.hold = false; };
+    const snap = () => { lastSnap = performance.now(); if (net) ns.send({k: 'f', n: ++seq, x: +s.ball.x.toFixed(1), y: +s.ball.y.toFixed(1), vx: +s.ball.vx.toFixed(1), vy: +s.ball.vy.toFixed(1), a: s.pts[0], b: s.pts[1], w: +Math.max(0, s.wait).toFixed(2), m: s.msg}); };
+    const restart = () => { s.pts = [0, 0]; s.msg = 0; reset(Math.random() < 0.5 ? 1 : -1); };
+    const ns = net && netSession(net, s, m => {
+      if (m.k !== 'f' || role === 0) return;
+      const d = Math.min(0.3, ns.rtt() / 2000), b = s.ball, tx = m.x + (m.w > 0 ? 0 : m.vx * d), ty = m.y + (m.w > 0 ? 0 : m.vy * d), err = Math.hypot(tx - b.x, ty - b.y);
+      if (s.hold || err > 60 || m.w > 0 || !s.started) { b.x = tx; b.y = ty; } else { b.x += (tx - b.x) * 0.5; b.y += (ty - b.y) * 0.5; }
+      b.vx = m.vx; b.vy = m.vy; s.pts = [m.a, m.b]; s.wait = m.w; s.msg = m.m; s.hold = false; s.started = true;
+    }, () => {
+      if (role === 0) { if (!s.started || s.msg) { s.started = true; restart(); snap(); ns.send({k: 's'}); } }
+      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; }
+    });
+    if (!net) reset(Math.random() < 0.5 ? 1 : -1);
+    c.addEventListener('pointerdown', () => {
+      unlock();
+      if (s.msg) { if (net) { if (role === 0) { restart(); snap(); ns.send({k: 's'}); } else ns.send({k: 's'}); } else foosball(); return; }
+      s.kick[mine] = 0.18; kc++;
+    });
+    let lastC = 0;
+    const stopLoop = loop(dt => {
+      s.y[mine] += ((mouseY - H / 2) - s.y[mine]) * Math.min(1, dt * 14);
+      const other = 1 - mine;
+      if (net) {
+        ns.paddle(s.y[mine], kc);
+        s.y[other] += (s.oppT - s.y[other]) * Math.min(1, dt * 20);
+        if (s.oppC !== lastC) { lastC = s.oppC; s.kick[other] = 0.18; }                                           // the other kicked
+        if (!s.started && role === 1 && performance.now() - readyAt > 400) { readyAt = performance.now(); ns.send({k: 's'}); }
+      } else s.y[1] += Math.max(-220 * dt, Math.min(220 * dt, (s.ball.y - H / 2) * 0.9 - s.y[1]));
       for (const k of [0, 1]) s.kick[k] = Math.max(0, s.kick[k] - dt);
       s.flash = Math.max(0, s.flash - dt);
       const b = s.ball;
-      if (s.wait > 0) s.wait -= dt;
-      else if (!s.msg) {
+      if (s.started && s.wait > 0) s.wait -= dt;
+      else if (s.started && !s.msg && !s.hold) {
+        let event = false;
         b.x += b.vx * dt; b.y += b.vy * dt; b.vx *= 0.995; b.vy *= 0.995;
-        if (b.y < 18 || b.y > H - 18) { b.vy *= -1; b.y = Math.max(18, Math.min(H - 18, b.y)); sound('rail', 3); }
+        if (b.y < 18 || b.y > H - 18) { b.vy *= -1; b.y = Math.max(18, Math.min(H - 18, b.y)); sound('rail', 3); event = true; }
         if (b.x < 14 || b.x > W - 14) {
-          if (Math.abs(b.y - H / 2) < GOAL) { s.pts[b.x < 14 ? 1 : 0]++; s.flash = 1; sound('pot', 7); if (Math.max(...s.pts) >= 5) s.msg = s.pts[0] > s.pts[1] ? t().youWin : t().cpuWins; else reset(b.x < 14 ? 1 : -1); }
-          else { b.vx *= -0.8; b.x = Math.max(14, Math.min(W - 14, b.x)); }
+          if (Math.abs(b.y - H / 2) < GOAL) {
+            if (ref) {
+              s.pts[b.x < 14 ? 1 : 0]++; s.flash = 1; sound('pot', 7); event = true;
+              if (Math.max(...s.pts) >= 5) s.msg = s.pts[0] > s.pts[1] ? 1 : 2; else reset(b.x < 14 ? 1 : -1);
+            } else { s.hold = true; b.vx = b.vy = 0; b.x = b.x < 14 ? 6 : W - 6; s.flash = 1; }                       // a goal: the referee will say
+          } else { b.vx *= -0.8; b.x = Math.max(14, Math.min(W - 14, b.x)); event = true; }
         }
         for (const [x, n, gap, team] of rods) {
           const dir = team ? -1 : 1;
-          if (team && Math.abs(b.x - x) < 60 && Math.sign(x - b.x) === dir && s.kick[1] <= 0 && Math.random() < dt * 6) s.kick[1] = 0.18;
+          if (!net && team && Math.abs(b.x - x) < 60 && Math.sign(x - b.x) === dir && s.kick[1] <= 0 && Math.random() < dt * 6) s.kick[1] = 0.18;     // the computer kicks now and then
           for (let i = 0; i < n; i++) {
             const py = H / 2 + (i - (n - 1) / 2) * gap + s.y[team];
             if (Math.abs(b.x - x) < 14 && Math.abs(b.y - py) < 16) {
               if (s.kick[team] > 0) { b.vx = dir * (430 + Math.random() * 120); b.vy = (b.y - py) * 18 + (Math.random() - 0.5) * 80; }
               else { b.vx = dir * Math.max(80, Math.abs(b.vx) * 0.6); b.vy += (b.y - py) * 4; }
-              b.x = x + dir * 15; sound('hit', s.kick[team] > 0 ? 9 : 4);
+              b.x = x + dir * 15; sound('hit', s.kick[team] > 0 ? 9 : 4); event = true;
             }
           }
         }
+        if (net && role === 0 && (event || performance.now() - lastSnap > 66)) snap();
       }
-      for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? '#2e7d32' : '#2a7430'; g.fillRect(i * W / 10, 0, W / 10, H); }          // the pitch, mown in stripes
+      if (net && role === 0 && s.started && (s.wait > 0 || s.msg) && performance.now() - lastSnap > 150) snap();
+      // the pitch, as the player sees it: own team on the left attacking right
+      for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? '#2e7d32' : '#2a7430'; g.fillRect(i * W / 10, 0, W / 10, H); }
       g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 3; g.strokeRect(8, 8, W - 16, H - 16); g.beginPath(); g.moveTo(W / 2, 8); g.lineTo(W / 2, H - 8); g.stroke();
       g.beginPath(); g.arc(W / 2, H / 2, 50, 0, 7); g.stroke(); g.strokeRect(8, H / 2 - GOAL - 20, 70, GOAL * 2 + 40); g.strokeRect(W - 78, H / 2 - GOAL - 20, 70, GOAL * 2 + 40);
       for (const x of [0, W - 10]) { g.fillStyle = '#263238'; g.fillRect(x, H / 2 - GOAL, 10, GOAL * 2); g.fillStyle = 'rgba(255,255,255,.22)'; for (let y = H / 2 - GOAL; y < H / 2 + GOAL; y += 8) g.fillRect(x, y, 10, 1); }
-      for (const [x, n, gap, team] of rods) {
-        const bar = g.createLinearGradient(x - 3, 0, x + 3, 0); bar.addColorStop(0, '#78909c'); bar.addColorStop(0.5, '#eceff1'); bar.addColorStop(1, '#78909c');
+      for (const [x0, n, gap, team] of rods) {
+        const x = X(x0), bar = g.createLinearGradient(x - 3, 0, x + 3, 0); bar.addColorStop(0, '#78909c'); bar.addColorStop(0.5, '#eceff1'); bar.addColorStop(1, '#78909c');
         g.fillStyle = bar; g.fillRect(x - 3, 0, 6, H);
+        const mineTeam = team === mine;
         for (let i = 0; i < n; i++) {
-          const py = H / 2 + (i - (n - 1) / 2) * gap + s.y[team], k = s.kick[team] > 0 ? (team ? -9 : 9) : 0, c1 = team ? '#42a5f5' : '#ef5350', c2 = team ? '#1565c0' : '#b71c1c';
-          g.fillStyle = 'rgba(0,0,0,.28)'; rr(x - 6 + k + 3, py - 14 + 4, 12, 28, 4); g.fill();                                  // a little man: shadow, body, head, shirt stripe
+          const py = H / 2 + (i - (n - 1) / 2) * gap + s.y[team], k = s.kick[team] > 0 ? (mineTeam ? 9 : -9) : 0, c1 = mineTeam ? '#ef5350' : '#42a5f5', c2 = mineTeam ? '#b71c1c' : '#1565c0';
+          g.fillStyle = 'rgba(0,0,0,.28)'; rr(x - 6 + k + 3, py - 14 + 4, 12, 28, 4); g.fill();
           const bg = g.createLinearGradient(x - 6, 0, x + 6, 0); bg.addColorStop(0, c1); bg.addColorStop(1, c2); g.fillStyle = bg; rr(x - 6 + k, py - 14, 12, 28, 4); g.fill();
           g.fillStyle = '#ffe0b2'; g.beginPath(); g.arc(x + k, py, 4.5, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(x - 6 + k, py - 14, 12, 3);
         }
       }
-      trail.push([b.x, b.y]); if (trail.length > 8) trail.shift();
+      const bx = X(b.x);
+      if (!s.hold) { trail.push([bx, b.y]); if (trail.length > 8) trail.shift(); }
       trail.forEach(([x, y], i) => { g.fillStyle = `rgba(255,255,255,${(i + 1) / 34})`; g.beginPath(); g.arc(x, y, 2 + i * 0.6, 0, 7); g.fill(); });
-      g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(b.x + 3, b.y + 5, 8, 5.5, 0, 0, 7); g.fill();
-      const bgr = g.createRadialGradient(b.x - 3, b.y - 3, 1, b.x, b.y, 9); bgr.addColorStop(0, '#fff'); bgr.addColorStop(1, '#cfd8dc'); g.fillStyle = bgr; g.beginPath(); g.arc(b.x, b.y, 8, 0, 7); g.fill();
+      if (s.started) {
+        g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(bx + 3, b.y + 5, 8, 5.5, 0, 0, 7); g.fill();
+        const bgr = g.createRadialGradient(bx - 3, b.y - 3, 1, bx, b.y, 9); bgr.addColorStop(0, '#fff'); bgr.addColorStop(1, '#cfd8dc'); g.fillStyle = bgr; g.beginPath(); g.arc(bx, b.y, 8, 0, 7); g.fill();
+      }
       if (s.flash > 0) { g.globalAlpha = Math.min(1, s.flash * 1.4); g.fillStyle = '#fff'; g.font = '800 64px Segoe UI'; g.textAlign = 'center'; g.fillText(t().goal, W / 2, H / 2 - 70 + (1 - s.flash) * -30); g.textAlign = 'left'; g.globalAlpha = 1; }
-      score.textContent = `${t().you} ${s.pts[0]} – ${s.pts[1]} CPU`;
-      if (s.msg) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 30px Segoe UI'; g.textAlign = 'center'; g.fillText(s.msg + ' · ' + t().clickAgain, W / 2, H / 2 + 10); }
+      score.textContent = net ? `${s.pts[mine]} – ${s.pts[1 - mine]} ${net.friend}${!s.started ? ' · ⏳' : ''}` : `${t().you} ${s.pts[0]} – ${s.pts[1]} CPU`;
+      if (s.msg) { const won = s.msg - 1 === mine; g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 30px Segoe UI'; g.textAlign = 'center'; g.fillText((won ? t().youWin : net ? t().theyWin(net.friend) : t().cpuWins) + ' · ' + t().clickAgain, W / 2, H / 2 + 10); g.textAlign = 'left'; }
     });
+    stop = () => { stopLoop(); ns?.close(); };
   }
 
   // pool: aim from the cue ball toward the mouse (a ghost ball shows where it first touches), hold to load the shot, let go: the cue strikes
@@ -362,6 +459,8 @@ export function createGames({root, t, me, sendShot}) {
     const st = vsCpu ? {balls: poolRack(), groups: {}, turn: me(), winner: null, players} : {balls: game.balls, groups: named(game.groups), turn: players[game.turn], winner: game.done?.winner || null, players};
     let mouse = [W / 2, H / 2], charge = 0, holding = false, frames = null, evs = null, fi = 0, after = null, cpuAt = 0, strike = null, chipKey = '', cue = 'classic', spinDir = 1;
     // the cue to shoot with: four buttons (or the keys 1 to 4; 4 again turns the spin the other way)
+    const fouls = {}, lastCue = {};                                                       // fouls and the cue last used, per player (from the shots played so far)
+    for (const sh of game?.shots || []) { fouls[sh.by] = (fouls[sh.by] || 0) + (sh.fl ? 1 : 0); lastCue[sh.by] = sh.cue || 'classic'; }
     const cuesEl = document.createElement('div'); cuesEl.className = 'o-cues'; box.insertBefore(cuesEl, bar);
     const drawCues = () => {
       cuesEl.innerHTML = Object.entries(CUES).map(([k, v]) => `<button data-c="${k}" class="${cue === k ? 'o-on' : ''}" title="${esc(t()['cue_' + k + '_tip'])}">`
@@ -397,7 +496,8 @@ export function createGames({root, t, me, sendShot}) {
           const shooter = st.turn, judged = poolJudge(st, shooter, res);
           after = () => {
             Object.assign(st, {balls: judged.end, groups: judged.groups, turn: judged.turn, winner: judged.winner});
-            if (!vsCpu && shooter === me()) sendShot(game.id, {a: +angle.toFixed(5), p: +power.toFixed(4), ...(fx.cue ? {cue: fx.cue, ...(fx.cue === 'spin' ? {sp: fx.sp < 0 ? -1 : 1} : {})} : {}), end: judged.end, turn: players.indexOf(judged.turn),
+            fouls[shooter] = (fouls[shooter] || 0) + (judged.foul ? 1 : 0); lastCue[shooter] = fx.cue || 'classic';
+            if (!vsCpu && shooter === me()) sendShot(game.id, {a: +angle.toFixed(5), p: +power.toFixed(4), fl: judged.foul ? 1 : 0, ...(fx.cue ? {cue: fx.cue, ...(fx.cue === 'spin' ? {sp: fx.sp < 0 ? -1 : 1} : {})} : {}), end: judged.end, turn: players.indexOf(judged.turn),
                                                      groups: players.map(p => judged.groups[p] || null), win: judged.winner ? players.indexOf(judged.winner) : undefined});
           };
         }
@@ -407,6 +507,8 @@ export function createGames({root, t, me, sendShot}) {
     const api = {receive(line) {
       if (frames || strike || line.end === undefined) return;
       shoot(line.a, line.p, false, {cue: line.cue, sp: line.sp});
+      const who = line.by || players.find(x => x !== me());
+      fouls[who] = (fouls[who] || 0) + (line.fl ? 1 : 0); lastCue[who] = line.cue || 'classic';
       const then = strike.then;
       strike.then = () => { then(); after = () => Object.assign(st, {balls: line.end, groups: named(line.groups), turn: players[line.turn] || st.turn, winner: line.win == null ? null : players[line.win]}); };
     }};
@@ -415,6 +517,7 @@ export function createGames({root, t, me, sendShot}) {
       const gr = g.createLinearGradient(x0, y0, x1, y1); gr.addColorStop(0, C.body[0]); gr.addColorStop(0.14, C.body[1]); gr.addColorStop(1, C.body[2]);
       g.strokeStyle = gr; g.lineCap = 'round'; g.lineWidth = C.width; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
       g.strokeStyle = C.tip; g.lineWidth = C.width; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x0 - Math.cos(a) * 4, y0 - Math.sin(a) * 4); g.stroke();   // the tip and ferrule
+      if (kind === 'spin') { g.strokeStyle = '#2e9e4d'; g.lineWidth = C.width + 1; g.beginPath(); g.moveTo(x0 - Math.cos(a) * 22, y0 - Math.sin(a) * 22); g.lineTo(x0 - Math.cos(a) * 46, y0 - Math.sin(a) * 46); g.stroke(); }
       if (kind === 'power') { g.strokeStyle = '#ff7043'; g.lineWidth = 2; g.beginPath(); g.moveTo(x0 - Math.cos(a) * 30, y0 - Math.sin(a) * 30); g.lineTo(x0 - Math.cos(a) * 120, y0 - Math.sin(a) * 120); g.stroke(); }
       g.lineCap = 'butt'; g.lineWidth = 1;
     };
@@ -456,7 +559,13 @@ export function createGames({root, t, me, sendShot}) {
             const vx = Math.cos(a) * (Math.abs(tx - (RAIL + R)) < 0.5 || Math.abs(tx - (W - RAIL - R)) < 0.5 ? -1 : 1), vy = Math.sin(a) * (Math.abs(ty - (RAIL + R)) < 0.5 || Math.abs(ty - (H - RAIL - R)) < 0.5 ? -1 : 1);
             g.strokeStyle = 'rgba(255,255,255,.4)'; g.beginPath(); g.moveTo(tx, ty); g.lineTo(tx + vx * 160, ty + vy * 160); g.stroke();
           }
-          if (cue === 'spin') { g.strokeStyle = 'rgba(129,199,132,.9)'; g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, R + 7, spinDir > 0 ? -0.6 : Math.PI + 0.6 - 1.4, spinDir > 0 ? 0.8 : Math.PI + 0.6 + 0.2); g.stroke(); g.lineWidth = 1; }   // a hint of the curve
+          if (cue === 'spin') {                                                                                      // the way the cue ball will bend
+            const nx = -Math.sin(a) * spinDir, ny = Math.cos(a) * spinDir, len = Math.min(200, hit.t * 0.8 + 40);
+            g.strokeStyle = 'rgba(129,199,132,.95)'; g.lineWidth = 2; g.setLineDash([]); g.beginPath(); g.moveTo(cx, cy);
+            g.quadraticCurveTo(cx + Math.cos(a) * len * 0.6 + nx * 22, cy + Math.sin(a) * len * 0.6 + ny * 22, cx + Math.cos(a) * len + nx * 46, cy + Math.sin(a) * len + ny * 46); g.stroke();
+            const ex = cx + Math.cos(a) * len + nx * 46, ey = cy + Math.sin(a) * len + ny * 46, ta = Math.atan2(ey - (cy + Math.sin(a) * len * 0.6 + ny * 22), ex - (cx + Math.cos(a) * len * 0.6 + nx * 22));
+            g.beginPath(); g.moveTo(ex, ey); g.lineTo(ex - Math.cos(ta - 0.5) * 9, ey - Math.sin(ta - 0.5) * 9); g.lineTo(ex - Math.cos(ta + 0.5) * 9, ey - Math.sin(ta + 0.5) * 9); g.closePath(); g.fillStyle = 'rgba(129,199,132,.95)'; g.fill(); g.lineWidth = 1;
+          }
           g.lineWidth = 1;
         }
         const back = strike ? strike.back * (1 - Math.min(1, strike.t / 0.1)) + 3 : 14 + charge * 60;
@@ -470,8 +579,10 @@ export function createGames({root, t, me, sendShot}) {
       const html = players.map(p => {
         const grp = st.groups[p], list = grp === 'solids' ? [1, 2, 3, 4, 5, 6, 7] : grp === 'stripes' ? [9, 10, 11, 12, 13, 14, 15] : [];
         const left = list.filter(n => balls[n]), dot = n => balls[n] ? `<i class="o-pb${n > 8 ? ' o-str' : ''}" style="--c:${COLORS[n]}"></i>` : '<i class="o-pb o-off"></i>';
-        return `<div class="o-pchip${st.turn === p && !st.winner ? ' o-turn' : ''}"><b>${esc(p)}</b><span class="o-pg">${grp ? esc(t()[grp]) : '?'}</span>`
-          + `<span class="o-pd">${list.map(dot).join('')}${grp && !left.length && balls[8] ? '<i class="o-pb o-eight">8</i>' : ''}</span><span class="o-pp">${list.length - left.length} ${esc(t().points)}</span></div>`;
+        const pts = list.length - left.length - (fouls[p] || 0), cu = CUES[p === me() ? cue : lastCue[p]];
+        return `<div class="o-pchip${st.turn === p && !st.winner ? ' o-turn' : ''}"><b>${esc(p)}</b>${cu ? `<span class="o-pcue" title="${esc(t()['cue_' + (p === me() ? cue : lastCue[p])])}">${cu.icon}</span>` : ''}<span class="o-pg">${grp ? esc(t()[grp]) : '?'}</span>`
+          + `<span class="o-pd">${list.map(dot).join('')}${grp && !left.length && balls[8] ? '<i class="o-pb o-eight">8</i>' : ''}</span>`
+          + `<span class="o-pp">${fouls[p] ? `<small title="${esc(t().poolFouls)}">⚠${fouls[p]}</small> ` : ''}${pts} ${esc(t().points)}</span></div>`;
       }).join('');
       if (html !== chipKey) { chipKey = html; chips.innerHTML = html; }
       bar.firstChild.textContent = waitingFor ? `⏳ ${t().poolWaiting(ctx.friend || t().poolWaitAny)}` : st.winner || frames || strike ? '' : canShoot() ? t().poolYourTurn : t().poolTheirTurn(st.turn);
@@ -483,12 +594,14 @@ export function createGames({root, t, me, sendShot}) {
   }
 
   /** the pool table's menu: against the computer, or a game with friends in the common room */
-  function poolMenu({friends, open, waiting, join, friend, restart, start}) {
-    const box = shell('🎱 ' + t().pool);
-    const m = document.createElement('div'); m.className = 'o-game-menu';
-    m.innerHTML = `<button data-k="cpu">🤖 ${t().vsCpu}</button>` + (friends ? (open ? `<button data-k="open">🎱 ${t().openGame(open)}</button>` : join
-      ? `<button data-k="join">🙋 ${t().joinPool(join)}</button>` : waiting ? `<button data-k="open">⏳ ${t().poolWaiting(friend || t().poolWaitAny)}</button>` : `<button data-k="new">👥 ${t().newPool}</button>`) : `<div>${t().poolFriends}</div>`) + (friends && restart ? `<button data-k="new">🔄 ${t().poolRestart}</button>` : '');
-    m.onclick = e => { const k = e.target.dataset?.k; if (k === 'cpu') pool(); else if (k) { close(); start(k); } };
+  function poolMenu({kind = 'pool', friends, open, waiting, join, friend, restart, start}) {
+    const icon = kind === 'pingpong' ? '🏓' : kind === 'foos' ? '⚽' : '🎱', cpu = kind === 'pingpong' ? () => pingPong() : kind === 'foos' ? () => foosball() : () => pool();
+    const box = shell(icon + ' ' + (kind === 'pingpong' ? 'Ping pong' : kind === 'foos' ? t().foosball : t().pool));
+    const m = document.createElement('div'), pl = kind === 'pool'; m.className = 'o-game-menu';
+    m.innerHTML = `<button data-k="cpu">🤖 ${t().vsCpu}</button>` + (friends ? (open ? `<button data-k="open">${icon} ${t().openGame(open)}</button>` : join
+      ? `<button data-k="join">🙋 ${pl ? t().joinPool(join) : t().joinMatch(join)}</button>` : waiting ? `<button data-k="open">⏳ ${t().poolWaiting(friend || t().poolWaitAny)}</button>` : `<button data-k="new">👥 ${pl ? t().newPool : t().newMatch}</button>`)
+      : `<div>${pl ? t().poolFriends : t().matchFriends}</div>`) + (friends && restart ? `<button data-k="new">🔄 ${t().poolRestart}</button>` : '');
+    m.onclick = e => { const k = e.target.dataset?.k; if (k === 'cpu') cpu(); else if (k) { close(); start(k); } };
     box.appendChild(m);
   }
   let current = null;
@@ -496,12 +609,24 @@ export function createGames({root, t, me, sendShot}) {
     active: () => !!ov,
     close,
     pingPong, foosball, poolMenu,
+    /** a ping pong or foosball match with a friend, in real time: waiting for the friend, or on (ctx: friend, send(msg), on(fn) -> off, cancel) */
+    openNet(game, ctx) {
+      current = {id: game.id, waiting: game.players.length < 2, api: null};
+      if (game.players.length < 2) {
+        const box = shell((game.type === 'pingpong' ? '🏓 Ping pong' : '⚽ ' + t().foosball)), w = document.createElement('div'); w.className = 'o-game-wait';
+        w.innerHTML = `<span>⏳ ${esc(t().poolWaiting(ctx.friend || t().poolWaitAny))}</span> <button>${t().poolCancel}</button>`;
+        w.querySelector('button').onclick = () => { close(); ctx.cancel?.(); };
+        box.appendChild(w);
+        return;
+      }
+      (game.type === 'pingpong' ? pingPong : foosball)({role: game.players[0] === me() ? 0 : 1, friend: game.players.find(p => p !== me()), send: ctx.send, on: ctx.on});
+    },
     /** a pool game with a friend, its state replayed from the common room */
     openPool(game, ctx = {}) { current = {id: game.id, waiting: game.players.length < 2, api: pool(game, ctx)}; },
     /** the id of the game whose table is open and still waiting for the friend (null otherwise) */
     openId: () => (current && ov ? current.id : null),
     waitingId: () => (current && current.waiting && ov ? current.id : null),
     /** a friend's shot arrived: the open table plays it */
-    shot(id, line) { if (current && current.id === id && ov) current.api.receive(line); },
+    shot(id, line) { if (current && current.id === id && current.api && ov) current.api.receive(line); },
   };
 }
