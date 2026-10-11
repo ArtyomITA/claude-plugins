@@ -189,3 +189,7 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+Modification notice (Apache License 2.0, section 4b): jsnes.min.js in this folder is jsnes 2.1.0 with one change by the chatroom plugin: the added mapper 113
+(HES NTD-8, needed by the "31 in 1 Real Game!" multicart), a small class next to the NINA-03/NINA-06 mapper, registered as 113 in the mapper table.

@@ -12,7 +12,8 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
-import {createTV, createRadio, createLofi, createMixer} from './office-tv.js';
+import {createTV, createRadio, createLofi, createMixer, mixLevel} from './office-tv.js';
+import {createArcade, ARCADE_AT} from './office-arcade.js';
 import {buildFloor} from './office-floor.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
@@ -133,7 +134,10 @@ try { const r = await fetch('settings.json', {cache: 'no-store'}); if (r.ok) myL
 if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
 const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: visit.items || DEFAULT_LAYOUT.items}
   : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: saved.items} : DEFAULT_LAYOUT;
-const PLACED = resolve(LAYOUT, {packSize: V.packSize}), FLOOR = floorPlan(LAYOUT, PLACED);
+const PLACED = resolve(LAYOUT, {packSize: V.packSize});
+const ARC_ON = !visit && LAYOUT.floor.zones.some(z => z.kind === 'common');                // the arcade cabinet stands in the common room, whatever the furniture of a saved office
+if (ARC_ON) PLACED.boxes.push({x: ARCADE_AT.x, z: ARCADE_AT.z, hw: ARCADE_AT.hw, hd: ARCADE_AT.hd, rot: ARCADE_AT.rot});
+const FLOOR = floorPlan(LAYOUT, PLACED);
 const [SIZE_X, SIZE_Z] = LAYOUT.size;
 const add = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); m.rotation.y = ry; scene.add(m); return m; };
 
@@ -773,6 +777,7 @@ function nearby() {
   if (loungeTv.near(boss.pos) < 1.4) opts.push({kind: 'zap', k: loungeTv.near(boss.pos)});
   if (radio && radio.near(boss.pos) < 1.3) opts.push({kind: 'radio', k: radio.near(boss.pos)});
   if (lofi && lofi.near(boss.pos) < 1.2) opts.push({kind: 'lofi', k: lofi.near(boss.pos)});
+  if (arcade && arcade.near(boss.pos) < 1.1) opts.push({kind: 'arcade', k: arcade.near(boss.pos) - 0.4});
   for (const g of GAME_TABLES) { const k = g.near(boss.pos); if (k < 0.8) opts.push({kind: 'game', game: g.type, k: k + 0.3}); }
   { const p = scoreboard.mesh.position; if (d(p) < 3.2 && facing(p) > 0.6) opts.push({kind: 'scores', k: d(p) + 0.5}); }
   for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
@@ -789,6 +794,7 @@ function interact() {
   if (t.kind === 'scores') return ui.scores();        // a menu needs the mouse back
   if (t.kind === 'zap') return loungeTv.menu();
   if (t.kind === 'radio') return radio.menu();
+  if (t.kind === 'arcade') return arcade.open();
   if (t.kind === 'lofi') return lofi.toggle();
   if (t.kind === 'game') return openGame(t.game);
   watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
@@ -1488,6 +1494,7 @@ renderer.domElement.addEventListener('click', e => {
   const hit = ray.intersectObjects(raycastables, false)[0];
   if (hit?.object.userData.remote) { document.exitPointerLock?.(); return loungeTv.menu(); }                       // the TV's remote: its menu
   if (hit?.object.userData.radio) return radio.menu();                           // the radio: its stations
+  if (hit?.object.userData.arcade) return arcade?.open();                          // the arcade cabinet: play
   if (hit?.object.userData.lofi) return lofi.toggle();                           // the common room's speakers: music on or off
   if (hit?.object.userData.game) return openGame(hit.object.userData.game);       // a games table: play
   const name = hit?.object.userData.person;
@@ -1667,7 +1674,7 @@ function frame(now) {
   if (now - shadowAt > (speed === 'use' ? 33 : speed === 'work' ? 66 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not: shadows keep up at 30 a second
   watchCinema();
   nearestLights(t);
-  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); paintball.update(dt);
+  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); arcade?.update(t, boss?.pos); paintball.update(dt);
   const drawAt = performance.now();
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
   if (FORCE) window.__officeTimes = {logic: drawAt - startAt, draw: performance.now() - drawAt, scale: dynScale};   // measuring: where a frame's time goes
@@ -1784,6 +1791,10 @@ function tvFromFriends() {
 const myName = () => commonState?.me || D.user;
 const games = createGames({root, t: ui.t, me: myName, onResult: reportResult,
   sendShot: (id, s) => post('common/post', {text: `🎱 ${myName()} ${ui.t().poolShot}`, game: {type: 'pool', op: 'shot', id, ...s}}).then(() => pollCommon())});
+/** the arcade cabinet of the common room (office-arcade.js): a click on it, E next to it, or Altro > 9999 IN 1 opens the player; the scores of a game go to the leaderboards */
+const arcade = ARC_ON ? createArcade({THREE, scene, camera, raycastables, root, Vox: V.Vox, mesh: V.mesh, lang: () => DATA.config.lang, say: t => ui.placeName(t), report: reportResult,
+                                      unlock: unlockAudio, volume: () => mixLevel('arcade'), onOpen: () => document.exitPointerLock?.()}) : null;
+if (arcade) ui.addExtra('arcade', '🕹', '9999 IN 1', () => arcade.open());
 const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(m => {
   const type = itemOf(m).type, [w, d] = CATALOG[type].foot, c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
   m.userData.game = type; raycastables.push(m);

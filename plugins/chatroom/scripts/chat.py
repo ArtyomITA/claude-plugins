@@ -1595,6 +1595,18 @@ def cmd_serve(room, a):
                 return self.send(200, target.read_bytes(), kinds[target.suffix])
             if path == '/board.json':                 # the task board: facts and tasks (task add/take/done)
                 return self.send(200, json.dumps(Board(room).load(), ensure_ascii=False), 'application/json; charset=utf-8')
+            if path.startswith('/arcade/'):           # the free games of the cabinet: their list, and each game of that list (no other file)
+                arcade, name = HERE.parent / 'arcade', path[len('/arcade/'):]
+                try:
+                    listed = {g['id'] for g in json.loads((arcade / 'games.json').read_text(encoding='utf-8')).get('games', [])}
+                except (OSError, ValueError, KeyError, TypeError):
+                    listed = set()
+                if name == 'games.json' and (arcade / name).is_file():
+                    return self.send(200, (arcade / name).read_bytes(), 'application/json; charset=utf-8')
+                m = re.fullmatch(r'([a-z0-9-]{1,40})\.nes', name)
+                if m and m[1] in listed and (arcade / name).is_file():
+                    return self.send(200, (arcade / name).read_bytes(), 'application/octet-stream')
+                return self.send(404, 'not found', 'text/plain')
             if path == '/state.json':
                 with lock:
                     state = activity.state()

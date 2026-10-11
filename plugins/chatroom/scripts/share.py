@@ -207,7 +207,7 @@ def _clean_game(g):
             out['win'] = int(num(g.get('win'), 0, 1))
     if kind == 'result':                              # the end of a game, for the leaderboards: who won, or the score of a run
         gk = str(g.get('g', ''))
-        if gk not in RESULT_MATCH and gk not in RESULT_SCORE and not re.fullmatch(r'arc-[a-z0-9]{1,20}', gk):
+        if gk not in RESULT_MATCH and gk not in RESULT_SCORE and not re.fullmatch(r'arc-[a-z0-9-]{1,32}', gk):
             raise ValueError('unknown game for a result')
         out['g'] = gk
         if gk in RESULT_MATCH:
@@ -1352,7 +1352,7 @@ def _prova():
                 continue
             raise AssertionError(f'a bad pool shot got in: {bad}')
         res = {'type': 'result', 'op': 'add', 'id': 'r1', 'g': 'foos', 'win': 1, 'opp': 'BOB', 'pts': [5, 3]}         # the leaderboards: results are checked, and counted once
-        assert clean_game(res)['pts'] == [5, 3] and clean_game({**res, 'opp': None})['opp'] == ''
+        assert clean_game(res)['pts'] == [5, 3] and clean_game({**res, 'opp': None})['opp'] == '' and clean_game({'type': 'result', 'op': 'add', 'id': 'a1', 'g': 'arc-super-tilt-bro', 'score': 5})['g'] == 'arc-super-tilt-bro'
         for bad in ({**res, 'g': 'chess'}, {**res, 'win': 2}, {**res, 'pts': [5, 3000]}, {**res, 'g': 'arc-a b'}, {'type': 'result', 'op': 'add', 'id': 'z', 'g': 'zombie', 'score': -1},
                     {'type': 'result', 'op': 'add', 'id': 'z', 'g': 'zombie', 'score': float('nan')}):
             try:
