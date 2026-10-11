@@ -248,8 +248,9 @@ function drawSky(hour) {
   sky.tex.needsUpdate = true;
   winLights.visible = night || dusk;
   for (const t of towerWindows) t.visible = night || dusk;
-  sun.color.set(night ? '#8ea4ff' : dusk ? '#ffb27a' : '#ffe8c4'); sun.intensity = night ? 0.45 : dusk ? 1.3 : 1.9;
-  hemi.intensity = night ? 0.45 : 0.85;
+  // the sky changes with the hour, the office does not go dark: at night the ceiling lights are on (a warm white from above)
+  sun.color.set(night ? '#fff1de' : dusk ? '#ffd1a8' : '#ffe8c4'); sun.intensity = night ? 1.25 : dusk ? 1.6 : 1.9;
+  hemi.intensity = night ? 0.8 : 0.85;
   for (const l of lamps) l.intensity = night ? 4.5 : dusk ? 2.5 : 1.0;
   scene.background.set(night ? '#11131d' : '#1c1f2c');
 }
@@ -1478,7 +1479,7 @@ function placeTags() {
 // Every point light costs every lit pixel, near or not, and the office has about thirty (lamps, the bridge, a beacon
 // on each desk, most of them off). Only the LIGHT_POOL nearest that are on stay in the scene, always that many so the
 // shaders never change; the others reach 3-8 m and are too far to show anyway.
-const LIGHT_POOL = 6;
+const LIGHT_POOL = 8;
 let pointLights = [], lightsAt = -1, lightsListedAt = -1;
 const _lp = new THREE.Vector3();
 function nearestLights(t) {

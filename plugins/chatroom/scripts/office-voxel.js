@@ -207,17 +207,28 @@ export function desk(top = '#c79a63') {
   v.box(11, 3, 1, 14, 5, 6, darker(top, 0.9)).box(12, 4, 7, 13, 4, 7, '#d8d8d8');                // drawers
   return mesh(v, {pivot: [8, 0, 4]});
 }
+/** a monitor at 2.5 cm: thin bezel round the screen (the live screen is a separate panel just in front), a casing
+ *  behind, a neck and a foot; 0.9 m wide, the screen from 0.2 to 0.8 m, front face at z = 0.05 */
 export function monitor(frame = '#22252c') {
-  const v = new Vox().box(0, 2, 0, 8, 7, 0, frame).box(4, 0, 0, 4, 1, 0, frame).box(2, 0, -1, 6, 0, 1, frame);
-  const g = new THREE.Group(); g.add(mesh(v, {pivot: [4.5, 0, 0.5]}));
+  const v = new Vox(), dark = darker(frame, 0.8);
+  v.box(0, 8, 0, 35, 31, 1, frame);                                          // bezel and panel
+  v.box(4, 11, -2, 31, 28, -1, dark).box(10, 14, -4, 25, 25, -3, dark);       // casing, stepping back
+  v.box(16, 2, -4, 19, 13, -3, '#3a3e47').box(12, 0, -7, 23, 1, 1, '#2b2e35');   // neck, foot
+  v.set(17, 9, 2, '#9aa3ad').set(18, 9, 2, '#9aa3ad').set(33, 9, 2, '#4caf50');  // logo, power light
+  const g = new THREE.Group(); g.add(mesh(v, {pivot: [18, 0, 0], scale: 0.025, jitter: 0.02}));
   return g;
 }
 export function laptop() {
   const v = new Vox().box(0, 0, 0, 6, 0, 4, '#2b2f38').box(1, 0, 1, 5, 0, 3, '#4a505c').box(0, 1, 4, 6, 5, 4, '#2b2f38').box(1, 2, 4, 5, 4, 4, '#7fd3ff');
   return mesh(v, {pivot: [3.5, 0, 2.5]});
 }
+/** a keyboard with its keys (rows of caps, a space bar) and a mouse, at 2.5 cm */
 export function keyboard() {
-  return mesh(new Vox().box(0, 0, 0, 4, 0, 1, (x, y, z) => (x + z) % 2 ? '#e7e7ea' : '#cfd0d6').box(6, 0, 1, 6, 0, 1, '#d9d9de'), {pivot: [3.5, 0, 1]});
+  const v = new Vox().box(0, 0, 0, 17, 0, 6, '#3a3e47');
+  for (let row = 0; row < 3; row++) for (let k = 0; k < 8; k++) v.set(1 + k * 2, 1, 1 + row * 2, (k + row) % 5 ? '#e7e7ea' : '#cfd0d6');
+  v.box(5, 1, 6, 12, 1, 6, '#e7e7ea');                                        // space bar
+  v.box(21, 0, 2, 22, 0, 4, '#d9d9de').set(21, 1, 3, '#d9d9de').set(22, 1, 3, '#bfc0c6');   // mouse
+  return mesh(v, {pivot: [14, 0, 4], scale: 0.025, jitter: 0.02});
 }
 export function mug(color) {
   return mesh(new Vox().box(0, 0, 0, 1, 1, 1, color).set(2, 1, 0, color), {pivot: [1, 0, 1]});
@@ -260,14 +271,15 @@ export function table() {
 export function stool(color) {
   return mesh(new Vox().box(0, 4, 0, 4, 4, 4, color).box(2, 0, 2, 2, 3, 2, '#6b6f78').box(1, 0, 1, 3, 0, 3, '#4a4d55'), {pivot: [2.5, 0, 2.5]});
 }
+/** a pot plant leaf cluster by leaf cluster: big about 0.9 m at 5 cm voxels, small (on a desk) about 0.3 m at 2.5 cm */
 export function plant(seed = 1, big = true) {
-  const r = rnd(seed * 7919), v = new Vox(), h = big ? 9 : 4;
-  v.box(0, 0, 0, 3, 3, 3, '#b5653a').box(0, 3, 0, 3, 3, 3, '#5d4037');
-  for (let i = 0; i < (big ? 70 : 18); i++) {
-    const y = 4 + Math.floor(r() * h), w = Math.max(1, Math.round((big ? 3.2 : 1.8) * (1 - (y - 4) / (h + 3)) + r()));
-    v.set(1 + Math.round((r() - 0.5) * w * 2), y, 1 + Math.round((r() - 0.5) * w * 2), ['#2e7d32', '#388e3c', '#43a047', '#66bb6a'][Math.floor(r() * 4)]);
+  const r = rnd(seed * 7919), v = new Vox();
+  pot(v, 4, big ? 7 : 5);
+  for (let i = 0; i < (big ? 26 : 12); i++) {
+    const a = r() * Math.PI * 2, d = r() * (big ? 3 : 2), y = (big ? 8 : 6) + Math.floor(r() * (big ? 8 : 4));
+    leaves(v, r, Math.round(Math.cos(a) * d), y, Math.round(Math.sin(a) * d), big ? 2 + Math.floor(r() * 2) : 1 + Math.floor(r() * 2), big ? 18 : 11);
   }
-  return mesh(v, {pivot: [2, 0, 2]});
+  return mesh(v, {pivot: [0.5, 0, 0.5], scale: big ? 0.05 : 0.025, jitter: 0.05});
 }
 export function coffeeCorner() {
   const v = new Vox(), wood = '#8d6e63';
@@ -338,12 +350,18 @@ export function building(w, h, d, color) {
 }
 
 // ------------------------------------------------------------------ the office kit (pods, glass rooms, kitchen)
+/** a desk at 5 cm, 1.6 x 0.8 m, top at 0.7 m: a top with a darker front edge, T legs on feet, a modesty panel, and a
+ *  pedestal of three drawers with handles on the right */
 export function workDesk(top = '#e9e7e2') {
-  const v = new Vox(), metal = '#3b3f46';
-  v.box(0, 6, 0, 15, 6, 7, top).box(0, 6, 7, 15, 6, 7, darker(top, 0.9));
-  v.box(0, 0, 1, 0, 5, 6, metal).box(15, 0, 1, 15, 5, 6, metal).box(0, 0, 0, 0, 0, 7, metal).box(15, 0, 0, 15, 0, 7, metal);
-  v.box(2, 4, 1, 13, 4, 2, '#4a4f58');                                                                   // cable tray
-  return mesh(v, {pivot: [8, 0, 4]});
+  const v = new Vox(), metal = '#3b3f46', edge = darker(top, 0.88), white = '#f1f0ec';
+  v.box(0, 13, 0, 31, 13, 15, top).box(0, 13, 15, 31, 13, 15, edge).box(0, 12, 15, 31, 12, 15, edge);
+  for (const x of [1, 29]) v.box(x, 1, 7, x + 1, 12, 8, metal).box(x, 0, 1, x + 1, 0, 14, metal);   // legs on their feet
+  v.box(3, 6, 1, 28, 11, 1, '#c9cdd3');                                       // modesty panel
+  v.box(5, 11, 3, 18, 11, 5, '#4a4f58');                                      // cable tray
+  v.box(21, 1, 3, 27, 11, 14, white);                                         // drawer pedestal
+  for (const y of [4, 8]) v.box(21, y, 14, 27, y, 14, '#c9c8c2');             // the gaps between drawers
+  for (const y of [2, 6, 10]) v.box(23, y, 15, 25, y, 15, '#8a9099');         // handles, standing out
+  return mesh(v, {pivot: [16, 0, 8], scale: 0.05});
 }
 /** a fabric screen between facing desks, len in voxels along x */
 export function divider(len = 34, color = '#5b7380') {
@@ -351,8 +369,14 @@ export function divider(len = 34, color = '#5b7380') {
     .box(0, 12, 0, len - 1, 12, 0, '#9aa3ad').box(0, 0, 0, 0, 12, 0, '#9aa3ad').box(len - 1, 0, 0, len - 1, 12, 0, '#9aa3ad');
   return mesh(v, {pivot: [len / 2, 0, 0.5]});
 }
+/** a desk lamp at 2.5 cm: round foot, two arm segments, a shade lit underneath */
 export function deskLamp() {
-  return mesh(new Vox().box(0, 0, 0, 2, 0, 2, '#2f3338').box(1, 1, 1, 1, 5, 1, '#2f3338').box(1, 5, 2, 1, 5, 3, '#2f3338').box(0, 4, 3, 2, 4, 5, '#f2f0e6'), {pivot: [1.5, 0, 1.5]});
+  const v = new Vox(), metal = '#2f3338';
+  for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) if (x * x + z * z <= 5) v.set(x, 0, z, metal);
+  v.box(0, 1, 0, 0, 8, 0, metal);
+  for (let i = 1; i <= 4; i++) v.set(0, 8 + i, i, metal);
+  v.box(-2, 11, 5, 2, 12, 9, '#f2f0e6').box(-1, 10, 6, 1, 10, 8, '#fff6d6');
+  return mesh(v, {pivot: [0.5, 0, 0.5], scale: 0.025, jitter: 0.02});
 }
 /** aluminium posts and rails of a glass wall, len in metres along x; the glass is a separate pane */
 export function glassFrame(len, door = null) {
