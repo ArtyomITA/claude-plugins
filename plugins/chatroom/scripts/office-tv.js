@@ -539,3 +539,123 @@ export function createRadio({THREE, scene, camera, root, spot, rot = 0, area, ra
     },
   };
 }
+
+// ------------------------------------------------------------------ lofi in the common room, made on the spot
+// No recording: Web Audio plays it live, never the same twice. Soft electric-piano chords from a few lofi progressions,
+// a round bass, a lazy swung beat (kick, brushed snare, hats), a sparse melody and vinyl crackle, all through a
+// low-pass and a little saturation. Placed like the TV: full in the common room, fading and from its side elsewhere.
+// Two speakers on the back wall switch it on and off (remembered).
+const PROGS = [[[65, 69, 72, 76], [64, 67, 71, 74], [62, 65, 69, 72], [60, 64, 67, 71]],     // Fmaj7 Em7 Dm7 Cmaj7
+               [[62, 65, 69, 72], [67, 71, 74, 77], [60, 64, 67, 71], [57, 60, 64, 67]],     // Dm7 G7 Cmaj7 Am7
+               [[57, 60, 64, 67], [62, 65, 69, 72], [55, 59, 62, 65], [60, 64, 67, 71]]];    // Am7 Dm7 G7 Cmaj7
+const hz = n => 440 * Math.pow(2, (n - 69) / 12);
+
+export function createLofi({THREE, scene, camera, area, spots, raycastables, say, t, ear, Vox, mesh}) {
+  let on = true, bus = null, nodes = null, timer = 0, beat = 0, nextAt = 0, prog = PROGS[0], noise = null, heardAt = 0;
+  try { on = localStorage.getItem('chatroom.lofi') !== '0'; } catch (e) {}
+  const mid = {x: (area.x0 + area.x1) / 2, z: (area.z0 + area.z1) / 2};
+  // the speakers: a cabinet, two cones, a light that breathes while it plays
+  const lit = new THREE.MeshBasicMaterial({color: '#ffb74d', toneMapped: false}), leds = [];
+  for (const s of spots) {
+    const v = new Vox().box(0, 0, 0, 9, 33, 7, '#2b2b30').box(1, 33, 1, 8, 33, 6, '#3a3a41');
+    for (const [cy, r] of [[9, 4], [23, 3]]) for (let x = -r; x <= r; x++) for (let y = -r; y <= r; y++) {
+      if (x * x + y * y <= r * r + 0.5) v.set(5 + x, cy + y, 8, x * x + y * y <= 1.5 ? '#55555c' : '#16161a');
+    }
+    const m = mesh(v, {pivot: [5, 0, 4], scale: 0.025, jitter: 0.03});
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.01), lit); led.position.set(0, 0.73, 0.21); m.add(led);
+    m.position.set(s.x, 0, s.z); m.rotation.y = s.rot || 0;
+    m.traverse(o => { o.userData.lofi = true; if (o.isMesh) raycastables.push(o); });
+    scene.add(m); leds.push(led);
+  }
+  function build() {                                   // the chain: instruments -> low-pass -> saturation -> placed speaker
+    ac ??= new AudioContext();
+    const el = ac.createGain(); el.gain.value = 0.9;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = 0.4;
+    const sat = ac.createWaveShaper(), curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
+    sat.curve = curve;
+    const gain = ac.createGain(), pan = ac.createStereoPanner();
+    el.connect(lp).connect(sat).connect(gain).connect(pan).connect(ac.destination);
+    nodes = {gain, pan}; bus = el;
+    noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const crackle = ac.createBufferSource(); crackle.buffer = noise; crackle.loop = true;   // vinyl: hiss and pops
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2500; bp.Q.value = 0.3;
+    const cg = ac.createGain(); cg.gain.value = 0.012;
+    crackle.connect(bp).connect(cg).connect(bus); crackle.start();
+  }
+  const env = (g, at, peak, attack, decay, sustain = 0) => {
+    g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(peak, at + attack);
+    g.gain.setTargetAtTime(Math.max(0.0001, sustain), at + attack, decay);
+  };
+  function keys(notes, at, len) {                      // electric piano: a sine and a soft octave above
+    for (const n of notes) {
+      const o = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain();
+      o.type = 'sine'; o.frequency.value = hz(n); o2.type = 'triangle'; o2.frequency.value = hz(n) * 2.001; g2.gain.value = 0.18;
+      o.connect(g); o2.connect(g2).connect(g); g.connect(bus);
+      env(g, at, 0.07, 0.015, 0.9, 0.025); g.gain.setTargetAtTime(0.0001, at + len, 0.4);
+      o.start(at); o2.start(at); o.stop(at + len + 2); o2.stop(at + len + 2);
+    }
+  }
+  function bass(n, at, len) {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = hz(n - 24);
+    o.connect(g).connect(bus); env(g, at, 0.22, 0.01, 0.35, 0.08); g.gain.setTargetAtTime(0.0001, at + len, 0.1);
+    o.start(at); o.stop(at + len + 1);
+  }
+  function kick(at) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.setValueAtTime(110, at); o.frequency.exponentialRampToValueAtTime(42, at + 0.25);
+    o.connect(g).connect(bus); env(g, at, 0.5, 0.004, 0.12); o.start(at); o.stop(at + 0.6);
+  }
+  function burst(at, freq, q, peak, dec, type = 'bandpass') {   // snare and hats: filtered noise
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noise; f.type = type; f.frequency.value = freq; f.Q.value = q;
+    s.connect(f).connect(g).connect(bus); env(g, at, peak, 0.003, dec);
+    s.start(at, Math.random() * 1.5); s.stop(at + 0.5);
+  }
+  function step() {                                    // schedules what falls in the next 0.3 s
+    const spb = 60 / 74 / 2;                             // an eighth note at 74 bpm
+    while (nextAt < ac.currentTime + 0.3) {
+      const i = beat % 32, bar = Math.floor(beat / 8) % 4, at = nextAt + (beat % 2 ? spb * 0.18 : 0);   // swung
+      if (i === 0 && Math.random() < 0.35) prog = PROGS[Math.floor(Math.random() * PROGS.length)];
+      if (beat % 8 === 0) { keys(prog[bar], at, spb * 7.5); bass(prog[bar][0], at, spb * 3); }
+      if (beat % 8 === 4 && Math.random() < 0.7) bass(prog[bar][0] + (Math.random() < 0.5 ? 7 : 0), at, spb * 2.5);
+      if (beat % 8 === 0 || (beat % 8 === 5 && Math.random() < 0.5)) kick(at);
+      if (beat % 8 === 4) { burst(at, 1800, 0.8, 0.16, 0.08); burst(at, 200, 1, 0.05, 0.05); }
+      burst(at, 8000, 0.7, beat % 2 ? 0.025 : 0.04, 0.03, 'highpass');
+      if (Math.random() < 0.12) {                      // now and then a melody note from the chord, an octave up
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.type = 'sine'; o.frequency.value = hz(prog[bar][Math.floor(Math.random() * 4)] + 12);
+        o.connect(g).connect(bus); env(g, at, 0.05, 0.02, 0.5); o.start(at); o.stop(at + 2);
+      }
+      nextAt += spb; beat++;
+    }
+  }
+  function start() {
+    if (timer) return;
+    if (!bus) build();
+    nextAt = ac.currentTime + 0.1; beat = 0;
+    timer = setInterval(step, 100);
+  }
+  function stop() { clearInterval(timer); timer = 0; }
+  function toggle() {
+    on = !on;
+    try { localStorage.setItem('chatroom.lofi', on ? '1' : '0'); } catch (e) {}
+    if (on) start(); else stop();
+    say(`🎵 ${on ? t().lofiOn : t().lofiOff}`);
+  }
+  // the page's first click or key lets the sound start (browsers forbid sound before)
+  if (on) for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (on) start(); }, {capture: true, once: true});
+  return {
+    toggle,
+    near: p => Math.min(...spots.map(s => Math.hypot(p.x - s.x, p.z - s.z))),
+    /** ten times a second: how loud and from which side; the speakers' lights breathe while it plays */
+    update(time) {
+      for (const l of leds) l.visible = !!timer && Math.sin(time * 2.4) > -0.6;
+      if (!nodes || time - heardAt < 0.1) return;
+      heardAt = time;
+      const me = ear?.(), [g, side] = me ? hear(area, mid, me, camera) : [1, 0];
+      steer(nodes, timer ? g * 0.55 : 0, side);
+    },
+  };
+}

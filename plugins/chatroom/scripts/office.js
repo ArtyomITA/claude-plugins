@@ -6,13 +6,13 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
 import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
-import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {ShaderPass} from 'three/addons/postprocessing/ShaderPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
-import {createTV, createRadio} from './office-tv.js';
+import {createTV, createRadio, createLofi} from './office-tv.js';
 import {buildFloor} from './office-floor.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
@@ -66,15 +66,28 @@ const lamps = [], towerWindows = [];                                       // wa
 // above the screen resolution on high, crisp shadows, and no blur pass at all
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples: 4}));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.18, 0.25, 0.97);
-composer.addPass(bloom); composer.addPass(new OutputPass());
+composer.addPass(new OutputPass());
+// the grade, on the finished picture: a gentle S curve, a touch more colour, a soft vignette (the bloom it replaces
+// cost about 14 ms a frame and barely showed)
+const grade = new ShaderPass({uniforms: {tDiffuse: {value: null}},
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv); vec3 x = c.rgb;
+      x = mix(x, x * x * (3.0 - 2.0 * x), 0.2);
+      x = mix(vec3(dot(x, vec3(0.299, 0.587, 0.114))), x, 1.1);
+      vec2 d = vUv - 0.5; x *= 1.0 - dot(d, d) * 0.4;
+      gl_FragColor = vec4(x, c.a);
+    }`});
+composer.addPass(grade);
 const QUALITY = ['alta', 'media', 'bassa'];
 let quality = pref('quality', 'alta');
+let basePr = 1, dynScale = 1;                                               // the quality's pixel ratio, and how much of it the GPU keeps up with
 function applyQuality() {
   const dpr = window.devicePixelRatio || 1;
-  renderer.setPixelRatio(quality === 'alta' ? Math.min(2, Math.max(1.5, dpr)) : quality === 'media' ? Math.min(dpr, 1.25) : 1);
+  basePr = quality === 'alta' ? Math.min(2, Math.max(1.5, dpr)) : quality === 'media' ? Math.min(dpr, 1.25) : 1;
+  renderer.setPixelRatio(basePr * dynScale);
   renderer.shadowMap.enabled = quality !== 'bassa';
-  bloom.enabled = quality === 'alta';                                          // the glow costs about 14 ms a frame and barely shows: high quality only
   renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;   // redrawn on a schedule (see frame)
   sun.shadow.mapSize.setScalar(2048);                                          // 4096 cost four times the fill for edges nobody sees
   sun.shadow.map?.dispose(); sun.shadow.map = null;
@@ -403,6 +416,7 @@ function buildDesk(d, i) {
   if (i % 2) put(V.deskLamp(), -0.62, 0.71, -0.2); else put(V.plant(i + 2, false), -0.62, 0.71, -0.22);
   if (i % 4 === 1) put(V.packModel('Misc/Electronics/Office_Misc_Phone', {scale: 0.03}), -0.35, 0.71, 0.05, -0.3);
   put(V.packModel('Misc/Trashcans/Office_Misc_Trashcan_Small_0' + (1 + i % 3), {scale: 0.04}), 0.66, 0, 0.12);
+  for (const m of g.children.slice(2)) m.traverse(o => { o.castShadow = false; });   // the small things on and by the desk: their shadows are too small to see, and cost the shadow pass
   g.userData.kit = new Set(g.children);                                       // what never moves: baked into big meshes (office-merge.js); the chair, screen and beacon stay apart
   const chair = put(chairFor(null), 0, 0, 0.8, Math.PI);
   const scr = board(0.82, 0.5, 192); scr.mesh.position.set(0, 1.2, -0.21); g.add(scr.mesh);
@@ -752,6 +766,7 @@ function nearby() {
   for (const s of sitSpots()) { const k = Math.min(d(s.pos), d(outOf(s))); if (k < 1.3) opts.push({kind: 'sit', seat: s, k: k + 0.2}); }
   if (loungeTv.near(boss.pos) < 1.4) opts.push({kind: 'zap', k: loungeTv.near(boss.pos)});
   if (radio && radio.near(boss.pos) < 1.3) opts.push({kind: 'radio', k: radio.near(boss.pos)});
+  if (lofi && lofi.near(boss.pos) < 1.2) opts.push({kind: 'lofi', k: lofi.near(boss.pos)});
   for (const g of GAME_TABLES) { const k = g.near(boss.pos); if (k < 0.8) opts.push({kind: 'game', game: g.type, k: k + 0.3}); }
   for (const b of [tv, wb]) { const p = b.mesh.position; if (d(p) < 3.5 && facing(p) > 0.6) opts.push({kind: b === tv ? 'tv' : 'board', b, k: d(p) + 0.5}); }
   return opts.sort((a, b) => a.k - b.k)[0] || null;
@@ -766,6 +781,7 @@ function interact() {
   if (t.kind === 'zap' || t.kind === 'game') document.exitPointerLock?.();        // a menu needs the mouse back
   if (t.kind === 'zap') return loungeTv.menu();
   if (t.kind === 'radio') return radio.menu();
+  if (t.kind === 'lofi') return lofi.toggle();
   if (t.kind === 'game') return openGame(t.game);
   watching = watching === t.b ? null : t.b;                                    // TV or whiteboard: look closely, E again to stop
 }
@@ -1405,6 +1421,7 @@ renderer.domElement.addEventListener('click', e => {
   const hit = ray.intersectObjects(raycastables, false)[0];
   if (hit?.object.userData.remote) { document.exitPointerLock?.(); return loungeTv.menu(); }                       // the TV's remote: its menu
   if (hit?.object.userData.radio) return radio.menu();                           // the radio: its stations
+  if (hit?.object.userData.lofi) return lofi.toggle();                           // the common room's speakers: music on or off
   if (hit?.object.userData.game) return openGame(hit.object.userData.game);       // a games table: play
   const name = hit?.object.userData.person;
   if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
@@ -1491,6 +1508,21 @@ function nearestLights(t) {
   pointLights.sort((a, b) => a.userData.k - b.userData.k).forEach((l, i) => { l.visible = i < LIGHT_POOL; });
 }
 
+// ------------------------------------------------------------------ dynamic resolution
+// Smooth before sharp: when frames come slower than about 48 a second while the office moves, draw fewer pixels (down
+// to 60% of the quality's own); when they come back fast, give the pixels back. A slow GPU keeps 60 fps, a fast one
+// never notices.
+let drawnAt = 0, frameEma = 16.7, dynAt = 0;
+function steerResolution(now) {
+  if (speed === 'idle' || document.hidden) { drawnAt = 0; return; }        // 30 fps on purpose, or not on screen: nothing to learn
+  if (drawnAt) frameEma += (now - drawnAt - frameEma) * 0.1;
+  drawnAt = now;
+  if (now - dynAt < 1500) return;
+  const next = frameEma > 21 ? Math.max(0.6, dynScale - 0.1) : frameEma < 17.6 ? Math.min(1, dynScale + 0.05) : dynScale;
+  if (next === dynScale) return;
+  dynScale = next; dynAt = now; renderer.setPixelRatio(basePr * dynScale); resize();
+}
+
 // ------------------------------------------------------------------ loop
 const FORCE = /[?&]force\b/.test(location.search);              // keep drawing in a hidden tab (screenshots, tests)
 let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0, lastInput = 0, shadowAt = 0, speed = 'idle';
@@ -1556,10 +1588,11 @@ function frame(now) {
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
   if (now - shadowAt > (speed === 'use' ? 33 : speed === 'work' ? 66 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not: shadows keep up at 30 a second
   nearestLights(t);
-  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); paintball.update(dt);
+  camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); paintball.update(dt);
   const drawAt = performance.now();
   if (quality === 'bassa') renderer.render(scene, camera); else composer.render(dt);
-  if (FORCE) window.__officeTimes = {logic: drawAt - startAt, draw: performance.now() - drawAt};   // measuring: where a frame's time goes
+  if (FORCE) window.__officeTimes = {logic: drawAt - startAt, draw: performance.now() - drawAt, scale: dynScale};   // measuring: where a frame's time goes
+  steerResolution(now);
 }
 
 // the dollhouse view: an outer wall drops to its stub when the camera is outside it; in first person (camera below
@@ -1639,7 +1672,11 @@ const loungeTv = createTV({THREE, scene, camera, renderer, root, tvMesh, table: 
 const gameZone = LAYOUT.floor.zones.find(z => z.kind === 'game');
 const radio = gameZone && createRadio({THREE, scene, camera, root, raycastables, say: t => ui.placeName(t), t: ui.t, ear,
   spot: {x: gameZone.x0 + 0.4, z: gameZone.z1 - 1.9}, rot: Math.PI / 2, area: grow(gameZone)});
-if (FORCE) Object.assign(window, {__officeTv: loungeTv, __officeRadio: radio});
+// lofi from two speakers on the common room's back wall, right of the bridge door
+const commonZone = LAYOUT.floor.zones.find(z => z.kind === 'common');
+const lofi = commonZone && createLofi({THREE, scene, camera, raycastables, say: t => ui.placeName(t), t: ui.t, ear, Vox: V.Vox, mesh: V.mesh,
+  area: grow(commonZone), spots: [{x: commonZone.x0 + 5.4, z: commonZone.z1 - 0.28, rot: Math.PI}, {x: commonZone.x0 + 6.6, z: commonZone.z1 - 0.28, rot: Math.PI}]});
+if (FORCE) Object.assign(window, {__officeTv: loungeTv, __officeRadio: radio, __officeLofi: lofi});
 let lastTvN = null;
 /** a friend chose a video to watch together: our TV plays it from the same second */
 function tvFromFriends() {
