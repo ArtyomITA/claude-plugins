@@ -12,7 +12,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
 import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
 import {createEditor} from './office-edit.js';
-import {createTV, createRadio, createLofi} from './office-tv.js';
+import {createTV, createRadio, createLofi, createMixer} from './office-tv.js';
 import {buildFloor} from './office-floor.js';
 import {createGames} from './office-games.js';
 import {createPaintball} from './office-paintball.js';
@@ -1198,10 +1198,12 @@ renderer.domElement.addEventListener('pointermove', e => {                    //
   me.pitch = Math.max(-1.3, Math.min(1.2, me.pitch - e.movementY * (locked() ? SENS[sensIdx] : 0.004)));
 });
 document.addEventListener('pointerlockchange', () => { if (!locked()) keys.clear(); });
+const mixer = createMixer({root, t: () => ui.t()});                             // the volumes: general, TV, radio, lofi
 const ui = createUI(root, {
   onExtra: k => { if (k === 'pingPong' || k === 'foosball' || k === 'poolTable') openGame(k); },
   onMode: m => { mode = m; setPref('mode', m); applyMode(); },
   onPov: () => setPov(!pov),
+  onSound: () => mixer.toggle(),
   onLook: () => ui.lookPanel(myLook, V.LOOK, setMyLook),
   onRun: () => { running = !running; setPref('run', running); },
   onEdit: () => { if (VISIT) return; if (pov) setPov(false); ui.commonPanel(null); select(null); editor.toggle(); },
@@ -1482,7 +1484,7 @@ function placeTags() {
   const st = DATA.state, src = st.mod && Date.now() / 1000 - st.mod < 120 ? L.mod : Object.keys(st.agents || {}).length ? L.tail : L.nodata;
   ui.hud({title: `${DATA.config.icon || '💬'} ${DATA.config.title || DATA.config.topic || 'Chat room'}`, pct: pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null,
           waiting: D.waiting.size, working: work, idle, plan: D.closed ? `✅ ${L.done} v${D.closed.v}` : D.plan ? `🗳 ${L.plan(D.plan.v)}: ${L.votes(yes, D.names.length - yes)}` : '',
-          src: '📡 ' + src, mode, follow, quality, pov, run: running, edit: editor.active(), sens: sensIdx});
+          src: '📡 ' + src, mode, follow, quality, pov, run: running, edit: editor.active(), sens: sensIdx, mute: mixer.muted()});
   // labels the user gave to pieces of furniture, a little above each
   ui.itemLabels(ITEM_MESHES.filter(m => m.userData.label).map(m => {
     _v.copy(m.position); _v.y += 1.25; _v.project(camera);
@@ -1506,6 +1508,17 @@ function nearestLights(t) {
   const from = pov ? camera.position : controls.target;
   for (const l of pointLights) { l.getWorldPosition(_lp); l.userData.k = (l.intensity > 0 ? 0 : 1e6) + _lp.distanceToSquared(from); }
   pointLights.sort((a, b) => a.userData.k - b.userData.k).forEach((l, i) => { l.visible = i < LIGHT_POOL; });
+}
+
+// ------------------------------------------------------------------ cinema
+// Sitting in front of the lounge TV in first person opens it big in the middle (office-tv.js); standing up closes it;
+// closing it while seated keeps it closed until you stand up.
+let cineWas = false, cineDismissed = false;
+function watchCinema() {
+  const want = pov && boss && seated(boss) && loungeTv.near(boss.pos) < 3;
+  if (!want) { cineDismissed = false; if (loungeTv.isCinema?.()) loungeTv.cinema(false); }
+  else if (!loungeTv.isCinema?.()) { if (cineWas) cineDismissed = true; else if (!cineDismissed) loungeTv.cinema(true); }
+  cineWas = !!loungeTv.isCinema?.();
 }
 
 // ------------------------------------------------------------------ dynamic resolution
@@ -1587,6 +1600,7 @@ function frame(now) {
   if (uiAcc > 0.06) { uiAcc = 0; placeTags(); }
   if (selected && Math.floor(t) !== Math.floor(t - dt)) inspect();
   if (now - shadowAt > (speed === 'use' ? 33 : speed === 'work' ? 66 : 600)) { shadowAt = now; renderer.shadowMap.needsUpdate = true; }   // figures move, the furniture does not: shadows keep up at 30 a second
+  watchCinema();
   nearestLights(t);
   camera.updateMatrixWorld(); loungeTv.update(t); radio?.update(t); lofi?.update(t); paintball.update(dt);
   const drawAt = performance.now();

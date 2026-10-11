@@ -187,7 +187,7 @@ export const L = {
        helpTitle: 'Ask for help', askPlaceholder: 'What do you need? (some research, a plan, a change to your files)', askGo: 'Ask',
        visit: h => `Visit ${h}'s office`, requestsTitle: 'Help requests', lend: 'Lend an agent', decline: 'Decline',
        lent: h => `${h} is on it`, declined: 'declined', pending: 'waiting for an answer', visiting: h => `Visiting ${h}'s office`, back: 'Back to my office',
-       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'remote: channels and YouTube (T anywhere near the TV)', tvFull: 'Full screen', tvAudio: 'Sound on or off', tvStart: 'From the start', tvPlay: 'Play or pause', lofiOn: 'lofi on', lofiOff: 'lofi off', hint_lofi: 'music on or off', tvOff: 'Turn the TV on or off', tvIsOff: 'your TV is off: turn it on from the remote', tvFlat: "Placed sound needs yt-dlp, up to date (python -m pip install -U yt-dlp): YouTube's own sound for now", radio: 'Radio', radioNext: 'Next song', radioSearchPh: 'A song, an artist, a genre...', radioHint: 'Pick a genre or search for music', radioNeeds: 'The radio needs yt-dlp, up to date: python -m pip install -U yt-dlp', hint_radio: 'radio: music', tvTitle: 'TV', tvTogether: 'Watch together', tvChannels: 'Channels', tvYoutube: 'YouTube',
+       hint_stand: 'stand up', hint_sit: 'sit down', hint_coffee: 'make a coffee', hintTalk: n => `talk to ${n}`, hint_tv: 'watch the TV', hint_zap: 'remote: channels and YouTube (T anywhere near the TV)', tvFull: 'Full screen', tvAudio: 'Sound on or off', tvStart: 'From the start', tvPlay: 'Play or pause', mixTitle: 'Volumes', mixAll: 'All', lofiOn: 'lofi on', lofiOff: 'lofi off', hint_lofi: 'music on or off', tvOff: 'Turn the TV on or off', tvIsOff: 'your TV is off: turn it on from the remote', tvFlat: "Placed sound needs yt-dlp, up to date (python -m pip install -U yt-dlp): YouTube's own sound for now", radio: 'Radio', radioNext: 'Next song', radioSearchPh: 'A song, an artist, a genre...', radioHint: 'Pick a genre or search for music', radioNeeds: 'The radio needs yt-dlp, up to date: python -m pip install -U yt-dlp', hint_radio: 'radio: music', tvTitle: 'TV', tvTogether: 'Watch together', tvChannels: 'Channels', tvYoutube: 'YouTube',
        tvLocal: n => `your videos · ${n}`, tvNoChannels: 'No channels yet: put videos in ~/.claude/chatroom/tv/<channel>/', tvNothing: 'Nothing found.',
        tvSearchHint: 'Search any video on YouTube: it plays in high quality on the TV.', tvSearchPh: 'Search YouTube…', tvSearch: 'Search',
        tvLooking: 'Looking…', tvPuts: 'puts on the TV', look: 'Look', lookSkin: 'Skin', lookHair: 'Hair', lookTop: 'Top', lookPants: 'Trousers', save: 'Save', close: 'Close',
@@ -232,7 +232,7 @@ export const L = {
        helpTitle: 'Chiedi aiuto', askPlaceholder: 'Cosa ti serve? (una ricerca, un piano, una modifica ai tuoi file)', askGo: 'Chiedi',
        visit: h => `Visita l'ufficio di ${h}`, requestsTitle: 'Richieste di aiuto', lend: 'Presta un agente', decline: 'Rifiuta',
        lent: h => `${h} è al lavoro`, declined: 'rifiutata', pending: 'in attesa di risposta', visiting: h => `Sei in visita da ${h}`, back: 'Torna nel tuo ufficio',
-       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'telecomando: canali e YouTube (T ovunque vicino alla TV)', tvFull: 'Schermo intero', tvAudio: 'Audio sì o no', tvStart: 'Da capo', tvPlay: 'Play o pausa', lofiOn: 'lofi accesa', lofiOff: 'lofi spenta', hint_lofi: 'musica sì o no', tvOff: 'Accendi o spegni la TV', tvIsOff: 'la tua TV è spenta: accendila dal telecomando', tvFlat: "L'audio spaziale vuole yt-dlp aggiornato (python -m pip install -U yt-dlp): per ora audio di YouTube", radio: 'Radio', radioNext: 'Canzone dopo', radioSearchPh: 'Una canzone, un artista, un genere...', radioHint: 'Scegli un genere o cerca la musica', radioNeeds: 'La radio vuole yt-dlp aggiornato: python -m pip install -U yt-dlp', hint_radio: 'radio: musica', tvTitle: 'TV', tvTogether: 'Guarda insieme', tvChannels: 'Canali', tvYoutube: 'YouTube',
+       hint_stand: 'alzati', hint_sit: 'siediti', hint_coffee: 'fatti un caffè', hintTalk: n => `parla con ${n}`, hint_tv: 'guarda la TV', hint_zap: 'telecomando: canali e YouTube (T ovunque vicino alla TV)', tvFull: 'Schermo intero', tvAudio: 'Audio sì o no', tvStart: 'Da capo', tvPlay: 'Play o pausa', mixTitle: 'Volumi', mixAll: 'Generale', lofiOn: 'lofi accesa', lofiOff: 'lofi spenta', hint_lofi: 'musica sì o no', tvOff: 'Accendi o spegni la TV', tvIsOff: 'la tua TV è spenta: accendila dal telecomando', tvFlat: "L'audio spaziale vuole yt-dlp aggiornato (python -m pip install -U yt-dlp): per ora audio di YouTube", radio: 'Radio', radioNext: 'Canzone dopo', radioSearchPh: 'Una canzone, un artista, un genere...', radioHint: 'Scegli un genere o cerca la musica', radioNeeds: 'La radio vuole yt-dlp aggiornato: python -m pip install -U yt-dlp', hint_radio: 'radio: musica', tvTitle: 'TV', tvTogether: 'Guarda insieme', tvChannels: 'Canali', tvYoutube: 'YouTube',
        tvLocal: n => `video tuoi · ${n}`, tvNoChannels: 'Ancora nessun canale: metti dei video in ~/.claude/chatroom/tv/<canale>/', tvNothing: 'Nessun risultato.',
        tvSearchHint: 'Cerca qualsiasi video su YouTube: parte in alta qualità sulla TV.', tvSearchPh: 'Cerca su YouTube…', tvSearch: 'Cerca',
        tvLooking: 'Cerco…', tvPuts: 'mette in TV', look: 'Aspetto', lookSkin: 'Pelle', lookHair: 'Capelli', lookTop: 'Maglia', lookPants: 'Pantaloni', save: 'Salva', close: 'Chiudi',
@@ -305,7 +305,7 @@ async function sha256hex(text) {
 const randomHex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
 const revealed = new Set();
 
-export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
+export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, onFollow, onQuality, onSelect, onTag, onJump, onNext, onCommonOpen, onCommon, onGo, onEdit,
                                 onShare, onJoin, onCommonWrite, onAsk, onVisit, onCommonDoc, onGame, onOpenPool, onOpenGame, onAnswer, onExtra, onSens}) {
   let lastCommon = null;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
@@ -315,7 +315,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
 </div>
     <div class="o-btns"><div class="o-grp o-seg"><button data-b="split"></button><button data-b="office"></button><button data-b="chat"></button></div>
       <div class="o-grp"><button data-b="edit"></button><button data-b="common"></button></div>
-      <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button></div>
+      <div class="o-grp"><button data-b="pov"></button><button data-b="run"></button><button data-b="sound"></button></div>
       <div class="o-more"><div class="o-grp"><button data-b="more"></button></div><div class="o-menu"><h5 data-k="games"></h5><div data-k="games-list"></div>
         <h5 data-k="tools"></h5><button data-b="look"></button><button data-b="follow"></button><button data-b="reset"></button><button data-b="quality"></button><button data-b="sens"></button>
         <button data-b="notify"></button><button data-b="help"></button></div></div></div>
@@ -333,7 +333,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
     if (k === 'sens') return onSens();
     if (b.closest('.o-menu')) closeMenu();
     if (['split', 'office', 'chat'].includes(k)) onMode(k);
-    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
+    else if (k === 'edit') onEdit(); else if (k === 'common') onCommonOpen(); else if (k === 'pov') onPov(); else if (k === 'sound') onSound?.(); else if (k === 'run') onRun(); else if (k === 'look') onLook(); else if (k === 'reset') onReset(); else if (k === 'follow') onFollow(); else if (k === 'quality') onQuality();
     else if (k === 'notify') askNotify();
     else if (k === 'help') showHelp(10000);
   });
@@ -406,7 +406,7 @@ export function createUI(root, {onMode, onPov, onRun, onLook, onReset, onFollow,
       const L = t();
       for (const [k, icon] of [['split', '◫'], ['office', '🏢'], ['chat', '💬']]) setBtn(k, icon, L[k], '', d.mode === k);
       setBtn('edit', '🛠', L.edit, '', !!d.edit); setBtn('common', '🛋', L.common, '', cp.classList.contains('o-open')); setBtn('look', '👤', L.look);
-      setBtn('pov', '👁', 'POV', '', !!d.pov); setBtn('run', '🏃', 'x2', L.run + ' (Shift)', !!d.run);
+      setBtn('pov', '👁', 'POV', '', !!d.pov); setBtn('run', '🏃', 'x2', L.run + ' (Shift)', !!d.run); setBtn('sound', d.mute ? '🔇' : '🔊', '', L.mixTitle);
       setBtn('follow', '🎯', L.follow, '', !!d.follow); setBtn('reset', '🎥', L.reset);
       setBtn('more', '⋯', L.more + ' ▾', '', menuEl.classList.contains('o-open'));
       const hk = k => menuEl.querySelector(`[data-k="${k}"]`); hk('games').textContent = L.gamesTitle; hk('tools').textContent = L.toolsTitle;

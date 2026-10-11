@@ -39,18 +39,24 @@ function speaker(el) {
 }
 for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => ac?.state === 'suspended' && ac.resume(), true);
 /** [gain, side] of a sound at `src` whose area is the rectangle `area`, heard by a figure at `me` looking through
- *  `camera`: inside the area 1 and 0; outside it fades with the distance and comes from where it is (right = +1) */
-export function hear(area, src, me, camera) {
+ *  `camera`: inside the area 1 and 0; outside it fades with the distance and comes from where it is (right = +1).
+ *  `reach` (metres): music stays in its room and is gone this far outside it; without it, the TV's long fade */
+export function hear(area, src, me, camera, reach = 0) {
   const d = Math.hypot(Math.max(area.x0 - me.x, 0, me.x - area.x1), Math.max(area.z0 - me.z, 0, me.z - area.z1));
   if (d < 0.05) return [1, 0];
   const e = camera.matrixWorld.elements, fx = -e[8], fz = -e[10], fl = Math.hypot(fx, fz) || 1;
   const tx = src.x - me.x, tz = src.z - me.z, tl = Math.hypot(tx, tz) || 1;
   const side = (-fz * tx + fx * tz) / fl / tl;                                 // the camera's right is (-fz, fx)
-  return [Math.max(0, 1 - d / 30) / (1 + d / 3), Math.max(-0.85, Math.min(0.85, side * 0.85 * Math.min(1, d / 2)))];
+  const g = reach ? Math.max(0, 1 - d / reach) ** 2 : Math.max(0, 1 - d / 30) / (1 + d / 3);
+  return [g, Math.max(-0.85, Math.min(0.85, side * 0.85 * Math.min(1, d / 2)))];
 }
-/** move a speaker's gain and side smoothly */
-function steer(nodes, g, p) {
-  nodes.gain.gain.setTargetAtTime(g, ac.currentTime, 0.12);
+// the mixer: a general level and one per source (tv, radio, lofi), each with its own mute, remembered
+const MIX = {master: 1, tv: 1, radio: 1, lofi: 1, mute: {}};
+try { Object.assign(MIX, JSON.parse(localStorage.getItem('chatroom.mix') || '{}')); } catch (e) {}
+export const mixLevel = kind => (MIX.mute.master ? 0 : MIX.master) * (MIX.mute[kind] ? 0 : MIX[kind] ?? 1);
+/** move a speaker's gain and side smoothly; the mixer's level for its kind applies on top */
+function steer(nodes, g, p, kind) {
+  nodes.gain.gain.setTargetAtTime(g * mixLevel(kind), ac.currentTime, 0.12);
   nodes.pan.pan.setTargetAtTime(p, ac.currentTime, 0.12);
 }
 
@@ -80,6 +86,12 @@ const CSS = `
 .o-tvctl button:hover { background: #2f3a52; }
 .o-tvctl input[type=range] { width: 120px; accent-color: #e53935; }
 .o-tvtime { opacity: .75; font-variant-numeric: tabular-nums; margin-left: auto; }
+.o-tvcine { position: absolute; inset: 0; background: rgba(4,6,10,.84); z-index: 25; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 12px; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; color: #e8eaf0; }
+.o-tvcine .o-tvscreen { width: min(88%, 1400px, calc((100% - 90px) * 16 / 9)); aspect-ratio: 16 / 9; background: #000; border-radius: 10px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.6); overflow: hidden; }
+.o-tvcine .o-tvscreen video { width: 100%; height: 100%; display: block; background: #000; }
+.o-tvcine .o-tvctl { background: #10131bd9; border-radius: 12px; padding: 8px 12px; }
 .o-tvfull { position: fixed; inset: 0; background: #000; z-index: 60; display: flex; align-items: center; justify-content: center; }
 .o-tvfull iframe, .o-tvfull video { width: 100%; height: 100%; border: 0; background: #000; }
 .o-tvfull button { position: absolute; top: 12px; right: 12px; z-index: 1; background: #000a; color: #fff; border: 1px solid #fff6; border-radius: 8px;
@@ -311,6 +323,48 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     document.body.appendChild(fullEl);
     fullEl.requestFullscreen?.().catch(() => {});
   }
+  // cinema: sitting in front of the TV, the picture comes up centred and big over the office (not the browser's full
+  // screen), with our remote on it; YouTube's player is moved over the box (moving an iframe in the page would reload it)
+  let cineEl = null, cineTick = 0;
+  const cineKey = e => { if (e.key === 'Escape' && cineEl) { e.stopPropagation(); e.preventDefault(); cinema(false); } };
+  function cinema(on) {
+    if (!on) {
+      if (!cineEl) return;
+      clearInterval(cineTick); removeEventListener('keydown', cineKey, true);
+      cineEl.remove(); cineEl = null; video.style.cssText = ''; video.remove(); frame.style.zIndex = '1';
+      return;
+    }
+    if (cineEl || now.kind === 'off' || fullEl) return;
+    close();
+    const L = t();
+    cineEl = document.createElement('div'); cineEl.className = 'o-tvcine';
+    cineEl.innerHTML = `<div class="o-tvscreen"></div><div class="o-tvctl"><button data-c="start" title="${esc(L.tvStart)}">⏮</button><button data-c="back">⏪ 10</button>
+      <button data-c="play" title="${esc(L.tvPlay)}">⏯</button><button data-c="fwd">10 ⏩</button>
+      <label>🔊 <input type="range" min="0" max="100" step="5" value="${vol}" data-vol></label><span class="o-tvtime"></span>
+      <button data-m>☰ ${esc(L.tvChannels)}</button><button data-power title="${esc(L.tvOff)}">⏻</button><button data-x>✕ Esc</button></div>`;
+    if (isLocal()) { video.style.cssText = 'width:100%;height:100%;display:block'; cineEl.querySelector('.o-tvscreen').appendChild(video); }
+    for (const ev of ['pointerdown', 'wheel', 'keydown']) cineEl.addEventListener(ev, e => e.stopPropagation());
+    cineEl.addEventListener('input', e => {
+      if (e.target.dataset.vol === undefined) return;
+      vol = +e.target.value;
+      try { localStorage.setItem('chatroom.tv.vol', String(vol)); } catch (err) {}
+      if (vol > 0 && !sound) setSound(true); else audio();
+    });
+    cineEl.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.c) return control(b.dataset.c);
+      if (b.dataset.x !== undefined) return cinema(false);
+      if (b.dataset.power !== undefined) { cinema(false); return power(false); }
+      if (b.dataset.m !== undefined) { cinema(false); menu(); }
+    });
+    const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    cineTick = setInterval(() => {
+      const el = cineEl?.querySelector('.o-tvtime'), d = isLocal() ? video.duration : ytDur;
+      if (el) el.textContent = `${paused() ? '⏸' : '▶'} ${clock(position())}${d ? ' / ' + clock(d) : ''}`;
+    }, 500);
+    addEventListener('keydown', cineKey, true);
+    root.appendChild(cineEl);
+  }
   /** sound on or off, remembered; a YouTube video starts again from where it is, with or without sound */
   function setSound(on) {
     sound = on;
@@ -378,6 +432,8 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     remote,
     menu,
     fullscreen,
+    cinema,
+    isCinema: () => !!cineEl,
     /** how far a point is from the screen (T opens the menu within a few metres) */
     nearTv: p => Math.hypot(p.x - at.x, p.z - at.z),
     open: () => !!menuEl,
@@ -405,11 +461,16 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
         const me = ear?.();
         let side; [heard, side] = me ? hear(area, at, me, camera) : [1, 0];
         const nodes = isLocal() ? vNodes : audOk ? aNodes : null;
-        if (nodes) steer(nodes, heard * vol / 100, side);
-        else if (time - flatAt > 0.5) { flatAt = time; yt('setVolume', [Math.round(vol * heard)]); }
+        if (nodes) steer(nodes, heard * vol / 100, side, 'tv');
+        else if (time - flatAt > 0.5) { flatAt = time; yt('setVolume', [Math.round(vol * heard * mixLevel('tv'))]); }
         follow();
       }
       if (now.kind === 'off' || (now.kind === 'channel' && channels[now.i]?.files)) return;
+      if (cineEl) {                                                           // in cinema the player sits on the big box
+        const b = cineEl.querySelector('.o-tvscreen').getBoundingClientRect(), r0 = root.getBoundingClientRect();
+        Object.assign(frame.style, {display: '', zIndex: '26', transform: `translate(${b.left - r0.left}px, ${b.top - r0.top}px) scale(${b.width / FW}, ${b.height / FH})`});
+        return;
+      }
       const rect = renderer.domElement.getBoundingClientRect(), rr = root.getBoundingClientRect();
       const facing = _p.copy(camera.position).sub(at).dot(n) > 0.05;
       const q = corners.map(([x, y]) => { _p.set(x, y, 0); screen.localToWorld(_p); _p.project(camera);
@@ -534,24 +595,30 @@ export function createRadio({THREE, scene, camera, root, spot, rot = 0, area, ra
       bars.forEach((b, i) => { b.scale.y = on ? 0.4 + Math.abs(Math.sin(time * (5 + i * 1.7) + i)) * 1.6 : 0.3; });
       if (!nodes || time - heardAt < 0.1) return;
       heardAt = time;
-      const me = ear?.(), [g, side] = me ? hear(area, spot, me, camera) : [1, 0];
-      steer(nodes, g * vol / 100, side);
+      const me = ear?.(), [g, side] = me ? hear(area, spot, me, camera, 4) : [1, 0];
+      steer(nodes, g * vol / 100, side, 'radio');
     },
   };
 }
 
 // ------------------------------------------------------------------ lofi in the common room, made on the spot
-// No recording: Web Audio plays it live, never the same twice. Soft electric-piano chords from a few lofi progressions,
-// a round bass, a lazy swung beat (kick, brushed snare, hats), a sparse melody and vinyl crackle, all through a
-// low-pass and a little saturation. Placed like the TV: full in the common room, fading and from its side elsewhere.
-// Two speakers on the back wall switch it on and off (remembered).
-const PROGS = [[[65, 69, 72, 76], [64, 67, 71, 74], [62, 65, 69, 72], [60, 64, 67, 71]],     // Fmaj7 Em7 Dm7 Cmaj7
-               [[62, 65, 69, 72], [67, 71, 74, 77], [60, 64, 67, 71], [57, 60, 64, 67]],     // Dm7 G7 Cmaj7 Am7
-               [[57, 60, 64, 67], [62, 65, 69, 72], [55, 59, 62, 65], [60, 64, 67, 71]]];    // Am7 Dm7 G7 Cmaj7
+// No recording: Web Audio plays it live, never the same twice. An FM electric piano (a tine that blooms and fades,
+// two voices a few cents apart, tremolo) on jazzy voicings that move by small steps, a warm bass, a swung and
+// humanised beat (kick with a click, snare with body, hats, ghost notes), a pentatonic melody with a dotted echo,
+// tape wobble, a room reverb, the beat pumping the rest a little, vinyl hiss and pops, all through a soft low-pass.
+// Placed like the TV, but it stays in its room. Two speakers on the back wall switch it on and off (remembered).
+const PROGS = [
+  [[0, 4, 7, 11, 14], [5, 9, 12, 16, 19], [2, 5, 9, 12, 16], [7, 11, 14, 17, 21]],     // Imaj9 IVmaj9 ii9 V9
+  [[9, 12, 16, 19, 23], [2, 5, 9, 12, 16], [7, 11, 14, 17, 21], [0, 4, 7, 11, 14]],    // vi9 ii9 V9 Imaj9
+  [[2, 5, 9, 12, 16], [7, 10, 14, 17, 21], [0, 4, 7, 11, 14], [9, 12, 16, 19, 22]],    // ii9 V7#9-ish Imaj9 VI7
+  [[4, 7, 11, 14, 17], [9, 12, 16, 19, 23], [2, 5, 9, 12, 16], [7, 11, 14, 17, 21]]];  // iii7 vi9 ii9 V9
+const PENTA = [0, 2, 4, 7, 9];
 const hz = n => 440 * Math.pow(2, (n - 69) / 12);
 
 export function createLofi({THREE, scene, camera, area, spots, raycastables, say, t, ear, Vox, mesh}) {
-  let on = true, bus = null, nodes = null, timer = 0, beat = 0, nextAt = 0, prog = PROGS[0], noise = null, heardAt = 0;
+  let on = true, timer = 0, beat = 0, nextAt = 0, heardAt = 0, prog = PROGS[0], last = null;
+  let out = null, nodes = null, keysBus = null, drumBus = null, rev = null, echo = null, wow = null, noise = null;
+  const key = 57 + Math.floor(Math.random() * 6), bpm = 70 + Math.floor(Math.random() * 12);   // a key and a tempo per visit
   try { on = localStorage.getItem('chatroom.lofi') !== '0'; } catch (e) {}
   const mid = {x: (area.x0 + area.x1) / 2, z: (area.z0 + area.z1) / 2};
   // the speakers: a cabinet, two cones, a light that breathes while it plays
@@ -567,75 +634,130 @@ export function createLofi({THREE, scene, camera, area, spots, raycastables, say
     m.traverse(o => { o.userData.lofi = true; if (o.isMesh) raycastables.push(o); });
     scene.add(m); leds.push(led);
   }
-  function build() {                                   // the chain: instruments -> low-pass -> saturation -> placed speaker
+  function build() {
     ac ??= new AudioContext();
-    const el = ac.createGain(); el.gain.value = 0.9;
-    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = 0.4;
-    const sat = ac.createWaveShaper(), curve = new Float32Array(1024);
-    for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
-    sat.curve = curve;
+    // master: soft low-pass, gentle saturation, then the placed speaker
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200; lp.Q.value = 0.5;
+    const sat = ac.createWaveShaper(), curve = new Float32Array(2048);
+    for (let i = 0; i < 2048; i++) { const x = i / 1024 - 1; curve[i] = Math.tanh(x * 1.3) / Math.tanh(1.3); }
+    sat.curve = curve; sat.oversample = '2x';
     const gain = ac.createGain(), pan = ac.createStereoPanner();
-    el.connect(lp).connect(sat).connect(gain).connect(pan).connect(ac.destination);
-    nodes = {gain, pan}; bus = el;
-    noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
-    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const crackle = ac.createBufferSource(); crackle.buffer = noise; crackle.loop = true;   // vinyl: hiss and pops
-    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2500; bp.Q.value = 0.3;
-    const cg = ac.createGain(); cg.gain.value = 0.012;
-    crackle.connect(bp).connect(cg).connect(bus); crackle.start();
+    out = ac.createGain(); out.gain.value = 0.85;
+    out.connect(lp).connect(sat).connect(gain).connect(pan).connect(ac.destination);
+    nodes = {gain, pan};
+    // the room: a reverb from a decaying noise burst
+    const ir = ac.createBuffer(2, ac.sampleRate * 2.4, ac.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3.2); }
+    rev = ac.createConvolver(); rev.buffer = ir;
+    const revBack = ac.createGain(); revBack.gain.value = 0.32; rev.connect(revBack).connect(out);
+    // a dotted-eighth echo for the melody
+    echo = ac.createDelay(1.5); echo.delayTime.value = 60 / bpm * 0.75;
+    const fb = ac.createGain(); fb.gain.value = 0.32; const etone = ac.createBiquadFilter(); etone.type = 'lowpass'; etone.frequency.value = 2200;
+    echo.connect(etone).connect(fb).connect(echo); etone.connect(out); etone.connect(rev);
+    // busses: keys and bass pump a little on every kick, drums go straight
+    keysBus = ac.createGain(); keysBus.connect(out); keysBus.connect(rev);
+    drumBus = ac.createGain(); drumBus.gain.value = 0.9; drumBus.connect(out);
+    const snareSend = ac.createGain(); snareSend.gain.value = 0.25; drumBus.connect(snareSend).connect(rev);
+    // tape wobble: one slow wave bends every note a few cents
+    wow = ac.createOscillator(); wow.frequency.value = 0.35; const wowDepth = ac.createGain(); wowDepth.gain.value = 7;
+    wow.connect(wowDepth); wow.start(); wow.depth = wowDepth;
+    // vinyl: a bed of hiss and the odd pop
+    noise = ac.createBuffer(1, ac.sampleRate * 3, ac.sampleRate);
+    const d = noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.5 + (Math.random() < 0.00012 ? (Math.random() < 0.5 ? -1 : 1) * 4 : 0);
+    const vinyl = ac.createBufferSource(); vinyl.buffer = noise; vinyl.loop = true;
+    const vbp = ac.createBiquadFilter(); vbp.type = 'bandpass'; vbp.frequency.value = 3200; vbp.Q.value = 0.4;
+    const vg = ac.createGain(); vg.gain.value = 0.016;
+    vinyl.connect(vbp).connect(vg).connect(out); vinyl.start();
   }
   const env = (g, at, peak, attack, decay, sustain = 0) => {
     g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(peak, at + attack);
     g.gain.setTargetAtTime(Math.max(0.0001, sustain), at + attack, decay);
   };
-  function keys(notes, at, len) {                      // electric piano: a sine and a soft octave above
-    for (const n of notes) {
-      const o = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain();
-      o.type = 'sine'; o.frequency.value = hz(n); o2.type = 'triangle'; o2.frequency.value = hz(n) * 2.001; g2.gain.value = 0.18;
-      o.connect(g); o2.connect(g2).connect(g); g.connect(bus);
-      env(g, at, 0.07, 0.015, 0.9, 0.025); g.gain.setTargetAtTime(0.0001, at + len, 0.4);
-      o.start(at); o2.start(at); o.stop(at + len + 2); o2.stop(at + len + 2);
+  const osc = (type, f, at, stop) => {                // every note bends with the tape wobble, and lets go of it when it ends
+    const o = ac.createOscillator(); o.type = type; o.frequency.value = f; wow.depth.connect(o.detune);
+    o.onended = () => { try { wow.depth.disconnect(o.detune); } catch (e) {} };
+    o.start(at); o.stop(stop); return o;
+  };
+  /** one electric-piano note: an FM tine (the modulator's depth blooms then fades), two voices apart, tremolo */
+  function tine(n, at, len, vel) {
+    const g = ac.createGain(), trem = ac.createGain(), lfo = ac.createOscillator(), lfoG = ac.createGain();
+    lfo.frequency.value = 4.6; lfoG.gain.value = 0.12; lfo.connect(lfoG).connect(trem.gain); trem.gain.value = 0.88;
+    g.connect(trem).connect(keysBus);
+    for (const cents of [-5, 5]) {
+      const c = osc('sine', hz(n), at, at + len + 2.5), m = osc('sine', hz(n), at, at + len + 2.5), idx = ac.createGain();
+      c.detune.value = cents; m.detune.value = cents;
+      idx.gain.setValueAtTime(hz(n) * 2.2, at); idx.gain.setTargetAtTime(hz(n) * 0.25, at, 0.35);   // the bark, then the warm tone
+      m.connect(idx).connect(c.frequency); c.connect(g);
     }
+    env(g, at, 0.045 * vel, 0.006, 1.1, 0.012); g.gain.setTargetAtTime(0.0001, at + len, 0.35);
+    lfo.start(at); lfo.stop(at + len + 2.5);
+  }
+  /** the next chord, voiced near the last one (small steps sound smooth) */
+  function voice(ch) {
+    const base = key + 12, notes = ch.map(i => base + i).map(n => { while (n > base + 17) n -= 12; return n; }).sort((a, b) => a - b);
+    if (last) { const avg = last.reduce((a, b) => a + b) / last.length, now_ = notes.reduce((a, b) => a + b) / notes.length; if (now_ - avg > 6) notes.forEach((_, i) => notes[i] -= 12); }
+    last = notes; return notes;
   }
   function bass(n, at, len) {
-    const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = hz(n - 24);
-    o.connect(g).connect(bus); env(g, at, 0.22, 0.01, 0.35, 0.08); g.gain.setTargetAtTime(0.0001, at + len, 0.1);
-    o.start(at); o.stop(at + len + 1);
+    const g = ac.createGain(), f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 380;
+    const a = osc('sine', hz(n), at, at + len + 1), b = osc('triangle', hz(n), at, at + len + 1), bg = ac.createGain(); bg.gain.value = 0.35;
+    a.connect(g); b.connect(bg).connect(g); g.connect(f).connect(keysBus);
+    env(g, at, 0.24, 0.012, 0.4, 0.1); g.gain.setTargetAtTime(0.0001, at + len, 0.08);
   }
-  function kick(at) {
-    const o = ac.createOscillator(), g = ac.createGain();
-    o.frequency.setValueAtTime(110, at); o.frequency.exponentialRampToValueAtTime(42, at + 0.25);
-    o.connect(g).connect(bus); env(g, at, 0.5, 0.004, 0.12); o.start(at); o.stop(at + 0.6);
+  function kick(at, vel = 1) {
+    const g = ac.createGain(), o = ac.createOscillator();
+    o.frequency.setValueAtTime(150, at); o.frequency.exponentialRampToValueAtTime(46, at + 0.12);
+    o.connect(g).connect(drumBus); env(g, at, 0.62 * vel, 0.002, 0.13); o.start(at); o.stop(at + 0.6);
+    noiseHit(at, 2500, 1.2, 0.08 * vel, 0.006, 'bandpass');                  // the click of the beater
+    keysBus.gain.cancelScheduledValues(at); keysBus.gain.setValueAtTime(0.72, at); keysBus.gain.setTargetAtTime(1, at + 0.02, 0.12);   // pump
   }
-  function burst(at, freq, q, peak, dec, type = 'bandpass') {   // snare and hats: filtered noise
+  function noiseHit(at, freq, q, peak, dec, type) {
     const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
     s.buffer = noise; f.type = type; f.frequency.value = freq; f.Q.value = q;
-    s.connect(f).connect(g).connect(bus); env(g, at, peak, 0.003, dec);
-    s.start(at, Math.random() * 1.5); s.stop(at + 0.5);
+    s.connect(f).connect(g).connect(drumBus); env(g, at, peak, 0.002, dec);
+    s.start(at, Math.random() * 2); s.stop(at + 0.6);
   }
-  function step() {                                    // schedules what falls in the next 0.3 s
-    const spb = 60 / 74 / 2;                             // an eighth note at 74 bpm
-    while (nextAt < ac.currentTime + 0.3) {
-      const i = beat % 32, bar = Math.floor(beat / 8) % 4, at = nextAt + (beat % 2 ? spb * 0.18 : 0);   // swung
-      if (i === 0 && Math.random() < 0.35) prog = PROGS[Math.floor(Math.random() * PROGS.length)];
-      if (beat % 8 === 0) { keys(prog[bar], at, spb * 7.5); bass(prog[bar][0], at, spb * 3); }
-      if (beat % 8 === 4 && Math.random() < 0.7) bass(prog[bar][0] + (Math.random() < 0.5 ? 7 : 0), at, spb * 2.5);
-      if (beat % 8 === 0 || (beat % 8 === 5 && Math.random() < 0.5)) kick(at);
-      if (beat % 8 === 4) { burst(at, 1800, 0.8, 0.16, 0.08); burst(at, 200, 1, 0.05, 0.05); }
-      burst(at, 8000, 0.7, beat % 2 ? 0.025 : 0.04, 0.03, 'highpass');
-      if (Math.random() < 0.12) {                      // now and then a melody note from the chord, an octave up
-        const o = ac.createOscillator(), g = ac.createGain();
-        o.type = 'sine'; o.frequency.value = hz(prog[bar][Math.floor(Math.random() * 4)] + 12);
-        o.connect(g).connect(bus); env(g, at, 0.05, 0.02, 0.5); o.start(at); o.stop(at + 2);
+  function snare(at, vel = 1) {
+    noiseHit(at, 1900, 0.9, 0.2 * vel, 0.07, 'bandpass');
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = 'triangle'; o.frequency.setValueAtTime(210, at); o.frequency.exponentialRampToValueAtTime(160, at + 0.08);
+    o.connect(g).connect(drumBus); env(g, at, 0.1 * vel, 0.002, 0.05); o.start(at); o.stop(at + 0.3);
+  }
+  function lead(n, at, len) {                          // a soft triangle with a slow attack, into the echo
+    const g = ac.createGain(), f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2400;
+    osc('triangle', hz(n), at, at + len + 1).connect(f).connect(g);
+    g.connect(echo); g.connect(keysBus); env(g, at, 0.05, 0.03, 0.4, 0.02); g.gain.setTargetAtTime(0.0001, at + len, 0.2);
+  }
+  function step() {                                    // schedules what falls in the next 0.35 s, in sixteenths
+    const s16 = 60 / bpm / 4;
+    while (nextAt < ac.currentTime + 0.35) {
+      const i = beat % 64, bar = Math.floor(beat / 16) % 4, pos = beat % 16;
+      const swing = pos % 2 ? s16 * 0.28 : 0, human = (Math.random() - 0.5) * 0.012, at = nextAt + swing + human;
+      if (i === 0 && Math.random() < 0.4) prog = PROGS[Math.floor(Math.random() * PROGS.length)];
+      if (pos === 0) {
+        const notes = voice(prog[bar]);
+        notes.forEach((n, k) => tine(n, at + k * 0.012, s16 * 14, 0.8 + Math.random() * 0.3));   // a slight strum
+        bass(key - 12 + prog[bar][0], at, s16 * 6);
       }
-      nextAt += spb; beat++;
+      if (pos === 8 && Math.random() < 0.6) bass(key - 12 + prog[bar][0] + (Math.random() < 0.5 ? 7 : 12), at, s16 * 4);
+      if (pos === 10 && Math.random() < 0.35) voice(prog[bar]).slice(1, 4).forEach(n => tine(n, at, s16 * 4, 0.55));   // a push
+      if (pos === 0 || pos === 7 && Math.random() < 0.4 || pos === 10) kick(at, pos === 0 ? 1 : 0.8);
+      if (pos === 4 || pos === 12) snare(at);
+      if ((pos === 15 || pos === 6) && Math.random() < 0.25) snare(at, 0.3);                     // ghost notes
+      if (pos % 2 === 0) noiseHit(at, 8200, 0.7, pos % 4 === 2 ? 0.045 : 0.03, 0.025, 'highpass');
+      if (pos === 14 && Math.random() < 0.3) noiseHit(at, 7500, 0.6, 0.035, 0.16, 'highpass');   // an open hat
+      if (bar % 2 === 1 && pos % 4 === 0 && Math.random() < 0.45) {                              // the melody answers every other bar
+        lead(key + 24 + PENTA[Math.floor(Math.random() * PENTA.length)], at, s16 * (Math.random() < 0.5 ? 2 : 4));
+      }
+      nextAt += s16; beat++;
     }
   }
   function start() {
     if (timer) return;
-    if (!bus) build();
+    if (!out) build();
+    if (ac.state === 'suspended') ac.resume();
     nextAt = ac.currentTime + 0.1; beat = 0;
-    timer = setInterval(step, 100);
+    timer = setInterval(step, 90);
   }
   function stop() { clearInterval(timer); timer = 0; }
   function toggle() {
@@ -654,8 +776,39 @@ export function createLofi({THREE, scene, camera, area, spots, raycastables, say
       for (const l of leds) l.visible = !!timer && Math.sin(time * 2.4) > -0.6;
       if (!nodes || time - heardAt < 0.1) return;
       heardAt = time;
-      const me = ear?.(), [g, side] = me ? hear(area, mid, me, camera) : [1, 0];
-      steer(nodes, timer ? g * 0.55 : 0, side);
+      const me = ear?.(), [g, side] = me ? hear(area, mid, me, camera, 4) : [1, 0];
+      steer(nodes, timer ? g * 0.6 : 0, side, 'lofi');
     },
   };
+}
+
+// ------------------------------------------------------------------ the mixer panel
+const MIX_CSS = `
+.o-mixer { position: absolute; right: 14px; bottom: 64px; z-index: 31; width: 250px; background: #10131bf2; color: #e8eaf0; border-radius: 12px;
+           box-shadow: 0 14px 40px rgba(0,0,0,.5); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; padding: 10px 12px; }
+.o-mixer b { display: block; margin-bottom: 6px; }
+.o-mixer .o-mixrow { display: grid; grid-template-columns: 34px 1fr 38px; align-items: center; gap: 8px; padding: 3px 0; }
+.o-mixer button { background: #222a3a; color: #e8eaf0; border: 1px solid #334058; border-radius: 8px; padding: 3px 0; cursor: pointer; font: inherit; }
+.o-mixer input[type=range] { width: 100%; accent-color: #4dd0e1; }
+.o-mixer small { opacity: .7; text-align: right; font-variant-numeric: tabular-nums; }
+`;
+/** the volumes: a general one and TV, radio, lofi, each with a mute; opens over the button bar */
+export function createMixer({root, t, onChange}) {
+  const style = document.createElement('style'); style.textContent = MIX_CSS; document.head.appendChild(style);
+  let el = null;
+  const save = () => { try { localStorage.setItem('chatroom.mix', JSON.stringify(MIX)); } catch (e) {} onChange?.(); };
+  function draw() {
+    const L = t(), rows = [['master', L.mixAll], ['tv', 'TV'], ['radio', L.radio], ['lofi', 'Lofi']];
+    el.innerHTML = `<b>🔊 ${esc(L.mixTitle)}</b>` + rows.map(([k, name]) => `<div class="o-mixrow"><button data-mute="${k}" title="${esc(name)}">${MIX.mute[k] ? '🔇' : '🔊'}</button>`
+      + `<input type="range" min="0" max="100" step="5" value="${Math.round(MIX[k] * 100)}" data-k="${k}" aria-label="${esc(name)}"><small>${esc(name)}</small></div>`).join('');
+  }
+  function toggle() {
+    if (el) { el.remove(); el = null; return; }
+    el = document.createElement('div'); el.className = 'o-mixer';
+    for (const ev of ['pointerdown', 'wheel', 'keydown']) el.addEventListener(ev, e => e.stopPropagation());
+    el.addEventListener('input', e => { const k = e.target.dataset.k; if (!k) return; MIX[k] = +e.target.value / 100; save(); });
+    el.addEventListener('click', e => { const k = e.target.closest('button')?.dataset.mute; if (!k) return; MIX.mute[k] = !MIX.mute[k]; save(); draw(); });
+    draw(); root.appendChild(el);
+  }
+  return {toggle, open: () => !!el, muted: () => !!MIX.mute.master};
 }
