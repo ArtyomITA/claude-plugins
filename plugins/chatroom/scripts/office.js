@@ -442,7 +442,21 @@ function buildDesk(d, i) {
           intern: {pos: W(0.62, 1.1), rot: d.rot + Math.PI, pose: 'stand'}};
 }
 
-// more agents than desks: a workstation where the floor is free, nearest to the other desks (not saved: furnish it to keep it)
+// more agents than desks: a block of four at the first free pod slot of the layout, else a single workstation where the
+// floor is free, nearest to the other desks (neither is saved: furnish it to keep it)
+function addPod() {
+  for (const [x, z] of LAYOUT.podSlots || []) {
+    let free = true;
+    for (let dx = -2; dx <= 2 && free; dx += 0.25) for (let dz = -2; dz <= 2; dz += 0.25) if (FLOOR.blocked(x + dx, z + dz, 0.05)) { free = false; break; }
+    if (!free) continue;
+    const r = resolve({items: [{type: 'pod', x, z}], pods: LAYOUT.pods});
+    placeItem({type: 'pod', x, z});
+    FLOOR.addBoxes(r.boxes); outCache.clear(); climb = null;
+    const fresh = r.desks.map(d => { const k = buildDesk(d, DESKS.length); DESKS.push(k); return k; });
+    return fresh[0];
+  }
+  return null;
+}
 function addWorkstation() {
   const cx = DESKS.reduce((a, d) => a + d.g.position.x, 0) / Math.max(1, DESKS.length), cz = DESKS.reduce((a, d) => a + d.g.position.z, 0) / Math.max(1, DESKS.length);
   const fits = (x, z) => { for (let dx = -1.0; dx <= 1.0; dx += 0.25) for (let dz = -0.6; dz <= 1.3; dz += 0.25) if (FLOOR.blocked(x + dx, z + dz, 0.05)) return false; return true; };
@@ -461,7 +475,7 @@ function deskLayout(names) {
     if (SPOTS.has(name)) continue;
     // this room's agents take desks from the first, the other session's from the last: both offices agree
     const pick = D.per[name]?.neighbor ? [...DESKS].reverse().find(k => !k.owner) : DESKS.find(k => !k.owner);
-    const d = pick || addWorkstation();
+    const d = pick || addPod() || addWorkstation();
     if (!d) continue;                                            // ponytail: no free floor left either
     const color = DATA.profile(name).color;
     d.owner = name;
@@ -469,6 +483,7 @@ function deskLayout(names) {
     const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); d.g.add(mug);
     SPOTS.set(name, d);
   }
+  if (DESKS.every(k => k.owner)) addPod() || addWorkstation();      // always one free desk for whoever comes in next
 }
 
 const _cupAt = new THREE.Vector3();

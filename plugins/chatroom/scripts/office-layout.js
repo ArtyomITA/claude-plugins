@@ -81,7 +81,8 @@ Object.assign(CATALOG, {
 // Back right the boss's glass office and, outside its door, the assistant; two phone booths; front right the glass
 // meeting room; front middle the common room (the second coffee room, the one friends can share); the entrance with
 // the reception; on the left the café (kitchen, bar, tables), the lounge and the games corner. The open space holds
-// six blocks of four cubicles, furnished even when nobody sits there; agents take the free ones in order.
+// two blocks of four cubicles, furnished even when nobody sits there; agents take the free ones in order, and when they
+// are all taken another block comes at the next pod slot. Behind them, against the north wall, the control room.
 const LS = -0.8;                                                 // the assistant's desk faces the open space
 const ring4 = (x, z, tag, color) => [[0, -0.72, 0], [0, 0.72, PI], [-0.72, 0, PI / 2], [0.72, 0, -PI / 2]]
   .map(([dx, dz, rot]) => ({type: 'cafeChair', x: x + dx, z: z + dz, rot, color, tag}));
@@ -92,7 +93,7 @@ export const DEFAULT_LAYOUT = {
     {x0: 9, z0: 3.5, x1: 15, z1: 10, kind: 'parquetLight'}, {x0: 0, z0: 5, x1: 8, z1: 10, kind: 'common'},
     {x0: -6, z0: 6, x1: 0, z1: 10, kind: 'stone'}, {x0: -15, z0: 1, x1: -6, z1: 10, kind: 'tiles'},
     {x0: -14.5, z0: -4, x1: -9, z1: 0.5, kind: 'rug'}, {x0: -15, z0: -10, x1: -8, z1: -4.5, kind: 'game'},
-    {x0: -4, z0: 9.5, x1: -2, z1: 10, kind: 'mat'},
+    {x0: -4, z0: 9.5, x1: -2, z1: 10, kind: 'mat'}, {x0: -2, z0: -10, x1: 3.8, z1: -4.6, kind: 'booth'},
   ]},
   walls: [
     {a: [-15, -10], b: [15, -10], windows: [[-14, -11], [10.5, 14]]},
@@ -119,8 +120,14 @@ export const DEFAULT_LAYOUT = {
     // a second assistant, for a second session sharing this office
     {type: 'smallDesk', x: 9.8 + Math.sin(LS) * 0.62, z: -3.3 + Math.cos(LS) * 0.62, rot: LS},
     {type: 'chair', x: 9.8, z: -3.3, rot: LS + PI, color: '#5b4a8a', tag: 'lead2'},
-    // the open space: six blocks of four cubicles (furniture like the rest: they can be moved or removed)
-    ...[[0.9, -0.9], [-4.1, -0.9], [5.9, -0.9], [0.9, -6.6], [-4.1, -6.6], [5.9, -6.6]].map(([x, z]) => ({type: 'pod', x, z})),
+    // the open space: two blocks of four cubicles (furniture like the rest: they can be moved or removed); more blocks
+    // come by themselves at podSlots when the agents fill them
+    ...[[0.9, -0.9], [-4.1, -0.9]].map(([x, z]) => ({type: 'pod', x, z})),
+    // the control room: a command table facing the task board and the live TV on the north wall
+    {type: 'confTable', x: 1, z: -6.6},
+    ...[0, 1, 2].map(x => ({type: 'meetChair', x, z: -5.55, rot: 0})),
+    {type: 'meetChair', x: -0.75, z: -6.6, rot: -PI / 2}, {type: 'meetChair', x: 2.75, z: -6.6, rot: PI / 2},
+    {type: 'plantTall', x: 1, z: -9.45},
     // phone booths
     {type: 'smallDesk', x: 14.5, z: -2.8, rot: PI / 2}, {type: 'barStool', x: 13.95, z: -2.8, rot: PI / 2, tag: 'booth'},
     {type: 'smallDesk', x: 14.5, z: -0.3, rot: PI / 2}, {type: 'barStool', x: 13.95, z: -0.3, rot: PI / 2, tag: 'booth'},
@@ -175,7 +182,7 @@ export const DEFAULT_LAYOUT = {
   spots: [{x: -13.6, z: 3.5, rot: -PI / 2, tag: 'coffee'}, {x: -13.6, z: 8.1, rot: -PI / 2, tag: 'coffee'},
           {x: -11.6, z: 8.6, rot: 0, tag: 'coffee'}, {x: 1.0, z: 7.85, rot: PI / 2, tag: 'portal'},
           {x: -3, z: 9.2, rot: PI, tag: 'entrance'}, {x: 4.1, z: 9.2, rot: PI, tag: 'bridgeIn'}],
-  lights: [[12, 2.6, 6.75], [-10, 2.6, 5.5], [4, 2.6, 7.5], [-12, 2.6, -6.5]],
+  lights: [[12, 2.6, 6.75], [-10, 2.6, 5.5], [4, 2.6, 7.5], [-12, 2.6, -6.5], [1, 2.6, -6.6]],
   boards: {
     tv: {x: 3.5, y: 1.7, z: -9.85, rot: 0}, whiteboard: {x: -1.5, y: 1.6, z: -9.85, rot: 0},
     clock: {x: 9.75, y: 2.35, z: -9.85, rot: 0}, coffeeSign: {x: -14.85, y: 2.6, z: 5.8, rot: PI / 2},
@@ -197,11 +204,14 @@ export const DEFAULT_LAYOUT = {
     {x0: -8, z0: -10, x1: -6, z1: -8, it: 'Angolo servizi', en: 'Service corner'},
     {x0: 9, z0: -4.5, x1: 13, z1: -1, it: "Postazione dell'assistente", en: "Assistant's desk"},
     {x0: -6.5, z0: 1, x1: 9, z1: 5, it: 'Piazza', en: 'Plaza'},
+    {x0: -2, z0: -10, x1: 3.8, z1: -4.6, it: 'Sala regia', en: 'Control room'},
     {x0: -15, z0: -10, x1: 15, z1: 10, it: 'Open space', en: 'Open space'},
   ],
   // the common room's door in the front wall; shared with friends, a glass bridge leads to their building
   bridge: {x: 4.1, z: 10, length: 7, width: 2.4},
   pods: {style: 'cubicle'},
+  // where a new block of four desks goes when every desk is taken, in this order (one free desk is always kept)
+  podSlots: [[5.9, -0.9], [-4.1, -6.6], [5.9, -6.6]],
   camera: {pos: [1.5, 33, 38], target: [0.5, 0.2, 0.3]},
 };
 
