@@ -1609,7 +1609,7 @@ def cmd_serve(room, a):
             if path == '/common.json':               # the common room for the viewer: its chat, sharing, who is there
                 b = guest['bridge']
                 lines = common.messages()
-                body = {'messages': lines[-40:], 'games': [m for m in lines if m.get('game')][-300:], 'me': me()['name'], 'share': host.status(),
+                body = {'messages': lines[-40:], 'games': [m for m in lines if m.get('game')][-300:], 'scores': sharing.scoreboard(lines), 'me': me()['name'], 'share': host.status(),
                         'codex': ping_tool(room.roster()) == 'send_message', 'friends_chat': bool(room.config().get('friends_chat')),
                         'room_chat': bool(guest['bridge'] and guest['bridge'].room_ok), 'lend_mode': settings()['lend_mode'], 'lend_auto': settings()['lend_auto'],
                         'bridge': b.status() if b else None, 'cloudflared': bool(sharing.cloudflared_cached()),

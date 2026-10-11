@@ -87,6 +87,23 @@ body.mode-office > :not(#office):not(#panel):not(#scrim):not(#lightbox) { displa
 #office .o-common .o-meta { opacity: .7; font-size: 11.5px; }
 #office .o-common { width: 300px; }
 #office .o-look { left: auto; right: 12px; width: 260px; }
+#office .o-lb { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(480px, 94%); max-height: 82%; overflow: auto; background: #14151df5;
+  border: 1px solid #ffffff1c; border-radius: 14px; box-shadow: 0 14px 40px #000a; padding: 14px; display: none; z-index: 7; }
+#office .o-lb.o-open { display: block; }
+#office .o-lb h3 { margin: 0 0 8px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+#office .o-lb h3 button { margin-left: auto; }
+#office .o-lb .o-lbtabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+#office .o-lb .o-lbtabs button { padding: 4px 9px; border-radius: 8px; background: #ffffff12; border: 1px solid transparent; }
+#office .o-lb .o-lbtabs button.o-on { background: #f5b40033; border-color: #f5b400; }
+#office .o-lb table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#office .o-lb th { font-size: 11px; opacity: .6; font-weight: 600; text-align: right; padding: 2px 6px; }
+#office .o-lb td { padding: 5px 6px; text-align: right; border-bottom: 1px solid #ffffff10; }
+#office .o-lb th:nth-child(2), #office .o-lb td:nth-child(2) { text-align: left; width: 100%; }
+#office .o-lb td:first-child { text-align: center; width: 28px; }
+#office .o-lb tr.o-first td { color: #ffd54f; font-weight: 700; }
+#office .o-lb tr.o-me td { background: #4fc3f722; }
+#office .o-lb tr.o-me td:nth-child(2) { font-weight: 700; }
+#office .o-lb .o-lbgap td { text-align: center; opacity: .5; padding: 1px; border: 0; }
 #office .o-sws { display: flex; flex-wrap: wrap; gap: 5px; margin: 3px 0 8px; }
 #office .o-sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #ffffff33; padding: 0; cursor: pointer; }
 #office .o-sw.o-on { border-color: #fff; box-shadow: 0 0 0 2px #ffffff55; }
@@ -177,7 +194,8 @@ export const L = {
        poolWaiting: n => `Waiting for ${n}...`, poolWaitAny: 'a friend', poolCancel: 'Cancel', pingpong: 'Ping pong', foos: 'Foosball', theyWin: n => `${n} wins`, newMatch: 'Play with a friend, live', joinMatch: n => `Play with ${n}`,
        matchFriends: 'Link with a friend to play together', liveMatch: 'live match', poolFouls: 'fouls: -1 point each', cue_classic: 'Classic', cue_power: 'Power', cue_precise: 'Precise', cue_spin: 'Spin', cue_classic_tip: 'The cue as it is', cue_power_tip: '+40% force, but the aim trembles ', cue_precise_tip: '-20% force, a long aim line with the bounce', cue_spin_tip: 'The cue ball curves (press 4 again to turn the other way)', goal: 'GOAL!', points: 'pts', poolQuit: 'Forfeit', poolRestart: 'New game', poolYourTurn: 'Your turn: aim with the mouse, hold to load the shot, let go to shoot', poolTheirTurn: n => `${n} is playing...`, poolLate: 'The table is not ready yet: try again in a moment', poolStarts: 'Your friend is here: play!',
        askFriend: 'Ask a friend for help', autoLend: 'Lend by itself', autoOn: 'ON', autoOff: 'off',
-       pool: 'Pool', foosball: 'Foosball', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
+       pool: 'Pool', foosball: 'Foosball', scores: 'Leaderboard', hint_scores: 'see the leaderboard', noScores: 'no games played yet', colWins: 'W', colLoss: 'L', colPts: 'pts', colBest: 'best', colRuns: 'runs',
+       foosHint: 'Mouse: slide the rod (its position picks the rod, or keys 1-4) · hold the button to wind up, let go to kick', vsCpu: 'against the computer', youWin: 'You win!', cpuWins: 'The computer wins', clickAgain: 'click to play again',
        turnOf: n => `${n}'s turn`, solids: 'solids', stripes: 'stripes', openTable: 'Open the table', openGame: n => `Open the table (with ${n})`,
        joinPool: n => `Play pool with ${n}`, newPool: 'Play pool with a friend, in turns', poolFriends: 'Link with a friend to play pool together',
        poolShot: 'takes a shot', poolOpens: 'sets up the pool table', poolJoins: 'joins the pool table', hint_game: 'play at this table',
@@ -222,7 +240,8 @@ export const L = {
        poolWaiting: n => `Aspetto ${n}...`, poolWaitAny: 'un amico', poolCancel: 'Annulla', pingpong: 'Ping pong', foos: 'Biliardino', theyWin: n => `Vince ${n}`, newMatch: 'Gioca con un amico, in diretta', joinMatch: n => `Gioca con ${n}`,
        matchFriends: 'Collegati a un amico per giocare insieme', liveMatch: 'partita in diretta', poolFouls: 'falli: -1 punto ciascuno', cue_classic: 'Classica', cue_power: 'Potente', cue_precise: 'Precisa', cue_spin: 'Effetto', cue_classic_tip: 'La stecca di sempre', cue_power_tip: '+40% di forza, ma la mira trema ', cue_precise_tip: '-20% di forza, linea di mira lunga con il rimbalzo', cue_spin_tip: 'La bianca curva (premi di nuovo 4 per girare dall altra parte)', goal: 'GOL!', points: 'punti', poolQuit: 'Abbandona', poolRestart: 'Nuova partita', poolYourTurn: 'Tocca a te: mira col mouse, tieni premuto per caricare, rilascia per tirare', poolTheirTurn: n => `Tira ${n}...`, poolLate: "Il tavolo non e' ancora pronto: riprova tra poco", poolStarts: "L'amico e' entrato: si gioca!",
        askFriend: 'Chiedi aiuto a un amico', autoLend: 'Presta da solo', autoOn: 'ACCESO', autoOff: 'spento',
-       pool: 'Biliardo', foosball: 'Biliardino', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
+       pool: 'Biliardo', foosball: 'Biliardino', scores: 'Classifica', hint_scores: 'apri la classifica', noScores: 'nessuna partita ancora', colWins: 'V', colLoss: 'S', colPts: 'punti', colBest: 'record', colRuns: 'partite',
+       foosHint: 'Mouse: sposta la barra (la sua posizione sceglie la barra, o tasti 1-4) · tieni premuto per caricare, rilascia per calciare', vsCpu: 'contro il computer', youWin: 'Hai vinto!', cpuWins: 'Vince il computer', clickAgain: 'clicca per rigiocare',
        turnOf: n => `tocca a ${n}`, solids: 'piene', stripes: 'mezze', openTable: 'Apri tavolo', openGame: n => `Apri il tavolo (con ${n})`,
        joinPool: n => `Gioca a biliardo con ${n}`, newPool: 'Gioca a biliardo con un amico, a turni', poolFriends: 'Collegati a un amico per giocare a biliardo insieme',
        poolShot: 'tira', poolOpens: 'prepara il tavolo da biliardo', poolJoins: 'entra al tavolo da biliardo', hint_game: 'gioca a questo tavolo',
@@ -319,14 +338,39 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       <div class="o-more"><div class="o-grp"><button data-b="more"></button></div><div class="o-menu"><h5 data-k="games"></h5><div data-k="games-list"></div>
         <h5 data-k="tools"></h5><button data-b="look"></button><button data-b="follow"></button><button data-b="reset"></button><button data-b="quality"></button><button data-b="sens"></button>
         <button data-b="notify"></button><button data-b="help"></button></div></div></div>
-    <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
+    <div class="o-inspector" tabindex="-1"></div><div class="o-common"></div><div class="o-lb"></div><div class="o-room"></div><div class="o-place"></div><div class="o-hint"></div><div class="o-palette" role="listbox"></div><div class="o-help"></div>`);
   const tags = root.querySelector('.o-tags'), hud = root.querySelector('.o-hud'), insp = root.querySelector('.o-inspector'), btns = root.querySelector('.o-btns');
-  const cp = root.querySelector('.o-common');
+  const cp = root.querySelector('.o-common'), lbEl = root.querySelector('.o-lb');
+  // the leaderboards: a tab for each game, the first ten with the crown for the first, your own row marked; kept up to date from the common room's state
+  const SCORE_TABS = [['pool', '🎱'], ['pingpong', '🏓'], ['foos', '⚽'], ['tris', '⭕'], ['morra', '✊'], ['zombie', '🧟'], ['paintball', '🔫']];
+  let lbTab = 'pool';
+  function renderScores() {
+    const L = t(), data = (lastCommon && lastCommon.scores) || {}, me = lastCommon && lastCommon.me;
+    const name = k => ({pool: L.pool, pingpong: L.pingpong, foos: L.foosball, tris: L.tris, morra: L.morra, zombie: 'Zombie', paintball: 'Paintball'}[k] || k.replace(/^arc-/, '').replace(/-/g, ' '));
+    const tabs = [...SCORE_TABS, ...Object.keys(data).filter(k => k.startsWith('arc-')).map(k => [k, '🕹'])];
+    if (!tabs.some(([k]) => k === lbTab)) lbTab = tabs[0][0];
+    const book = data[lbTab], rows = book ? book.rows : [], wins = !book || book.mode === 'wins', mine = rows.findIndex(r => r.name === me);
+    const row = (r, i) => `<tr class="${r.name === me ? 'o-me' : ''}${i === 0 ? ' o-first' : ''}"><td>${i === 0 ? '👑' : i + 1}</td><td>${esc(r.name)}</td>`
+      + (wins ? `<td>${r.w}</td><td>${r.l}</td><td>${r.pts}</td>` : `<td>${r.best}${r.extra ? ' · ' + r.extra : ''}</td><td>${r.n}</td>`) + '</tr>';
+    const head = wins ? `<th></th><th></th><th>${esc(L.colWins)}</th><th>${esc(L.colLoss)}</th><th>${esc(L.colPts)}</th>` : `<th></th><th></th><th>${esc(L.colBest)}</th><th>${esc(L.colRuns)}</th>`;
+    const html = `<h3>🏆 ${esc(L.scores)} <button data-lb-close>✕</button></h3><div class="o-lbtabs">`
+      + tabs.map(([k, ic]) => `<button data-lb="${esc(k)}" class="${k === lbTab ? 'o-on' : ''}">${ic} ${esc(name(k))}</button>`).join('') + '</div>'
+      + (rows.length ? `<table><tr>${head}</tr>${rows.slice(0, 10).map(row).join('')}${mine >= 10 ? `<tr class="o-lbgap"><td colspan="5">…</td></tr>${row(rows[mine], mine)}` : ''}</table>` : `<div class="o-meta">${esc(L.noScores)}</div>`);
+    if (lbEl.dataset.html !== html) { lbEl.innerHTML = html; lbEl.dataset.html = html; }
+  }
+  lbEl.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.lb) { lbTab = b.dataset.lb; renderScores(); } else if ('lbClose' in b.dataset) lbEl.classList.remove('o-open');
+  });
+  lbEl.addEventListener('pointerdown', e => e.stopPropagation()); lbEl.addEventListener('wheel', e => e.stopPropagation());
+  addEventListener('keydown', e => { if (e.key === 'Escape' && lbEl.classList.contains('o-open')) { lbEl.classList.remove('o-open'); e.stopImmediatePropagation(); } }, true);
+  const openScores = tab => { if (tab) lbTab = tab; lbEl.classList.toggle('o-open', tab ? true : !lbEl.classList.contains('o-open')); if (lbEl.classList.contains('o-open')) { lbEl.dataset.html = ''; renderScores(); } };
   const chip = k => hud.querySelector(`[data-k="${k}"]`), btn = b => btns.querySelector(`[data-b="${b}"]`);
   let lang = 'it';
   const t = () => L[lang] || L.en;
   btns.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.x === 'scores') { closeMenu(); return openScores(); }
     if (b.dataset.x) { closeMenu(); const f = extras.get(b.dataset.x)?.fn; return f ? f() : onExtra?.(b.dataset.x); }
     const k = b.dataset.b;
     if (k === 'more') return menuEl.classList.toggle('o-open');
@@ -410,7 +454,7 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       setBtn('follow', '🎯', L.follow, '', !!d.follow); setBtn('reset', '🎥', L.reset);
       setBtn('more', '⋯', L.more + ' ▾', '', menuEl.classList.contains('o-open'));
       const hk = k => menuEl.querySelector(`[data-k="${k}"]`); hk('games').textContent = L.gamesTitle; hk('tools').textContent = L.toolsTitle;
-      const gl = hk('games-list'), items = [['pingPong', '🏓', L.pingPong], ['foosball', '⚽', L.foosball], ['poolTable', '🎱', L.pool], ...[...extras].map(([k, v]) => [k, v.icon, v.text])];
+      const gl = hk('games-list'), items = [['pingPong', '🏓', L.pingPong], ['foosball', '⚽', L.foosball], ['poolTable', '🎱', L.pool], ['scores', '🏆', L.scores], ...[...extras].map(([k, v]) => [k, v.icon, v.text])];
       const gkey = items.map(i => i.join()).join('|');
       if (gl.dataset.key !== gkey) { gl.dataset.key = gkey; gl.innerHTML = items.map(([k, ic, tx]) => `<button data-x="${esc(k)}"><span class="o-ic">${ic}</span><span>${esc(tx)}</span></button>`).join(''); }
       setBtn('quality', '✨', L.quality(d.quality)); setBtn('sens', '🖱', L.sensName(d.sens)); setBtn('notify', '🔔', L.notify, '', notifyOn()); setBtn('help', '❓', L.helpBtn);
@@ -525,6 +569,7 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       // a Codex host lends a Codex agent: 'default' is the session's own model, the others are the ones Codex documents
       const CODEX_MODELS = ['default', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'];
       lastCommon = s;
+      if (lbEl.classList.contains('o-open')) renderScores();
       if (!cp.classList.contains('o-open') || !s) return;
       const L = t(), sh = s.share || {}, br = s.bridge, box = cp.querySelector('.o-c-share');
       let html;
@@ -705,6 +750,8 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       el.textContent = '📍 ' + text; el.classList.add('o-show');
       clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('o-show'), 2200);
     },
+    /** the leaderboards: open (or close) them, on the tab of a game */
+    scores: openScores,
     remove(name) { const l = labels.get(name); if (l) { l.el.remove(); labels.delete(name); } },
     onKey: e => {
       if (e.target.closest && e.target.closest('input, textarea, select')) return;

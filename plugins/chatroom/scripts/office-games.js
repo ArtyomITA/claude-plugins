@@ -174,7 +174,89 @@ function poolAim(end, g) {
 }
 
 // ------------------------------------------------------------------ the overlay and the three games
-export function createGames({root, t, me, sendShot}) {
+/** the foosball table without any drawing: the pitch, eight rods of little men and the ball that real physics moves (mine: the team of the player at this screen).
+ *  simulate(h, live) advances everything by h seconds; ev collects the hardest impacts and the goals since it was last cleared */
+export function foosTable(mine) {
+    const XL = 26, XR = W - 26, YT = 16, YB = H - 16, MY = H / 2, GOAL = 64, CH = 44, R = 10, L = 46, FX = 7, FY = 11, VMAX = 1900, E_FOOT = 0.45, E_WALL = 0.72, MU = 0.12;
+    const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+    const POLY = [[XL + CH, YT], [XR - CH, YT], [XR, YT + CH], [XR, YB - CH], [XR - CH, YB], [XL + CH, YB], [XL, YB - CH], [XL, YT + CH]];
+    const WALLS = [[XL + CH, YT, XR - CH, YT], [XL + CH, YB, XR - CH, YB], [XL, YT + CH, XL, MY - GOAL], [XL, MY + GOAL, XL, YB - CH], [XR, YT + CH, XR, MY - GOAL], [XR, MY + GOAL, XR, YB - CH],
+                   [XL, YT + CH, XL + CH, YT], [XL, YB - CH, XL + CH, YB], [XR, YT + CH, XR - CH, YT], [XR, YB - CH, XR - CH, YB]];
+    // the rods from left to right: goalkeeper, defence, forwards of the other team, midfield, midfield of the other team, forwards, ... (as on a real table)
+    const rods = [[0, 1, 0, 0], [1, 2, 140, 0], [2, 3, 128, 1], [3, 5, 76, 0], [4, 5, 76, 1], [5, 3, 128, 0], [6, 2, 140, 1], [7, 1, 0, 1]].map(([slot, n, gap, team]) =>
+      ({x: XL + (XR - XL) * (slot + 0.5) / 8, n, gap, team, dir: team ? -1 : 1, lim: n === 1 ? 52 : Math.min(110, (YB - YT) / 2 - FY - 4 - (n - 1) / 2 * gap), y: 0, yT: 0, vy: 0,
+        th: 0, w: 0, mode: 0, om: 0, hold: (n - 1) >> 1, windAt: 0, sentAt: 0, sentY: 0, cd: 0, aim: 0, delay: 0, pw: 0}));   // mode: 0 upright, 1 winding up, 2 swinging, 3 coming back
+    const team = [0, 1].map(k => rods.filter(r => r.team === k).sort((a, b) => a.dir * (a.x - b.x)));        // goalkeeper, defence, midfield, forwards
+    const manY = (r, j) => MY + (j - (r.n - 1) / 2) * r.gap + r.y;
+    const nearestMan = (r, y) => { let j = 0, best = 1e9; for (let i = 0; i < r.n; i++) { const d = Math.abs(manY(r, i) - y); if (d < best) { best = d; j = i; } } return j; };
+  const tb = {ball: {x: W / 2, y: H / 2, vx: 0, vy: 0, roll: 0}};
+    // ---- the physics: the rods slide and swing, the ball rolls, bounces off the cushions and is struck by the feet. Run in small steps so nothing passes through anything.
+    const ev = {foot: 0, wall: 0, mine: 0, goal: 0};                                      // the hardest impacts since the last frame
+    function wallHit(b, ax, ay, bx, by) {
+      const dx = bx - ax, dy = by - ay, u = clamp(((b.x - ax) * dx + (b.y - ay) * dy) / (dx * dx + dy * dy), 0, 1), px = ax + dx * u, py = ay + dy * u;
+      let nx = b.x - px, ny = b.y - py; const d = Math.hypot(nx, ny);
+      if (d >= R) return;
+      if (d < 1e-6) { nx = W / 2 - px; ny = MY - py; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l; } else { nx /= d; ny /= d; }
+      b.x = px + nx * R; b.y = py + ny * R;
+      const vn = b.vx * nx + b.vy * ny;
+      if (vn < 0) {
+        b.vx -= (1 + E_WALL) * vn * nx; b.vy -= (1 + E_WALL) * vn * ny;
+        const vt = -b.vx * ny + b.vy * nx; b.vx += 0.03 * vt * ny; b.vy -= 0.03 * vt * nx;       // the cloth under the rubber takes a little of the sliding
+        ev.wall = Math.max(ev.wall, -vn);
+      }
+    }
+    /** a last guard: whatever pushed the ball (a foot against a cushion, a correction from the other side), the ball never ends up outside the table */
+    function contain(b) {
+      for (let i = 0; i < POLY.length; i++) {
+        const [ax, ay] = POLY[i], [bx, by] = POLY[(i + 1) % POLY.length], ex = bx - ax, ey = by - ay, l = Math.hypot(ex, ey), nx = -ey / l, ny = ex / l;
+        if (ax === bx && ax === (ax < W / 2 ? XL : XR) && Math.abs(b.y - MY) < GOAL) continue;                 // the goal mouth is open
+        const sd = (b.x - ax) * nx + (b.y - ay) * ny;
+        if (sd < R) { b.x += nx * (R - sd); b.y += ny * (R - sd); const vn = b.vx * nx + b.vy * ny; if (vn < 0) { b.vx -= (1 + E_WALL) * vn * nx; b.vy -= (1 + E_WALL) * vn * ny; } }
+      }
+    }
+    function footHit(b, r) {
+      if (Math.abs(r.th) > 0.8 || Math.abs(b.x - r.x) > L + R + FX + 4) return;          // a foot lifted over the ball touches nothing
+      const fx = r.x + r.dir * L * Math.sin(r.th), vfx = r.dir * L * Math.cos(r.th) * r.w, vfy = r.vy;
+      for (let j = 0; j < r.n; j++) {
+        const cy = manY(r, j), qx = clamp(b.x, fx - FX, fx + FX), qy = clamp(b.y, cy - FY, cy + FY);
+        let nx = b.x - qx, ny = b.y - qy; const d = Math.hypot(nx, ny);
+        if (d >= R) continue;
+        if (d > 1e-6) { nx /= d; ny /= d; b.x = qx + nx * R; b.y = qy + ny * R; }
+        else {                                                                              // the centre went inside the foot: leave by the nearest side
+          const ex = Math.min(b.x - (fx - FX), fx + FX - b.x), ey = Math.min(b.y - (cy - FY), cy + FY - b.y);
+          if (ex < ey) { nx = b.x > fx ? 1 : -1; ny = 0; b.x = fx + nx * (FX + R); } else { nx = 0; ny = b.y > cy ? 1 : -1; b.y = cy + ny * (FY + R); }
+        }
+        const rvx = b.vx - vfx, rvy = b.vy - vfy, vn = rvx * nx + rvy * ny;
+        if (vn < 0) {
+          b.vx -= (1 + E_FOOT) * vn * nx; b.vy -= (1 + E_FOOT) * vn * ny;
+          const vt = -rvx * ny + rvy * nx; b.vx += MU * vt * ny; b.vy -= MU * vt * nx;       // a little grip: the foot drags the ball sideways as it passes
+          ev.foot = Math.max(ev.foot, -vn); if (r.team === mine) ev.mine = Math.max(ev.mine, -vn);
+        }
+      }
+    }
+    function simulate(h, live) {
+      for (const r of rods) {
+        const ny = clamp(r.y + clamp((r.yT - r.y) * 22, -640, 640) * h, -r.lim, r.lim); r.vy = (ny - r.y) / h; r.y = ny;
+        const old = r.th;
+        if (r.mode === 1) r.th = Math.max(-1.25, r.th - 9 * h);
+        else if (r.mode === 2) { r.th += r.om * h; if (r.th >= 1.05) { r.th = 1.05; r.mode = 3; } }
+        else { r.th -= r.th * Math.min(1, h * 14); if (r.mode === 3 && Math.abs(r.th) < 0.03) r.mode = 0; }
+        r.w = (r.th - old) / h;
+      }
+      if (!live) return;
+      const b = tb.ball, sp = Math.hypot(b.vx, b.vy);
+      if (sp > 0) { const k = Math.max(0, sp - 24 * h) / sp * Math.exp(-0.14 * h); b.vx *= k; b.vy *= k; }              // rolling friction
+      b.x += b.vx * h; b.y += b.vy * h; b.roll += sp * h / R;
+      for (const r of rods) footHit(b, r);
+      for (const w of WALLS) wallHit(b, w[0], w[1], w[2], w[3]);
+      contain(b);
+      const v = Math.hypot(b.vx, b.vy); if (v > VMAX) { b.vx *= VMAX / v; b.vy *= VMAX / v; }
+      if (Math.abs(b.y - MY) < GOAL && (b.x < XL - 8 || b.x > XR + 8)) ev.goal = b.x < W / 2 ? 2 : 1;                  // the team that scored, 1-based
+    }
+  return Object.assign(tb, {rods, team, ev, manY, nearestMan, simulate, XL, XR, YT, YB, MY, GOAL, CH, R, L, FX, FY, POLY, WALLS, clamp});
+}
+
+export function createGames({root, t, me, sendShot, onResult}) {
   const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
   let ov = null, stop = null;
   function shell(title, onClose) {
@@ -231,21 +313,23 @@ export function createGames({root, t, me, sendShot}) {
   function pingPong(net = null) {
     const role = net ? net.role : 0, X = x => role ? W - x : x;                // canonical: player 0 on the left; the second player sees the table turned round
     const box = shell('🏓 Ping pong · ' + (net ? net.friend : t().vsCpu)), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
-    const s = {me: H / 2, opp: H / 2, oppT: H / 2, meV: 0, oppV: 0, bx: W / 2, by: H / 2, vx: 0, vy: 0, spin: 0, pts: [0, 0], serve: 0, wait: 1, msg: 0, hold: false, started: !net}, trail = [];
+    const s = {me: H / 2, opp: H / 2, oppT: H / 2, meV: 0, oppV: 0, bx: W / 2, by: H / 2, vx: 0, vy: 0, spin: 0, pts: [0, 0], serve: 0, wait: 1, msg: 0, hold: false, started: !net, reported: false}, trail = [];
     let mouseY = H / 2, seq = 0, lastSnap = 0;
     c.addEventListener('pointermove', e => { mouseY = pt(e)[1]; });
     const PH = 70, PW = 10, SP = 330, ref = !net || role === 0;                  // the referee decides points and serves
     const serve = () => { s.bx = W / 2; s.by = H / 2; const dir = s.serve ? 1 : -1; s.vx = dir * SP; s.vy = (Math.random() - 0.5) * 180; s.spin = 0; s.wait = 0.9; s.hold = false; };
     const snap = () => { lastSnap = performance.now(); if (net) ns.send({k: 'b', n: ++seq, x: +s.bx.toFixed(1), y: +s.by.toFixed(1), vx: +s.vx.toFixed(1), vy: +s.vy.toFixed(1), sp: +s.spin.toFixed(1), a: s.pts[0], b: s.pts[1], w: +Math.max(0, s.wait).toFixed(2), m: s.msg, sv: s.serve}); };
-    const reset = () => { s.pts = [0, 0]; s.msg = 0; s.serve = 0; serve(); };
+    const reset = () => { s.pts = [0, 0]; s.msg = 0; s.reported = false; s.serve = 0; serve(); };
+    const finish = () => { if (s.reported) return; s.reported = true; onResult?.({game: 'pingpong', win: s.msg - 1 === role, mine: s.pts[role], theirs: s.pts[1 - role], friend: net ? net.friend : null}); };
     const ns = net && netSession(net, s, m => {                                 // the referee's snapshot: the ball, the points, the serve
       if (m.k !== 'b' || role === 0) return;
       const d = Math.min(0.3, ns.rtt() / 2000), tx = m.x + (m.w > 0 ? 0 : m.vx * d), ty = m.y + (m.w > 0 ? 0 : m.vy * d), err = Math.hypot(tx - s.bx, ty - s.by);
       if (s.hold || err > 60 || m.w > 0 || !s.started) { s.bx = tx; s.by = ty; } else { s.bx += (tx - s.bx) * 0.5; s.by += (ty - s.by) * 0.5; }
       s.vx = m.vx; s.vy = m.vy; s.spin = m.sp; s.pts = [m.a, m.b]; s.wait = m.w; s.msg = m.m; s.serve = m.sv; s.hold = false; s.started = true;
+      if (s.msg) finish();
     }, () => {                                                                  // 's': the other is ready (or asks for another game); the referee starts, the other follows
       if (role === 0) { if (!s.started || s.msg) { s.started = true; reset(); snap(); ns.send({k: 's'}); } }
-      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; }
+      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; s.reported = false; }
     });
     if (ref && !net) serve();
     let readyAt = 0;
@@ -274,7 +358,7 @@ export function createGames({root, t, me, sendShot}) {
         if (s.bx < -10 || s.bx > W + 10) {
           if (ref) {
             s.pts[s.bx < 0 ? 1 : 0]++; s.serve = s.bx < 0 ? 0 : 1; sound('pot', 6);
-            if (Math.max(...s.pts) >= 11 && Math.abs(s.pts[0] - s.pts[1]) >= 2) { s.msg = s.pts[0] > s.pts[1] ? 1 : 2; } else serve();
+            if (Math.max(...s.pts) >= 11 && Math.abs(s.pts[0] - s.pts[1]) >= 2) { s.msg = s.pts[0] > s.pts[1] ? 1 : 2; finish(); } else serve();
             event = true;
           } else { s.hold = true; s.vx = s.vy = 0; s.bx = s.bx < 0 ? -10 : W + 10; }                                // wait for the referee's word
         }
@@ -309,103 +393,194 @@ export function createGames({root, t, me, sendShot}) {
     stop = () => { stopLoop(); ns?.close(); };
   }
 
-  // foosball: your rods follow the mouse, a click kicks; against the computer or a friend (the same scheme as ping pong: you move your own rods at once)
+  // foosball: eight rods of little men, four of them yours. The ball follows real physics (rolling friction, cushions that bounce it, corner guards, goal posts) and
+  // is moved only by the feet of the men, which swing with their rod: slide the mouse to slide the rod, hold the button to wind up and let go to kick (the longer
+  // the hold, the harder the kick). Nothing else touches the ball. With a friend each side moves its own rods at once and simulates the ball with the same physics;
+  // the creator of the game (role 0) is the referee for the points and sends the ball now and then, and the other side tells the referee when it hits the ball.
   function foosball(net = null) {
-    const role = net ? net.role : 0, X = x => role ? W - x : x, mine = role;      // team 0 attacks right (the creator of the game), team 1 left; the second player sees the table turned round
-    const box = shell('⚽ ' + t().foosball + ' · ' + (net ? net.friend : t().vsCpu)), {c, g, pt, rr} = canvas(box), score = box.querySelector('.o-game-score');
-    const GOAL = 70, rods = [  // x, players, gap, team
-      [50, 1, 0, 0], [130, 2, 120, 1], [200, 2, 140, 0], [310, 5, 70, 1], [400, 5, 70, 0], [490, 3, 110, 1], [600, 2, 140, 1], [670, 3, 110, 0], [750, 1, 0, 1]];
-    const s = {y: [0, 0], ball: {x: W / 2, y: H / 2, vx: 0, vy: 0}, kick: [0, 0], pts: [0, 0], msg: 0, wait: 1, flash: 0, oppT: 0, oppV: 0, oppC: 0, hold: false, started: !net}, trail = [];
-    let mouseY = H / 2, kc = 0, seq = 0, lastSnap = 0, readyAt = 0;
-    const ref = !net || role === 0;
-    c.addEventListener('pointermove', e => { mouseY = pt(e)[1]; });
-    const reset = toward => { s.ball = {x: W / 2, y: H / 2, vx: toward * 60, vy: (Math.random() - 0.5) * 120}; s.wait = 0.8; s.hold = false; };
-    const snap = () => { lastSnap = performance.now(); if (net) ns.send({k: 'f', n: ++seq, x: +s.ball.x.toFixed(1), y: +s.ball.y.toFixed(1), vx: +s.ball.vx.toFixed(1), vy: +s.ball.vy.toFixed(1), a: s.pts[0], b: s.pts[1], w: +Math.max(0, s.wait).toFixed(2), m: s.msg}); };
-    const restart = () => { s.pts = [0, 0]; s.msg = 0; reset(Math.random() < 0.5 ? 1 : -1); };
+    const role = net ? net.role : 0, mine = role, ref = !net || role === 0;           // team 0 defends the left goal and attacks right; the second player sees the table turned round
+    const box = shell('⚽ ' + t().foosball + ' · ' + (net ? net.friend : t().vsCpu)), {c, g, pt} = canvas(box), score = box.querySelector('.o-game-score');
+    const tb = foosTable(mine), {rods, team, ev, manY, nearestMan, simulate, XL, XR, YT, YB, MY, GOAL, CH, R, L, FX, FY, POLY, clamp} = tb;
+    const s = {ox: 0, oy: 0, pts: [0, 0], msg: 0, wait: 1, flash: 0, hold: false, started: !net, myHitAt: 0, still: 0, oppT: 0, oppV: 0, reported: false}, trail = [];
+    let mouse = [W / 2, H / 2], sel = 3, armed = null, pinned = false, pinX = 0, seq = 0, lastSnap = 0, readyAt = 0, shown = 0;
+    const myRods = team[mine];
+    const reset = toward => { tb.ball = {x: W / 2, y: H / 2, vx: toward * (40 + Math.random() * 60), vy: (Math.random() - 0.5) * 120, roll: 0}; s.wait = 0.9; s.hold = false; s.still = 0; trail.length = 0; };
+    const place = (b, x, y) => { const dx = b.x - x, dy = b.y - y; b.x = x; b.y = y; if (Math.hypot(s.ox + dx, s.oy + dy) < 150) { s.ox += dx; s.oy += dy; } else s.ox = s.oy = 0; };      // the ball goes where the referee says; the picture catches up smoothly
+    const snap = () => { lastSnap = performance.now(); if (net) ns.send({k: 'f', n: ++seq, x: +tb.ball.x.toFixed(1), y: +tb.ball.y.toFixed(1), vx: +tb.ball.vx.toFixed(1), vy: +tb.ball.vy.toFixed(1), a: s.pts[0], b: s.pts[1], w: +Math.max(0, s.wait).toFixed(2), m: s.msg}); };
+    const restart = () => { s.pts = [0, 0]; s.msg = 0; s.reported = false; reset(Math.random() < 0.5 ? 1 : -1); };
+    const finish = () => { if (s.reported) return; s.reported = true; onResult?.({game: 'foos', win: s.msg - 1 === mine, mine: s.pts[mine], theirs: s.pts[1 - mine], friend: net ? net.friend : null}); };
+    const sendRod = (r, swing = false) => {                                              // my rod, to the friend: where it is going and what it does
+      if (!net) return;
+      const now = performance.now(); r.sentAt = now; r.sentY = r.yT;
+      ns.send({k: 'r', r: myRods.indexOf(r), y: +r.yT.toFixed(1), a: +r.th.toFixed(2), m: swing ? 2 : r.mode === 1 ? 1 : 0, w: +r.om.toFixed(1)});
+    };
     const ns = net && netSession(net, s, m => {
-      if (m.k !== 'f' || role === 0) return;
-      const d = Math.min(0.3, ns.rtt() / 2000), b = s.ball, tx = m.x + (m.w > 0 ? 0 : m.vx * d), ty = m.y + (m.w > 0 ? 0 : m.vy * d), err = Math.hypot(tx - b.x, ty - b.y);
-      if (s.hold || err > 60 || m.w > 0 || !s.started) { b.x = tx; b.y = ty; } else { b.x += (tx - b.x) * 0.5; b.y += (ty - b.y) * 0.5; }
-      b.vx = m.vx; b.vy = m.vy; s.pts = [m.a, m.b]; s.wait = m.w; s.msg = m.m; s.hold = false; s.started = true;
+      if (m.k === 'f' && role !== 0) {                                                     // the referee's ball and points
+        const d = Math.min(0.3, ns.rtt() / 2000), b = tb.ball, tx = m.x + (m.w > 0 ? 0 : m.vx * d), ty = m.y + (m.w > 0 ? 0 : m.vy * d), err = Math.hypot(tx - b.x, ty - b.y);
+        const mineHit = performance.now() - s.myHitAt < 220 && m.w <= 0 && !s.hold;       // my own hit is not in it yet: keep my ball
+        if (!mineHit) {
+          if (s.hold || m.w > 0 || !s.started) { b.x = tx; b.y = ty; s.ox = s.oy = 0; } else if (err > 3) place(b, tx, ty);
+          b.vx = m.vx; b.vy = m.vy;
+        }
+        s.pts = [m.a, m.b]; s.wait = m.w; s.msg = m.m; s.hold = false; s.started = true;
+        if (s.msg) finish();
+      } else if (m.k === 'h' && role === 0 && s.wait <= 0 && !s.msg) {                    // the other side hit the ball: take its word for it
+        const d = Math.min(0.3, ns.rtt() / 2000), b = tb.ball; place(b, m.x + m.vx * d, m.y + m.vy * d); b.vx = m.vx; b.vy = m.vy; snap();
+      } else if (m.k === 'r') {                                                            // a rod of the other team
+        const r = team[1 - mine][m.r | 0]; if (!r) return;
+        r.yT = clamp(m.y, -r.lim, r.lim);
+        if (m.m === 1) { if (r.mode !== 1) r.mode = 1; }
+        else if (m.m === 2) { r.th = clamp(m.a, -1.3, 1.05); r.om = clamp(m.w, 4, 30); r.mode = 2; }
+        else if (r.mode === 1) r.mode = 3;
+      }
     }, () => {
       if (role === 0) { if (!s.started || s.msg) { s.started = true; restart(); snap(); ns.send({k: 's'}); } }
-      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; }
+      else if (s.msg) { s.pts = [0, 0]; s.msg = 0; s.reported = false; }
     });
     if (!net) reset(Math.random() < 0.5 ? 1 : -1);
-    c.addEventListener('pointerdown', () => {
+
+    // ---- the computer's rods: each follows the ball with its nearest man, and kicks when the ball is just in front of a foot
+    const cpu = (dt, now, live) => {
+      const b = tb.ball;
+      for (const r of team[1]) {
+        if (r.mode === 1 && now - r.windAt > r.delay) { r.om = r.pw; r.mode = 2; }
+        const j = nearestMan(r, b.y), front = (b.x - r.x) * r.dir, near = live && front > -40 && front < 230;
+        const want = clamp(near ? b.y - MY - (j - (r.n - 1) / 2) * r.gap + r.aim : (b.y - MY) * 0.4, -r.lim, r.lim);
+        r.yT += clamp(want - r.yT, -330 * dt, 330 * dt);
+        if (live && r.mode === 0 && front > 6 && front < 48 && Math.abs(manY(r, j) - b.y) < 15 && now > r.cd) {
+          r.mode = 1; r.windAt = now; r.delay = 70 + Math.random() * 110; r.pw = 9 + Math.random() * 13; r.aim = (Math.random() - 0.5) * 22; r.cd = now + 450 + Math.random() * 500;
+        }
+      }
+    };
+
+    // ---- your hands: the mouse height slides the chosen rod, its position along the table chooses the rod (or keys 1-4), hold to wind up, let go to kick
+    const chooseRod = k => { if (k === sel) return; sel = k; const r = myRods[k]; r.hold = nearestMan(r, mouse[1]); };
+    c.addEventListener('pointermove', e => {
+      const p = pt(e); mouse = [role ? W - p[0] : p[0], p[1]];
+      if (armed) return;
+      if (pinned && Math.abs(mouse[0] - pinX) > 50) pinned = false;
+      if (!pinned) {
+        let k = sel; for (let i = 0; i < 4; i++) if (Math.abs(myRods[i].x - mouse[0]) < Math.abs(myRods[k].x - mouse[0]) - 22) k = i;
+        chooseRod(k);
+      }
+    });
+    const press = () => {
       unlock();
       if (s.msg) { if (net) { if (role === 0) { restart(); snap(); ns.send({k: 's'}); } else ns.send({k: 's'}); } else foosball(); return; }
-      s.kick[mine] = 0.18; kc++;
-    });
+      const r = myRods[sel]; if (r.mode === 2 || armed) return;
+      armed = r; r.mode = 1; r.windAt = performance.now(); sendRod(r);
+    };
+    const release = () => {
+      const r = armed; armed = null;
+      if (!r || r.mode !== 1) return;
+      r.om = 7 + 19 * Math.min(1, (performance.now() - r.windAt) / 560); r.mode = 2; sendRod(r, true);
+    };
+    const onKeyDown = e => {
+      if (e.repeat) return;
+      if (e.key >= '1' && e.key <= '4') { if (!armed) { pinned = true; pinX = mouse[0]; chooseRod(+e.key - 1); } }
+      else if (e.key === ' ') { press(); e.preventDefault(); }
+    };
+    const onKeyUp = e => { if (e.key === ' ') release(); };
+    c.addEventListener('pointerdown', press); addEventListener('pointerup', release); addEventListener('keydown', onKeyDown); addEventListener('keyup', onKeyUp);
+
+    // ---- the table, drawn once (wood, cushions with the corner guards, cloth, lines, the goals with their nets)
+    const pitch = document.createElement('canvas'); pitch.width = W; pitch.height = H;
+    {
+      const k = pitch.getContext('2d');
+      let gr = k.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#7a4c24'); gr.addColorStop(1, '#3f2710'); k.fillStyle = gr; k.fillRect(0, 0, W, H);
+      const path = () => { k.beginPath(); POLY.forEach(([x, y], i) => i ? k.lineTo(x, y) : k.moveTo(x, y)); k.closePath(); };
+      path(); k.lineJoin = 'round'; k.lineWidth = 18; k.strokeStyle = '#1c2a22'; k.stroke();
+      path(); gr = k.createRadialGradient(W / 2, MY, 40, W / 2, MY, W * 0.62); gr.addColorStop(0, '#2f9a4c'); gr.addColorStop(1, '#1d6e35'); k.fillStyle = gr; k.fill();
+      k.save(); path(); k.clip(); for (let i = 0; i < 12; i++) if (i % 2) { k.fillStyle = 'rgba(0,0,0,.05)'; k.fillRect(XL + (XR - XL) * i / 12, 0, (XR - XL) / 12, H); } k.restore();
+      k.strokeStyle = 'rgba(255,255,255,.7)'; k.lineWidth = 2.5;
+      k.beginPath(); k.moveTo(W / 2, YT); k.lineTo(W / 2, YB); k.stroke(); k.beginPath(); k.arc(W / 2, MY, 46, 0, 7); k.stroke();
+      k.strokeRect(XL, MY - GOAL - 24, 82, 2 * GOAL + 48); k.strokeRect(XR - 82, MY - GOAL - 24, 82, 2 * GOAL + 48);
+      k.fillStyle = 'rgba(255,255,255,.7)'; k.beginPath(); k.arc(W / 2, MY, 3, 0, 7); k.fill();
+      for (const [x0, x1] of [[4, XL], [XR, W - 4]]) {                                      // the goals: a dark mouth with a net
+        k.fillStyle = '#0d1b21'; k.fillRect(x0, MY - GOAL, x1 - x0, 2 * GOAL);
+        k.strokeStyle = 'rgba(255,255,255,.16)'; k.lineWidth = 1;
+        for (let y = MY - GOAL; y <= MY + GOAL; y += 8) { k.beginPath(); k.moveTo(x0, y); k.lineTo(x1, y); k.stroke(); }
+        for (let x = x0; x <= x1; x += 8) { k.beginPath(); k.moveTo(x, MY - GOAL); k.lineTo(x, MY + GOAL); k.stroke(); }
+      }
+      k.fillStyle = '#eceff1'; for (const x of [XL, XR]) for (const y of [MY - GOAL, MY + GOAL]) { k.beginPath(); k.arc(x, y, 3.6, 0, 7); k.fill(); }
+    }
+    const man = (r, j, lifted) => {
+      const cy = manY(r, j), fx = r.x + r.dir * L * Math.sin(r.th), lift = 1 - Math.cos(r.th), up = Math.abs(r.th) >= 0.8;
+      if (up !== lifted) return;
+      const mineTeam = r.team === mine, c1 = mineTeam ? '#ef5350' : '#42a5f5', c2 = mineTeam ? '#a31515' : '#0d47a1', sc = 1 + lift * 0.5;
+      g.fillStyle = `rgba(0,0,0,${0.3 - lift * 0.1})`; g.fillRect(fx - FX * sc + 2 + lift * 14, cy - FY * sc + 4 + lift * 12, 2 * FX * sc, 2 * FY * sc);          // the shadow slides away as the foot rises
+      g.globalAlpha = up ? 0.8 : 1;
+      g.fillStyle = c2; g.fillRect(Math.min(r.x, fx), cy - 3.5, Math.abs(fx - r.x), 7);                                                                              // the leg
+      const bg = g.createLinearGradient(fx - FX, 0, fx + FX, 0); bg.addColorStop(0, c1); bg.addColorStop(1, c2); g.fillStyle = bg;
+      g.fillRect(fx - FX * sc, cy - FY * sc, 2 * FX * sc, 2 * FY * sc);                                                                                                // the foot
+      g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(fx - FX * sc, cy - FY * sc, 2 * FX * sc, 2.5);
+      g.fillStyle = c1; g.fillRect(r.x - 5, cy - 10, 10, 20);                                                                                                           // shoulders
+      g.fillStyle = '#ffe0b2'; g.beginPath(); g.arc(r.x, cy, 5.2, 0, 7); g.fill();                                                                                      // head
+      g.globalAlpha = 1;
+    };
+
     let lastC = 0;
     const stopLoop = loop(dt => {
-      s.y[mine] += ((mouseY - H / 2) - s.y[mine]) * Math.min(1, dt * 14);
-      const other = 1 - mine;
-      if (net) {
-        ns.paddle(s.y[mine], kc);
-        s.y[other] += (s.oppT - s.y[other]) * Math.min(1, dt * 20);
-        if (s.oppC !== lastC) { lastC = s.oppC; s.kick[other] = 0.18; }                                           // the other kicked
-        if (!s.started && role === 1 && performance.now() - readyAt > 400) { readyAt = performance.now(); ns.send({k: 's'}); }
-      } else s.y[1] += Math.max(-220 * dt, Math.min(220 * dt, (s.ball.y - H / 2) * 0.9 - s.y[1]));
-      for (const k of [0, 1]) s.kick[k] = Math.max(0, s.kick[k] - dt);
-      s.flash = Math.max(0, s.flash - dt);
-      const b = s.ball;
+      const now = performance.now();
+      // my chosen rod follows the mouse; the computer plays its own; a friend's rods came by message
+      const mr = myRods[sel]; mr.yT = clamp(mouse[1] - MY - (mr.hold - (mr.n - 1) / 2) * mr.gap, -mr.lim, mr.lim);
+      const live = s.started && s.wait <= 0 && !s.msg && !s.hold;
+      if (!net) cpu(dt, now, live);
+      else {
+        for (const r of myRods) if ((r.yT !== r.sentY && now - r.sentAt > 40) || (r === mr && now - r.sentAt > 300)) sendRod(r);
+        if (!s.started && role === 1 && now - readyAt > 400) { readyAt = now; ns.send({k: 's'}); }
+      }
+      if (armed && now - armed.windAt > 4000) release();
+      s.flash = Math.max(0, s.flash - dt); s.ox *= Math.exp(-dt * 12); s.oy *= Math.exp(-dt * 12);
       if (s.started && s.wait > 0) s.wait -= dt;
-      else if (s.started && !s.msg && !s.hold) {
-        let event = false;
-        b.x += b.vx * dt; b.y += b.vy * dt; b.vx *= 0.995; b.vy *= 0.995;
-        if (b.y < 18 || b.y > H - 18) { b.vy *= -1; b.y = Math.max(18, Math.min(H - 18, b.y)); sound('rail', 3); event = true; }
-        if (b.x < 14 || b.x > W - 14) {
-          if (Math.abs(b.y - H / 2) < GOAL) {
-            if (ref) {
-              s.pts[b.x < 14 ? 1 : 0]++; s.flash = 1; sound('pot', 7); event = true;
-              if (Math.max(...s.pts) >= 5) s.msg = s.pts[0] > s.pts[1] ? 1 : 2; else reset(b.x < 14 ? 1 : -1);
-            } else { s.hold = true; b.vx = b.vy = 0; b.x = b.x < 14 ? 6 : W - 6; s.flash = 1; }                       // a goal: the referee will say
-          } else { b.vx *= -0.8; b.x = Math.max(14, Math.min(W - 14, b.x)); event = true; }
-        }
-        for (const [x, n, gap, team] of rods) {
-          const dir = team ? -1 : 1;
-          if (!net && team && Math.abs(b.x - x) < 60 && Math.sign(x - b.x) === dir && s.kick[1] <= 0 && Math.random() < dt * 6) s.kick[1] = 0.18;     // the computer kicks now and then
-          for (let i = 0; i < n; i++) {
-            const py = H / 2 + (i - (n - 1) / 2) * gap + s.y[team];
-            if (Math.abs(b.x - x) < 14 && Math.abs(b.y - py) < 16) {
-              if (s.kick[team] > 0) { b.vx = dir * (430 + Math.random() * 120); b.vy = (b.y - py) * 18 + (Math.random() - 0.5) * 80; }
-              else { b.vx = dir * Math.max(80, Math.abs(b.vx) * 0.6); b.vy += (b.y - py) * 4; }
-              b.x = x + dir * 15; sound('hit', s.kick[team] > 0 ? 9 : 4); event = true;
-            }
-          }
-        }
-        if (net && role === 0 && (event || performance.now() - lastSnap > 66)) snap();
+      ev.foot = ev.wall = ev.mine = ev.goal = 0;
+      const steps = Math.max(1, Math.ceil(dt * 480));
+      for (let i = 0; i < steps && !ev.goal; i++) simulate(dt / steps, live);
+      const b = tb.ball;
+      if (ev.foot > 25) sound('hit', Math.min(10, ev.foot / 120));
+      if (ev.wall > 60) sound('rail', Math.min(7, ev.wall / 140));
+      if (live) {
+        if (ev.goal) {
+          if (ref) {
+            s.pts[ev.goal - 1]++; s.flash = 1; sound('pot', 7);
+            if (Math.max(...s.pts) >= 5) { s.msg = s.pts[0] > s.pts[1] ? 1 : 2; finish(); } else reset(ev.goal === 1 ? 1 : -1);
+            snap();
+          } else { s.hold = true; b.vx = b.vy = 0; b.x = ev.goal === 1 ? XR + 12 : XL - 12; s.flash = 1; sound('pot', 7); }               // a goal: the referee will say
+        } else if (ref) {
+          s.still = Math.hypot(b.vx, b.vy) < 10 ? s.still + dt : 0;
+          if (s.still > 3.5) { reset(Math.random() < 0.5 ? 1 : -1); snap(); }                                                           // a dead ball is served again
+          else if (net && (ev.foot > 25 || ev.wall > 60 || now - lastSnap > 66)) snap();
+        } else if (ev.mine > 25 && now - s.myHitAt > 40) { s.myHitAt = now; ns.send({k: 'h', x: +b.x.toFixed(1), y: +b.y.toFixed(1), vx: +b.vx.toFixed(1), vy: +b.vy.toFixed(1)}); }
       }
-      if (net && role === 0 && s.started && (s.wait > 0 || s.msg) && performance.now() - lastSnap > 150) snap();
-      // the pitch, as the player sees it: own team on the left attacking right
-      for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? '#2e7d32' : '#2a7430'; g.fillRect(i * W / 10, 0, W / 10, H); }
-      g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 3; g.strokeRect(8, 8, W - 16, H - 16); g.beginPath(); g.moveTo(W / 2, 8); g.lineTo(W / 2, H - 8); g.stroke();
-      g.beginPath(); g.arc(W / 2, H / 2, 50, 0, 7); g.stroke(); g.strokeRect(8, H / 2 - GOAL - 20, 70, GOAL * 2 + 40); g.strokeRect(W - 78, H / 2 - GOAL - 20, 70, GOAL * 2 + 40);
-      for (const x of [0, W - 10]) { g.fillStyle = '#263238'; g.fillRect(x, H / 2 - GOAL, 10, GOAL * 2); g.fillStyle = 'rgba(255,255,255,.22)'; for (let y = H / 2 - GOAL; y < H / 2 + GOAL; y += 8) g.fillRect(x, y, 10, 1); }
-      for (const [x0, n, gap, team] of rods) {
-        const x = X(x0), bar = g.createLinearGradient(x - 3, 0, x + 3, 0); bar.addColorStop(0, '#78909c'); bar.addColorStop(0.5, '#eceff1'); bar.addColorStop(1, '#78909c');
-        g.fillStyle = bar; g.fillRect(x - 3, 0, 6, H);
-        const mineTeam = team === mine;
-        for (let i = 0; i < n; i++) {
-          const py = H / 2 + (i - (n - 1) / 2) * gap + s.y[team], k = s.kick[team] > 0 ? (mineTeam ? 9 : -9) : 0, c1 = mineTeam ? '#ef5350' : '#42a5f5', c2 = mineTeam ? '#b71c1c' : '#1565c0';
-          g.fillStyle = 'rgba(0,0,0,.28)'; rr(x - 6 + k + 3, py - 14 + 4, 12, 28, 4); g.fill();
-          const bg = g.createLinearGradient(x - 6, 0, x + 6, 0); bg.addColorStop(0, c1); bg.addColorStop(1, c2); g.fillStyle = bg; rr(x - 6 + k, py - 14, 12, 28, 4); g.fill();
-          g.fillStyle = '#ffe0b2'; g.beginPath(); g.arc(x + k, py, 4.5, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(x - 6 + k, py - 14, 12, 3);
-        }
+      if (net && ref && s.started && (s.wait > 0 || s.msg) && now - lastSnap > 150) snap();
+      // ---- drawing, in the table's own coordinates (the second player's view is turned round)
+      g.save(); if (role) { g.translate(W, 0); g.scale(-1, 1); }
+      g.drawImage(pitch, 0, 0);
+      for (const r of rods) {
+        g.fillStyle = r === mr ? 'rgba(255,255,255,.28)' : 'rgba(0,0,0,0)'; if (r === mr) g.fillRect(r.x - 8, 0, 16, H);
+        g.fillStyle = '#78909c'; g.fillRect(r.x - 3, 0, 6, H); g.fillStyle = '#eceff1'; g.fillRect(r.x - 1, 0, 2, H);
       }
-      const bx = X(b.x);
-      if (!s.hold) { trail.push([bx, b.y]); if (trail.length > 8) trail.shift(); }
-      trail.forEach(([x, y], i) => { g.fillStyle = `rgba(255,255,255,${(i + 1) / 34})`; g.beginPath(); g.arc(x, y, 2 + i * 0.6, 0, 7); g.fill(); });
-      if (s.started) {
-        g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(bx + 3, b.y + 5, 8, 5.5, 0, 0, 7); g.fill();
-        const bgr = g.createRadialGradient(bx - 3, b.y - 3, 1, bx, b.y, 9); bgr.addColorStop(0, '#fff'); bgr.addColorStop(1, '#cfd8dc'); g.fillStyle = bgr; g.beginPath(); g.arc(bx, b.y, 8, 0, 7); g.fill();
+      for (const r of rods) for (let j = 0; j < r.n; j++) man(r, j, false);
+      const sp = Math.hypot(b.vx, b.vy);
+      const bx = b.x + s.ox, by = b.y + s.oy;
+      if (live && sp > 200) { trail.push([bx, by]); if (trail.length > 7) trail.shift(); } else if (trail.length) trail.shift();
+      trail.forEach(([x, y], i) => { g.fillStyle = `rgba(255,255,255,${(i + 1) / 30})`; g.beginPath(); g.arc(x, y, R * (0.4 + i * 0.08), 0, 7); g.fill(); });
+      if (s.started && !(s.hold && Math.abs(b.x - W / 2) > W / 2 - 14)) {
+        g.fillStyle = 'rgba(0,0,0,.35)'; g.beginPath(); g.ellipse(bx + 3.5, by + 5, R, R * 0.8, 0, 0, 7); g.fill();
+        const bg = g.createRadialGradient(bx - 3, by - 3, 1, bx, by, R + 1); bg.addColorStop(0, '#ffffff'); bg.addColorStop(1, '#b0bec5'); g.fillStyle = bg; g.beginPath(); g.arc(bx, by, R, 0, 7); g.fill();
+        g.strokeStyle = '#37474f'; g.lineWidth = 1.5; g.stroke();
+        const ang = Math.atan2(b.vy, b.vx), cr = Math.cos(b.roll);                          // a dark patch that rolls with the ball
+        g.fillStyle = 'rgba(38,50,56,.8)'; g.beginPath(); g.arc(bx + Math.cos(ang) * cr * R * 0.55, by + Math.sin(ang) * cr * R * 0.55, 2.6 * (0.5 + Math.abs(Math.sin(b.roll)) * 0.5), 0, 7); g.fill();
       }
+      for (const r of rods) for (let j = 0; j < r.n; j++) man(r, j, true);                    // feet lifted over the ball are drawn above it
+      if (armed) { g.fillStyle = 'rgba(0,0,0,.5)'; g.fillRect(armed.x - 25, H - 12, 50, 6); g.fillStyle = '#ffeb3b'; g.fillRect(armed.x - 25, H - 12, 50 * Math.min(1, (now - armed.windAt) / 560), 6); }
+      g.restore();
       if (s.flash > 0) { g.globalAlpha = Math.min(1, s.flash * 1.4); g.fillStyle = '#fff'; g.font = '800 64px Segoe UI'; g.textAlign = 'center'; g.fillText(t().goal, W / 2, H / 2 - 70 + (1 - s.flash) * -30); g.textAlign = 'left'; g.globalAlpha = 1; }
+      if (shown < 6) { shown += dt; g.fillStyle = 'rgba(0,0,0,.45)'; g.fillRect(0, H - 34, W, 22); g.fillStyle = '#fff'; g.font = '600 13px Segoe UI'; g.textAlign = 'center'; g.fillText(t().foosHint, W / 2, H - 19); g.textAlign = 'left'; }
       score.textContent = net ? `${s.pts[mine]} – ${s.pts[1 - mine]} ${net.friend}${!s.started ? ' · ⏳' : ''}` : `${t().you} ${s.pts[0]} – ${s.pts[1]} CPU`;
       if (s.msg) { const won = s.msg - 1 === mine; g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 30px Segoe UI'; g.textAlign = 'center'; g.fillText((won ? t().youWin : net ? t().theyWin(net.friend) : t().cpuWins) + ' · ' + t().clickAgain, W / 2, H / 2 + 10); g.textAlign = 'left'; }
     });
-    stop = () => { stopLoop(); ns?.close(); };
+    stop = () => { stopLoop(); ns?.close(); removeEventListener('pointerup', release); removeEventListener('keydown', onKeyDown); removeEventListener('keyup', onKeyUp); };
   }
 
   // pool: aim from the cue ball toward the mouse (a ghost ball shows where it first touches), hold to load the shot, let go: the cue strikes
@@ -457,7 +632,7 @@ export function createGames({root, t, me, sendShot}) {
     if (!vsCpu) bar.querySelector('button').onclick = () => { close(); ctx.cancel?.(); };
     box.appendChild(bar);
     const st = vsCpu ? {balls: poolRack(), groups: {}, turn: me(), winner: null, players} : {balls: game.balls, groups: named(game.groups), turn: players[game.turn], winner: game.done?.winner || null, players};
-    let mouse = [W / 2, H / 2], charge = 0, holding = false, frames = null, evs = null, fi = 0, after = null, cpuAt = 0, strike = null, chipKey = '', cue = 'classic', spinDir = 1;
+    let mouse = [W / 2, H / 2], charge = 0, holding = false, frames = null, evs = null, fi = 0, after = null, cpuAt = 0, strike = null, chipKey = '', cue = 'classic', spinDir = 1, reported = false;
     // the cue to shoot with: four buttons (or the keys 1 to 4; 4 again turns the spin the other way)
     const fouls = {}, lastCue = {};                                                       // fouls and the cue last used, per player (from the shots played so far)
     for (const sh of game?.shots || []) { fouls[sh.by] = (fouls[sh.by] || 0) + (sh.fl ? 1 : 0); lastCue[sh.by] = sh.cue || 'classic'; }
@@ -585,6 +760,11 @@ export function createGames({root, t, me, sendShot}) {
           + `<span class="o-pp">${fouls[p] ? `<small title="${esc(t().poolFouls)}">⚠${fouls[p]}</small> ` : ''}${pts} ${esc(t().points)}</span></div>`;
       }).join('');
       if (html !== chipKey) { chipKey = html; chips.innerHTML = html; }
+      if (st.winner && vsCpu && !reported) {                                                                           // a game against the computer: its result goes to the leaderboard
+        reported = true;
+        const pp = p => { const grp = st.groups[p], list = grp === 'solids' ? [1, 2, 3, 4, 5, 6, 7] : grp === 'stripes' ? [9, 10, 11, 12, 13, 14, 15] : []; return list.length - list.filter(n => balls[n]).length; };
+        onResult?.({game: 'pool', win: st.winner === me(), mine: pp(me()), theirs: pp('CPU'), friend: null});
+      }
       bar.firstChild.textContent = waitingFor ? `⏳ ${t().poolWaiting(ctx.friend || t().poolWaitAny)}` : st.winner || frames || strike ? '' : canShoot() ? t().poolYourTurn : t().poolTheirTurn(st.turn);
       score.textContent = waitingFor ? '⏳' : st.winner ? `🏆 ${st.winner}` : t().turnOf(st.turn);
       if (st.winner) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, H / 2 - 40, W, 80); g.fillStyle = '#fff'; g.font = '700 28px Segoe UI'; g.textAlign = 'center'; g.fillText(`🏆 ${st.winner}` + (vsCpu ? ' · ' + t().clickAgain : ''), W / 2, H / 2 + 10); }

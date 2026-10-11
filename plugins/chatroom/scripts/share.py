@@ -101,7 +101,8 @@ class Mailbox:
 
 
 RT_KINDS = {'p': ('y', 'c'), 'b': ('n', 'x', 'y', 'vx', 'vy', 'sp', 'a', 'b', 'w', 'm', 'sv'), 'f': ('n', 'x', 'y', 'vx', 'vy', 'a', 'b', 'w', 'm'),
-            'q': ('c',), 'o': ('c',), 's': ()}   # paddle or rods, ping-pong ball, foosball ball, ping, pong, start
+            'r': ('r', 'y', 'a', 'm', 'w'), 'h': ('x', 'y', 'vx', 'vy'),
+            'q': ('c',), 'o': ('c',), 's': ()}   # paddle, ping-pong ball, foosball ball, a foosball rod, a hit of the ball, ping, pong, start
 
 
 def clean_rt(m):
@@ -119,8 +120,11 @@ def clean_rt(m):
 
 
 GONE = 15                                                   # seconds without a word: a guest (or the host) is gone
+LOST = 4                                                   # seconds a guest has heard nothing from the host before the host's figures leave its screen
 GAMES = {'tris': ('new', 'join', 'move', 'quit'), 'morra': ('new', 'join', 'commit', 'reveal', 'quit'), 'dadi': ('roll',), 'tv': ('play', 'pause', 'seek'),
-         'pool': ('new', 'join', 'shot', 'quit'), 'pingpong': ('new', 'join', 'quit'), 'foos': ('new', 'join', 'quit')}
+         'pool': ('new', 'join', 'shot', 'quit'), 'pingpong': ('new', 'join', 'quit'), 'foos': ('new', 'join', 'quit'), 'result': ('add',)}
+RESULT_MATCH = ('tris', 'morra', 'pool', 'pingpong', 'foos')      # games that are won or lost: the board counts wins and points
+RESULT_SCORE = ('zombie', 'paintball')                             # games played for a score (and every arcade game, arc-<name>): the board keeps the best
 POOL_W, POOL_H = 800, 440                                   # the pool table's canvas (office-games.js)
 
 
@@ -201,10 +205,59 @@ def _clean_game(g):
         out['turn'] = int(num(g.get('turn'), 0, 1))
         if g.get('win') is not None:
             out['win'] = int(num(g.get('win'), 0, 1))
+    if kind == 'result':                              # the end of a game, for the leaderboards: who won, or the score of a run
+        gk = str(g.get('g', ''))
+        if gk not in RESULT_MATCH and gk not in RESULT_SCORE and not re.fullmatch(r'arc-[a-z0-9]{1,20}', gk):
+            raise ValueError('unknown game for a result')
+        out['g'] = gk
+        if gk in RESULT_MATCH:
+            out['win'] = int(num(g.get('win'), -1, 1))                          # 1 the poster won, 0 lost, -1 a draw
+            out['opp'] = '' if not g.get('opp') else clean_name(g['opp'])
+            pts = g.get('pts') if isinstance(g.get('pts'), list) and len(g['pts']) == 2 else [0, 0]
+            out['pts'] = [int(num(p, 0, 1000)) for p in pts]
+        else:
+            out['score'] = int(num(g.get('score'), 0, 10 ** 9))
+            if g.get('extra') is not None:
+                out['extra'] = int(num(g.get('extra'), 0, 10 ** 6))             # for example the wave of a zombie run
     if op == 'roll':
         out['roll'] = [int(x) for x in (g.get('roll') or [])][:5]
         if not out['roll'] or not all(1 <= x <= 6 for x in out['roll']):
             raise ValueError('dice go from 1 to 6')
+    return out
+
+
+def scoreboard(lines):
+    """the leaderboards, from the result lines of the common room: wins, losses and points for the games played against someone, the best score
+    for the others. A game counts once (the first line with its id), the line's author is credited and so is the opponent it names."""
+    seen, books = set(), {}
+    for m in lines:
+        try:                                          # a line that is not a clean result (edited by hand) is skipped, never a failure of the whole page
+            g, who = m.get('game'), str(m.get('from', ''))
+            if not isinstance(g, dict) or g.get('type') != 'result' or not who or '·' in who or (str(g.get('g')), str(g.get('id'))) in seen:
+                continue
+            seen.add((str(g.get('g')), str(g.get('id'))))
+            book = books.setdefault(str(g['g']), {})
+            if 'score' in g:
+                sc = int(g['score'])
+                r = book.setdefault(who, {'name': who, 'best': 0, 'n': 0, 'total': 0})
+                r['n'] += 1; r['total'] += sc
+                if sc >= r['best']:
+                    r['best'], r['extra'] = sc, int(g.get('extra') or 0)
+                continue
+            pts, win = g.get('pts') or [0, 0], int(g['win'])
+            for name, mine, k in ((who, win, 0), (g.get('opp') or '', None if win == -1 else 1 - win, 1)):
+                if not name:
+                    continue
+                r = book.setdefault(str(name), {'name': str(name), 'w': 0, 'l': 0, 'd': 0, 'pts': 0, 'n': 0})
+                r['n'] += 1; r['pts'] += int(pts[k])
+                r['w' if mine == 1 else 'l' if mine == 0 else 'd'] += 1
+        except (KeyError, TypeError, ValueError, IndexError, AttributeError, OverflowError):
+            continue
+    out = {}
+    for gk, book in books.items():
+        rows = list(book.values())
+        rows.sort(key=(lambda r: (-r['best'], -r['n'])) if gk in RESULT_SCORE or gk.startswith('arc-') else (lambda r: (-r['w'], r['l'], -r['pts'], r['name'])))
+        out[gk] = {'mode': 'best' if gk in RESULT_SCORE or gk.startswith('arc-') else 'wins', 'rows': rows[:50]}
     return out
 
 
@@ -857,12 +910,13 @@ def clean_pb(p):
             o, q = vec(s['o']), vec(s['p'])
             if o and q:
                 shots.append({'id': int(max(0, min(1e9, float(s['id'])))), 'o': o, 'p': q, 'n': vec(s.get('n')), 'h': clean_name(s['h']) if s.get('h') else None,
-                              'd': int(max(0, min(60, float(s.get('d') or 0)))), 'c': int(max(0, min(7, float(s.get('c') or 0)))),
-                              'zi': int(max(0, min(1e9, float(s.get('zi') or 0)))), 'zd': int(max(0, min(80, float(s.get('zd') or 0))))})
+                              'd': int(max(0, min(100, float(s.get('d') or 0)))), 'c': int(max(0, min(7, float(s.get('c') or 0)))),
+                              'zi': int(max(0, min(1e9, float(s.get('zi') or 0)))), 'zd': int(max(0, min(400, float(s.get('zd') or 0)))),
+                              'w': int(max(0, min(9, float(s.get('w') or 0))))})   # w: the weapon (0-5), or 7 goo, 8 shockwave, 9 bite of a zombie
         except (TypeError, ValueError, KeyError, OverflowError):
             pass
     try:
-        out = {'on': True, 'hp': int(max(0, min(100, float(p.get('hp') or 0)))), 'w': int(max(0, min(2, float(p.get('w') or 0)))),
+        out = {'on': True, 'hp': int(max(0, min(100, float(p.get('hp') or 0)))), 'w': int(max(0, min(5, float(p.get('w') or 0)))),
                'k': int(max(0, min(1e6, float(p.get('k') or 0)))), 'shots': shots}
         if p.get('z'):                    # zombie mode: when it started (who runs them), the wave, the kills, and the zombies themselves when they are this player's
             out.update({'z': 1, 'zt': int(max(0, min(2.1e9, float(p.get('zt') or 0)))), 'zw': int(max(0, min(1e4, float(p.get('zw') or 0)))), 'zk': int(max(0, min(1e6, float(p.get('zk') or 0))))})
@@ -871,7 +925,8 @@ def clean_pb(p):
                 for f in p['zs'][:16]:        # a malformed zombie is skipped, the others stay
                     try:
                         out['zs'].append({'i': int(max(0, min(1e9, float(f['i'])))), 'x': round(max(-80.0, min(80.0, float(f['x']))), 2), 'z': round(max(-80.0, min(80.0, float(f['z']))), 2),
-                                          'r': round(max(-7.0, min(7.0, float(f.get('r') or 0))), 2), 'h': int(max(0, min(200, float(f.get('h') or 0)))), 's': int(max(0, min(2, float(f.get('s') or 0))))})
+                                          'r': round(max(-7.0, min(7.0, float(f.get('r') or 0))), 2), 'h': int(max(0, min(1500, float(f.get('h') or 0)))), 's': int(max(0, min(2, float(f.get('s') or 0)))),
+                                          't': int(max(0, min(4, float(f.get('t') or 0)))), 'm': int(max(0, min(1500, float(f.get('m') or 0)))), 'a': int(max(0, min(2, float(f.get('a') or 0))))})
                     except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
                         pass
         return out
@@ -1110,10 +1165,11 @@ class Bridge:
                 self.error = None
             except PermissionError as exc:
                 self.error = f'closed by the host: {exc}'
+                self.people, self.requests, self.asks = [], [], []                  # the host's side is gone: its figures leave at once
                 break
             except (ValueError, OSError) as exc:
                 self.error = str(exc)
-                if time.time() - self.heard > GONE:
+                if time.time() - self.heard > LOST:
                     self.people = []
             self.stopped.wait(0.3)                             # often enough for the figures to walk smoothly
         (self.dir / 'link.json').unlink(missing_ok=True)
@@ -1295,6 +1351,23 @@ def _prova():
             except (ValueError, TypeError):
                 continue
             raise AssertionError(f'a bad pool shot got in: {bad}')
+        res = {'type': 'result', 'op': 'add', 'id': 'r1', 'g': 'foos', 'win': 1, 'opp': 'BOB', 'pts': [5, 3]}         # the leaderboards: results are checked, and counted once
+        assert clean_game(res)['pts'] == [5, 3] and clean_game({**res, 'opp': None})['opp'] == ''
+        for bad in ({**res, 'g': 'chess'}, {**res, 'win': 2}, {**res, 'pts': [5, 3000]}, {**res, 'g': 'arc-a b'}, {'type': 'result', 'op': 'add', 'id': 'z', 'g': 'zombie', 'score': -1},
+                    {'type': 'result', 'op': 'add', 'id': 'z', 'g': 'zombie', 'score': float('nan')}):
+            try:
+                clean_game(bad)
+            except (ValueError, TypeError):
+                continue
+            raise AssertionError(f'a bad result got in: {bad}')
+        zr = {'type': 'result', 'op': 'add', 'id': 'z1', 'g': 'zombie', 'score': 120, 'extra': 4}
+        sb = scoreboard([{'from': 'ALICE', 'game': clean_game(res)}, {'from': 'ALICE', 'game': clean_game(res)},
+                         {'from': 'BOB', 'game': clean_game({**res, 'id': 'r2', 'opp': 'ALICE', 'pts': [5, 4]})}, {'from': 'ALICE', 'game': clean_game(zr)},
+                         {'from': 'ALICE', 'game': clean_game({**zr, 'id': 'z2', 'score': 80})}, {'from': 'ALICE·AGENT', 'game': clean_game({**zr, 'id': 'z3', 'score': 999})}])
+        f = sb['foos']['rows']
+        assert [r['name'] for r in f] == ['ALICE', 'BOB'] and (f[0]['w'], f[0]['l'], f[0]['pts']) == (1, 1, 9) and f[1]['pts'] == 8, f
+        assert scoreboard([{'from': 'A', 'game': {'type': 'result'}}, {'from': 'A', 'game': {'type': 'result', 'g': 'foos', 'id': [1], 'win': 1}}, {'from': 'A', 'game': {'type': 'result', 'g': 'zombie', 'id': 'q', 'score': 'x'}}]) is not None    # hand-edited lines never break the page
+        assert sb['zombie']['mode'] == 'best' and sb['zombie']['rows'][0] == {'name': 'ALICE', 'best': 120, 'n': 2, 'total': 200, 'extra': 4}, sb['zombie']
         assert host.ask_guest('BOB', 'cerca')['id'] == 1                             # the host asks a guest; only that guest answers, with a clean name
         for who, helper in (({'name': 'EVE'}, 'AIUTO1'), (g, 'AI UTO')):
             try:
@@ -1313,7 +1386,30 @@ def _prova():
             if b.error:
                 break
         assert b.error and 'closed by the host' in b.error, b.error
+        assert b.people == [], b.people                                              # kicked: the host's figures leave its screen at once
         b.stopped.set()
+        b2 = Bridge(tmp, host.url, host.pin, {'name': 'CARL', 'emoji': '🐻', 'color': '#336699'}, people=lambda: [])
+        b2.start()
+        for _ in range(40):
+            time.sleep(0.15)
+            if b2.people:
+                break
+        assert b2.people and any(p['name'] == 'CARL' for p in host.people())
+        b2.stop()                                                                    # a guest that leaves is gone from the host's figures at once
+        assert not any(p.get('guest') == 'CARL' for p in host.people())
+        b3 = Bridge(tmp, host.url, host.pin, {'name': 'DINA', 'emoji': '🐱', 'color': '#993366'}, people=lambda: [])
+        b3.start()
+        for _ in range(40):
+            time.sleep(0.15)
+            if b3.people:
+                break
+        assert b3.people
+        host.stop()                                                                  # the host stops sharing: its figures leave the guest's screen in a few seconds
+        t0 = time.time()
+        while b3.people and time.time() - t0 < LOST + 4:
+            time.sleep(0.2)
+        assert not b3.people and time.time() - t0 < LOST + 2, time.time() - t0
+        b3.stopped.set()
     host.stop()
     print('share ok')
 
