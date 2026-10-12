@@ -25,7 +25,6 @@ let paneOpen = false
 const summaries = new Map<string, Summary>()
 const seen = new Map<string, number>()
 const waitingSeen = new Map<string, Set<string>>()
-const running = new Set<string>()
 
 const roomOf = (id?: string) => (id ? Object.values(rooms).find(r => r.ids.includes(id)) : undefined)
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -123,7 +122,6 @@ export const register: Register = on => {
     const room = roomOf(e.agentId)
     if (!room) return next(e)
     const id = e.tool_use_id || `${e.agentId}-${Date.now()}`
-    running.add(id)
     send($, room, { kind: 'tool', agentId: e.agentId, id, tool: e.tool, input: pick(e as Record<string, unknown>) })
     let ok = false
     try {
@@ -131,20 +129,16 @@ export const register: Register = on => {
       ok = ran.deny === undefined && !ran.isError
       return ran
     } finally {
-      running.delete(id)
       send($, room, { kind: 'done', agentId: e.agentId, id, ok })
     }
   }).catch(($, e, next) => next(e))          // fail open: a fault here never blocks the session
 
-  // a permission prompt: flagged only if the call is still waiting after 2.5 s (auto mode often decides at once)
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    const room = roomOf(e.agentId)
-    const id = e.tool_use_id
-    if (room && id && verdict.decision === 'ask') {
-      $.clock.after(2500, () => { if (running.has(id)) send($, room, { kind: 'ask', agentId: e.agentId, id }) })
-    }
-    return verdict
+  // a permission prompt: only one the person is really shown. In auto mode most calls pass through an 'ask' that the
+  // mode then approves by itself, and a long call (a chat wait, a test run) must not look like a wait for the user.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const room = roomOf(e.agent_id)
+    if (room && e.agent_id) send($, room, { kind: 'ask', agentId: e.agent_id })
+    return next(e)
   }).catch(($, e, next) => next(e))          // fail open: a fault here never blocks the session
 
   // the roster writes itself
