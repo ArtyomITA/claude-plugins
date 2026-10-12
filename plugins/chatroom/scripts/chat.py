@@ -1115,6 +1115,7 @@ def cmd_mcp(room, a):
     def send(obj):
         out.write(json.dumps(obj, ensure_ascii=False) + '\n')
         out.flush()
+    sys.stdin.reconfigure(encoding='utf-8')          # JSON-RPC is UTF-8; Windows would read it as cp1252
     for line in sys.stdin:
         try:
             msg = json.loads(line)
