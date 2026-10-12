@@ -1215,9 +1215,10 @@ def tv_channels():
 YTDLP = {'cwd': str(HERE), 'env': {**os.environ, 'PYTHONSAFEPATH': '1'}}     # python -m looks in the working directory first: not in the folder the viewer was started in
 
 
-def tv_search(q):
-    """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded), kept only when their author lets
-    them play on other pages; raises RuntimeError with what to do when yt-dlp is missing or fails"""
+def tv_search(q, video=True):
+    """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded), kept only when they can play in the embedded
+    player (video=False, for the radio: only when their author lets other pages show them); raises RuntimeError with what to do
+    when yt-dlp is missing or fails"""
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch24:{q}'],
                            capture_output=True, text=True, encoding='utf-8', timeout=30, **YTDLP)
@@ -1231,35 +1232,67 @@ def tv_search(q):
             'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
            for e in found if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
 
-    def embeddable(vid):                                       # many authors forbid playing their videos on other pages
-        try:
+    def embeddable(vid):                                       # many authors forbid playing their videos on other pages, and an age limit stops the embedded player too
+        if video:                                              # the embedded player's own verdict (it needs a Referer, as in the viewer); oEmbed alone says yes to age limits and to many label videos
+            try:
+                page = urllib.request.Request(f'https://www.youtube.com/embed/{vid}', headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'http://127.0.0.1/'})
+                with urllib.request.urlopen(page, timeout=8) as resp:
+                    said = re.search(r'"previewPlayabilityStatus":\{"status":"(\w+)"', resp.read(120000).decode('utf-8', 'replace').replace('\\"', '"'))
+                if said:
+                    return said[1] != 'UNPLAYABLE'
+            except (OSError, ValueError):
+                return False
+        try:                                                   # no verdict from the player page (the radio asks only this, or the page changed): oEmbed
             with urllib.request.urlopen(f'https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={vid}&format=json', timeout=5) as resp:
                 return resp.status == 200
         except (OSError, ValueError):
             return False
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(8) as pool:
+    with ThreadPoolExecutor(12) as pool:
         playable = list(pool.map(embeddable, [e['id'] for e in out]))
     return [e for e, good in zip(out, playable) if good][:16]
 
 
 AUDIO_URLS = {}                                    # video id -> (address of its sound alone, when yt-dlp found it)
+AUDIO_FAIL = {}                                    # video id -> (why yt-dlp gave nothing, when): kept 5 minutes, so the page can ask why without a second yt-dlp run
+
+
+def ytdlp_why(stderr):
+    """what yt-dlp's last complaint means, for the person watching: an old version is only one of the causes (an age limit,
+    a bot check or a removed video fail the same way with the newest one)"""
+    last = ((stderr or '').strip().splitlines() or [''])[-1]
+    low = last.lower()
+    for words, why in (('confirm your age', 'age-restricted video: YouTube gives its sound only to a signed-in account'),
+                       ('not a bot', 'YouTube wants proof that you are not a bot: try again later'),
+                       ('not available', 'video not available (removed, private or blocked in this country)'),
+                       ('unavailable', 'video not available (removed, private or blocked in this country)'),
+                       ('javascript runtime', 'yt-dlp needs a JavaScript runtime (deno) on the PATH of the viewer'),
+                       ('unable to extract', 'yt-dlp is out of date: python -m pip install -U yt-dlp'),
+                       ('no module named', 'yt-dlp is not installed: python -m pip install -U yt-dlp')):
+        if words in low:
+            return why
+    return f'yt-dlp: {last[:160]}' if last else 'yt-dlp did not answer in time'
 
 
 def tv_audio_url(vid):
     """where a YouTube video's sound alone is (m4a when there is one), found by yt-dlp and kept 30 minutes; raises
-    RuntimeError with what to do when yt-dlp is missing or fails"""
+    RuntimeError with the reason when yt-dlp is missing or gets nothing"""
     hit = AUDIO_URLS.get(vid)
     if hit and time.time() - hit[1] < 1800:
         return hit[0]
+    fail = AUDIO_FAIL.get(vid)
+    if fail and time.time() - fail[1] < 300:
+        raise RuntimeError(fail[0])
+    url = stderr = ''
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
                             f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=40, **YTDLP)
-        url = (r.stdout or '').strip().splitlines()[0] if (r.stdout or '').strip() else ''
-    except (OSError, subprocess.TimeoutExpired):
-        url = ''
+        url, stderr = (r.stdout or '').strip().splitlines()[0] if (r.stdout or '').strip() else '', r.stderr
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        stderr = str(exc) if isinstance(exc, OSError) else ''
     if not re.match(r'https://[\w.-]+\.googlevideo\.com/', url):    # only YouTube's own servers are ever fetched
-        raise RuntimeError('the placed sound needs yt-dlp, up to date: python -m pip install -U yt-dlp')
+        AUDIO_FAIL[vid] = (ytdlp_why(stderr), time.time())
+        raise RuntimeError(AUDIO_FAIL[vid][0])
     AUDIO_URLS[vid] = (url, time.time())
     return url
 
@@ -1760,7 +1793,7 @@ def cmd_serve(room, a):
                 if not q:
                     return self.send(400, 'say what to look for', 'text/plain')
                 try:
-                    out = tv_search(q)
+                    out = tv_search(q, 'audio' not in urllib.parse.parse_qs(self.path.partition('?')[2]))
                 except RuntimeError as exc:
                     out, why = None, str(exc)
                 if out is None and guest['bridge']:     # this computer cannot search: the friend's can

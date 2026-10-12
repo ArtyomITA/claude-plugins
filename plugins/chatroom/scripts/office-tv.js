@@ -142,14 +142,20 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.tv.vol') ?? 80))); } catch (e) {}
   // the sound: the user's files through a placed speaker; YouTube's sound through the viewer, beside the muted picture
   const aud = Object.assign(new Audio(), {preload: 'auto'});
+  const bad = new Set();                             // YouTube videos the player refused to show
   let vNodes = null, aNodes = null, audOk = true, audId = '', ytVid = '', syncAt = 0, heardAt = 0, flatAt = 0, heard = 1;
-  aud.addEventListener('error', () => {              // no yt-dlp here, or YouTube refused: its own sound, fading but without sides
-    if (!aud.getAttribute('src') || !audOk) return;
-    audOk = false; aud.removeAttribute('src'); audId = ''; audio(); say(t().tvFlat);
+  aud.addEventListener('error', async () => {        // no yt-dlp here, or YouTube refused: its own sound, fading but without sides
+    const src = aud.getAttribute('src');
+    if (!src || !audOk) return;
+    audOk = false; aud.removeAttribute('src'); audId = ''; audio();
+    if (bad.has(ytVid)) return;                      // the picture is refused too: that message says it
+    let why = '';                                    // the viewer's server knows what yt-dlp complained about (an age limit, a bot check, an old version...)
+    try { const r = await fetch(src, {headers: {Range: 'bytes=0-0'}, cache: 'no-store'}); if (r.ok) r.body?.cancel(); else why = (await r.text()).slice(0, 200); } catch (e) {}
+    say(why ? t().tvFlatWhy(why) : t().tvFlat);
   });
   /** the separate sound keeps to YouTube's picture: same video, same second, playing or not */
   function follow() {
-    if (!audOk || now.kind === 'off' || isLocal() || !ytVid) return;
+    if (!audOk || now.kind === 'off' || isLocal() || !ytVid || bad.has(ytVid)) return;
     if (audId !== ytVid) { audId = ytVid; aud.src = `tv/audio/${ytVid}`; }
     if (ytState !== 1 || fullEl) { if (!aud.paused) aud.pause(); return; }
     const want = position(), clock = performance.now() / 1000;
@@ -168,6 +174,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   addEventListener('message', e => {
     if (e.source !== frame.contentWindow) return;
     let d; try { d = JSON.parse(e.data); } catch (err) { return; }
+    if (d?.event === 'onError') return refused(+d.info);
     const info = d && d.info;
     if (d?.event === 'onReady' || d?.event === 'initialDelivery') { clearInterval(hello); audio(); }
     if (!info || typeof info !== 'object') return;
@@ -181,6 +188,17 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     }
     follow();
   });
+  /** the player cannot show this video here (101 or 150: its author forbids other pages, or an age limit; 100: removed or private): say why,
+   *  and go on with the next one of the search list when there is one */
+  function refused(code) {
+    if (now.kind === 'off' || isLocal() || !ytVid) return;
+    const id = now.kind === 'video' ? now.v : ytVid;
+    if (bad.has(id)) return;
+    bad.add(id); aud.removeAttribute('src'); audId = '';
+    const i = results.findIndex(r => r.id === id), next = i >= 0 ? results.slice(i + 1).find(r => !bad.has(r.id)) : null;
+    if (next) watch(next.id, next.title);
+    say(t().tvRefused(code, results[i]?.title || now.title || now.name || '', next?.title));
+  }
   /** sound as chosen, as soon as the browser allows it (after the first click or key on the page) */
   function audio() {
     if (isLocal()) { video.muted = !canSound(); return; }
@@ -330,8 +348,10 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   function cinema(on) {
     if (!on) {
       if (!cineEl) return;
+      const was = isLocal() && !video.paused;                                 // taking a playing video out of the page pauses it, a moment later: it goes on
       clearInterval(cineTick); removeEventListener('keydown', cineKey, true);
       cineEl.remove(); cineEl = null; video.style.cssText = ''; video.remove(); frame.style.zIndex = '1';
+      if (was) setTimeout(() => video.play().catch(() => {}), 0);
       return;
     }
     if (cineEl || now.kind === 'off' || fullEl) return;
@@ -537,7 +557,7 @@ export function createRadio({THREE, scene, camera, root, spot, rot = 0, area, ra
   async function find(q) {
     list = []; idx = -1; draw(t().tvLooking);
     try {
-      const r = await fetch('tv/search?q=' + encodeURIComponent(q), {cache: 'no-store'});
+      const r = await fetch('tv/search?audio=1&q=' + encodeURIComponent(q), {cache: 'no-store'});
       list = r.ok ? (await r.json()).results : [];
       if (!r.ok) say(r.status === 404 ? t().oldServer : await r.text());
     } catch (e) { list = []; }

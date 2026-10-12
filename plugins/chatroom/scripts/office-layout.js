@@ -163,7 +163,7 @@ export const DEFAULT_LAYOUT = {
     {type: 'couch', x: -14.4, z: -1.8, rot: PI / 2, pack: 'Chairs/Office_Couch_Brown_01'},
     {type: 'couch', x: -10.0, z: -1.8, rot: -PI / 2, pack: 'Chairs/Office_Couch_Black_02'},
     {type: 'lowTable', x: -12.2, z: -1.8, rot: PI / 2}, {type: 'tvStand', x: -12.2, z: 0.55, rot: PI},
-    {type: 'console', x: -12.2, y: 0.45, z: 0.45, rot: PI}, {type: 'armchair', x: -12.2, z: -3.8, rot: 0, color: '#6d5d8a'},
+    {type: 'console', x: -11.25, z: 0.5, rot: PI}, {type: 'armchair', x: -12.2, z: -3.8, rot: 0, color: '#6d5d8a'},
     {type: 'sofa', x: -10.9, z: -3.8, rot: 0}, {type: 'couch', x: -13.5, z: -3.9, rot: 0},
     {type: 'floorLamp', x: -14.5, z: -4.1}, {type: 'plantTall', x: -8.6, z: 0.6},
     // games corner
