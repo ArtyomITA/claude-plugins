@@ -142,7 +142,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   try { vol = Math.max(0, Math.min(100, +(localStorage.getItem('chatroom.tv.vol') ?? 80))); } catch (e) {}
   // the sound: the user's files through a placed speaker; YouTube's sound through the viewer, beside the muted picture
   const aud = Object.assign(new Audio(), {preload: 'auto'});
-  const bad = new Set();                             // YouTube videos the player refused to show
+  const bad = new Set(), direct = new Set();         // YouTube videos nothing can show; the ones the player refuses and the viewer plays from their stream
   let vNodes = null, aNodes = null, audOk = true, audId = '', ytVid = '', syncAt = 0, heardAt = 0, flatAt = 0, heard = 1;
   aud.addEventListener('error', async () => {        // no yt-dlp here, or YouTube refused: its own sound, fading but without sides
     const src = aud.getAttribute('src');
@@ -157,7 +157,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   function follow() {
     if (!audOk || now.kind === 'off' || isLocal() || !ytVid || bad.has(ytVid)) return;
     if (audId !== ytVid) { audId = ytVid; aud.src = `tv/audio/${ytVid}`; }
-    if (ytState !== 1 || fullEl) { if (!aud.paused) aud.pause(); return; }
+    if (!(now.direct ? !video.paused && video.readyState >= 3 : ytState === 1) || fullEl) { if (!aud.paused) aud.pause(); return; }
     const want = position(), clock = performance.now() / 1000;
     if (aud.readyState >= 1 && !aud.seeking && Math.abs(aud.currentTime - want) > 0.5 && clock - syncAt > 3) { syncAt = clock; aud.currentTime = want; }
     if (aud.paused) aud.play().catch(() => {});
@@ -188,36 +188,53 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     }
     follow();
   });
-  /** the player cannot show this video here (101 or 150: its author forbids other pages, or an age limit; 100: removed or private): say why,
-   *  and go on with the next one of the search list when there is one */
-  function refused(code) {
-    if (now.kind === 'off' || isLocal() || !ytVid) return;
-    const id = now.kind === 'video' ? now.v : ytVid;
+  /** this video cannot be shown (why): say so and go on with the next one of the search list, when there is one */
+  function skip(id, why) {
     if (bad.has(id)) return;
     bad.add(id); aud.removeAttribute('src'); audId = '';
     const i = results.findIndex(r => r.id === id), next = i >= 0 ? results.slice(i + 1).find(r => !bad.has(r.id)) : null;
     if (next) watch(next.id, next.title);
-    say(t().tvRefused(code, results[i]?.title || now.title || now.name || '', next?.title));
+    say(t().tvRefused(why, results[i]?.title || now.title || now.name || '', next?.title));
   }
+  /** the embedded player refuses this video (101 or 150: its author forbids other pages, or an age limit; 100: removed or private). Not a
+   *  dead end: the viewer's server finds the stream (yt-dlp) and the TV plays it itself; an age limit fails there, with its reason */
+  function refused(code) {
+    if (now.kind === 'off' || picture() || !ytVid) return;
+    const id = now.kind === 'video' ? now.v : ytVid;
+    if (bad.has(id)) return;
+    if (code !== 101 && code !== 150) return skip(id, t().tvWhy(code));
+    say(t().tvDirect(results.find(r => r.id === id)?.title || now.title || now.name || ''));
+    stream(id, playing ? Date.now() / 1000 - playing.at : 0);                                  // where the video should be by now (the player reports nothing for a video it refuses)
+  }
+  // a stream the server could not give (an age limit, a bot check, a removed video): its reason, then the next video
+  video.addEventListener('error', async () => {
+    const src = video.getAttribute('src');
+    if (!now.direct || !src) return;
+    const id = ytVid;
+    let why = '';
+    try { const r = await fetch(src, {headers: {Range: 'bytes=0-0'}, cache: 'no-store'}); if (r.ok) r.body?.cancel(); else why = r.status === 404 ? t().oldServer : (await r.text()).slice(0, 200); } catch (e) {}
+    if (ytVid === id && now.direct) skip(id, why || t().tvWhy(5));
+  });
   /** sound as chosen, as soon as the browser allows it (after the first click or key on the page) */
   function audio() {
     if (isLocal()) { video.muted = !canSound(); return; }
+    if (now.direct) { video.muted = true; aud.muted = !canSound(); return; }          // the stream is picture only; its sound comes beside it, like the player's
     if (audOk) { yt('mute'); aud.muted = !canSound(); return; }
     yt('setVolume', [Math.round(vol * heard)]);
     yt(canSound() ? 'unMute' : 'mute');
   }
   for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (sound) setTimeout(audio, 0); }, {capture: true, once: true});
   /** where the video is now, in seconds, and whether it is paused */
-  const position = () => isLocal() ? video.currentTime : ytSeen ? ytTime + (ytState === 1 ? Date.now() / 1000 - ytSeen : 0) : playing ? Date.now() / 1000 - playing.at : 0;
-  const paused = () => isLocal() ? video.paused : ytState === 2 || holdPause;
+  const position = () => picture() ? video.currentTime : ytSeen ? ytTime + (ytState === 1 ? Date.now() / 1000 - ytSeen : 0) : playing ? Date.now() / 1000 - playing.at : 0;
+  const paused = () => picture() ? video.paused : ytState === 2 || holdPause;
   function seek(pos) {
     pos = Math.max(0, pos);
-    if (isLocal()) video.currentTime = pos;
+    if (picture()) video.currentTime = pos;
     else { yt('seekTo', [pos, true]); ytTime = pos; ytSeen = Date.now() / 1000; if (playing) playing.at = Date.now() / 1000 - pos; }
   }
   /** play or pause; the player's own news corrects the state a moment later */
   function run(on) {
-    if (isLocal()) { if (on) video.play().catch(() => {}); else video.pause(); return; }
+    if (picture()) { if (on) video.play().catch(() => {}); else video.pause(); return; }
     ytTime = position(); ytSeen = Date.now() / 1000; ytState = on ? 1 : 2;
     holdPause = !on;                                 // a pause sent while the video is still loading would be lost
     yt(on ? 'playVideo' : 'pauseVideo');
@@ -245,6 +262,21 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     video.play().catch(() => {});
     screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
   }
+  /** a YouTube video the embedded player refuses: the picture comes from the viewer's server (tv/stream, found by yt-dlp), the sound beside it
+   *  from tv/audio like the player's own; the picture is the clock and the sound keeps to it */
+  function stream(id, start = 0) {
+    frame.style.display = 'none'; frame.src = 'about:blank'; aud.pause();
+    now.direct = true; direct.add(id);
+    playing = {ids: [id], at: Date.now() / 1000 - start};
+    ytVid = id; ytSeen = 0; ytState = -1; audId = ''; audOk = true; aNodes ??= speaker(aud);
+    video.loop = true; video.muted = true;
+    video.src = `tv/stream/${id}`;
+    if (start > 0) video.addEventListener('loadedmetadata', () => { video.currentTime = start; }, {once: true});
+    video.play().catch(() => {});
+    screen.material.map = tex; screen.material.color.set('#ffffff'); screen.material.needsUpdate = true;
+    audio();
+  }
+  const begin = (v, pos) => direct.has(v) ? stream(v, pos) : youtube([v], pos);       // the player first; the stream for what the player is known to refuse
   function youtube(ids, start = 0) {
     video.pause(); video.removeAttribute('src'); video.load();
     screen.material.map = null; screen.material.color.set('#050608'); screen.material.needsUpdate = true;
@@ -279,7 +311,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   function watch(v, title, at = Date.now() / 1000, share = false) {
     if (off) { off = false; try { localStorage.setItem('chatroom.tv.off', '0'); } catch (e) {} }
     now = {kind: 'video', v, title};
-    youtube([v], Math.max(0, Date.now() / 1000 - at));
+    begin(v, Math.max(0, Date.now() / 1000 - at));
     say(`📺 ${title || v}`);
     if (share) onTogether?.({op: 'play', v, title, t: at, pos: Math.max(0, Date.now() / 1000 - at), at: Date.now() / 1000, paused: false});
   }
@@ -310,8 +342,10 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     const input = menuEl.querySelector('.o-tvsearch input'); if (input && !query) input.focus();
   }
   const isLocal = () => now.kind === 'channel' && channels[now.i]?.files;
+  const picture = () => isLocal() || !!now.direct;                            // the picture is the video element: a file of yours, or a YouTube stream
   function fullscreen() {
     if (fullEl || now.kind === 'off') return;
+    if (now.direct) return cinema(true);
     close();
     fullEl = document.createElement('div'); fullEl.className = 'o-tvfull';
     const back = Object.assign(document.createElement('button'), {textContent: '✕ Esc'});
@@ -348,7 +382,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
   function cinema(on) {
     if (!on) {
       if (!cineEl) return;
-      const was = isLocal() && !video.paused;                                 // taking a playing video out of the page pauses it, a moment later: it goes on
+      const was = picture() && !video.paused;                                 // taking a playing video out of the page pauses it, a moment later: it goes on
       clearInterval(cineTick); removeEventListener('keydown', cineKey, true);
       cineEl.remove(); cineEl = null; video.style.cssText = ''; video.remove(); frame.style.zIndex = '1';
       if (was) setTimeout(() => video.play().catch(() => {}), 0);
@@ -362,7 +396,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
       <button data-c="play" title="${esc(L.tvPlay)}">⏯</button><button data-c="fwd">10 ⏩</button>
       <label>🔊 <input type="range" min="0" max="100" step="5" value="${vol}" data-vol></label><span class="o-tvtime"></span>
       <button data-m>☰ ${esc(L.tvChannels)}</button><button data-power title="${esc(L.tvOff)}">⏻</button><button data-x>✕ Esc</button></div>`;
-    if (isLocal()) { video.style.cssText = 'width:100%;height:100%;display:block'; cineEl.querySelector('.o-tvscreen').appendChild(video); }
+    if (picture()) { video.style.cssText = 'width:100%;height:100%;display:block'; cineEl.querySelector('.o-tvscreen').appendChild(video); }
     for (const ev of ['pointerdown', 'wheel', 'keydown']) cineEl.addEventListener(ev, e => e.stopPropagation());
     cineEl.addEventListener('input', e => {
       if (e.target.dataset.vol === undefined) return;
@@ -379,7 +413,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     });
     const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     cineTick = setInterval(() => {
-      const el = cineEl?.querySelector('.o-tvtime'), d = isLocal() ? video.duration : ytDur;
+      const el = cineEl?.querySelector('.o-tvtime'), d = picture() ? video.duration : ytDur;
       if (el) el.textContent = `${paused() ? '⏸' : '▶'} ${clock(position())}${d ? ' / ' + clock(d) : ''}`;
     }, 500);
     addEventListener('keydown', cineKey, true);
@@ -418,7 +452,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
     const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     const tick = setInterval(() => {
       if (!menuEl) return clearInterval(tick);
-      const el = menuEl.querySelector('.o-tvtime'), d = isLocal() ? video.duration : ytDur;
+      const el = menuEl.querySelector('.o-tvtime'), d = picture() ? video.duration : ytDur;
       if (el) el.textContent = now.kind === 'off' ? '' : `${paused() ? '⏸' : '▶'} ${clock(position())}${d ? ' / ' + clock(d) : ''}`;
     }, 500);
     menuEl.addEventListener('submit', async e => {
@@ -427,6 +461,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
       try {
         const r = await fetch('tv/search?q=' + encodeURIComponent(query), {cache: 'no-store'});
         results = r.ok ? (await r.json()).results : [];
+        for (const x of results) if (x.direct) direct.add(x.id);
         if (!r.ok) say(r.status === 404 ? t().oldServer : await r.text());
       } catch (err) { results = []; }
       drawMenu();
@@ -467,7 +502,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
       const pos = Math.max(0, line.pos !== undefined ? line.pos + (stop ? 0 : nowS - (line.at || nowS)) : nowS - (line.t || nowS));
       if (line.v !== now.v) {
         now = {kind: 'video', v: line.v, title: line.title};
-        youtube([line.v], pos); holdPause = stop; if (stop) ytState = 2;
+        begin(line.v, pos); holdPause = stop; if (stop) { ytState = 2; if (now.direct) video.pause(); }
         say(`📺 ${who}: ${line.title || line.v}`);
         return;
       }
@@ -485,7 +520,7 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
         else if (time - flatAt > 0.5) { flatAt = time; yt('setVolume', [Math.round(vol * heard * mixLevel('tv'))]); }
         follow();
       }
-      if (now.kind === 'off' || (now.kind === 'channel' && channels[now.i]?.files)) return;
+      if (now.kind === 'off' || picture()) return;
       if (cineEl) {                                                           // in cinema the player sits on the big box
         const b = cineEl.querySelector('.o-tvscreen').getBoundingClientRect(), r0 = root.getBoundingClientRect();
         Object.assign(frame.style, {display: '', zIndex: '26', transform: `translate(${b.left - r0.left}px, ${b.top - r0.top}px) scale(${b.width / FW}, ${b.height / FH})`});

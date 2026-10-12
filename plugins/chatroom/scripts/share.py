@@ -1266,11 +1266,11 @@ class Bridge:
         sending.unlink()
 
     def tv_search(self, q):
-        """the host searches YouTube for us; only well formed results come back"""
+        """the host searches YouTube for us; only well formed results come back, and only those the embedded player shows"""
         r = call(self.url, '/share/tvsearch?q=' + urllib.parse.quote(str(q)[:100]), self.token, timeout=45)
         return [{'id': e['id'], 'title': str(e.get('title') or '')[:120], 'channel': str(e.get('channel') or '')[:60],
                  'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
-                for e in (r.get('results') or [])[:16] if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
+                for e in (r.get('results') or [])[:16] if isinstance(e, dict) and not e.get('direct') and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]   # a computer that cannot search has no yt-dlp for a stream either
 
     def room_post(self, text):
         return call(self.url, '/share/room', self.token, {'text': str(text)[:LINE_MAX], 'cid': secrets.token_hex(8)})

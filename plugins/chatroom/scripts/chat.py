@@ -1216,9 +1216,11 @@ YTDLP = {'cwd': str(HERE), 'env': {**os.environ, 'PYTHONSAFEPATH': '1'}}     # p
 
 
 def tv_search(q, video=True):
-    """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded), kept only when they can play in the embedded
-    player (video=False, for the radio: only when their author lets other pages show them); raises RuntimeError with what to do
-    when yt-dlp is missing or fails"""
+    """YouTube videos for the TV, found by yt-dlp (titles only, nothing downloaded). Each is marked by the embedded player's own
+    verdict: it plays there, or ('direct': true) the player refuses it but yt-dlp can find its stream, which the viewer plays
+    itself (tv_stream_url); age-restricted and removed videos are left out. With video=False (the radio, which needs only the
+    sound) a video is kept when its author lets other pages show it, as before. Raises RuntimeError with what to do when yt-dlp
+    is missing or fails"""
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch24:{q}'],
                            capture_output=True, text=True, encoding='utf-8', timeout=30, **YTDLP)
@@ -1232,29 +1234,42 @@ def tv_search(q, video=True):
             'duration': e.get('duration') if isinstance(e.get('duration'), (int, float)) else None}
            for e in found if isinstance(e, dict) and re.fullmatch(r'[A-Za-z0-9_-]{11}', str(e.get('id', '')))]
 
-    def embeddable(vid):                                       # many authors forbid playing their videos on other pages, and an age limit stops the embedded player too
-        if video:                                              # the embedded player's own verdict (it needs a Referer, as in the viewer); oEmbed alone says yes to age limits and to many label videos
+    def verdict(vid):                                          # 'embed', 'direct' (the player refuses it, yt-dlp may not), or None (age limit, removed)
+        if video:                                              # the embedded player's own word (it needs a Referer, as in the viewer): oEmbed alone says yes to age limits and to many label videos
             try:
-                page = urllib.request.Request(f'https://www.youtube.com/embed/{vid}', headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'http://127.0.0.1/'})
+                page = urllib.request.Request(f'https://www.youtube.com/embed/{vid}', headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'http://127.0.0.1/', 'Accept-Language': 'en'})
                 with urllib.request.urlopen(page, timeout=8) as resp:
-                    said = re.search(r'"previewPlayabilityStatus":\{"status":"(\w+)"', resp.read(120000).decode('utf-8', 'replace').replace('\\"', '"'))
+                    said = re.search(r'"previewPlayabilityStatus":\{"status":"(\w+)"(?:,"reason":"([^"]*)")?', resp.read(120000).decode('utf-8', 'replace').replace('\\"', '"'))
                 if said:
-                    return said[1] != 'UNPLAYABLE'
+                    if said[1] != 'UNPLAYABLE':
+                        return 'embed'
+                    return None if re.search(r'age[- ]restrict|inappropriate', (said[2] or '').lower()) else 'direct'
             except (OSError, ValueError):
-                return False
-        try:                                                   # no verdict from the player page (the radio asks only this, or the page changed): oEmbed
+                return None
+        try:                                                   # no word from the player page (the radio asks only this, or the page changed): oEmbed
             with urllib.request.urlopen(f'https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={vid}&format=json', timeout=5) as resp:
-                return resp.status == 200
+                return 'embed' if resp.status == 200 else None
+        except urllib.error.HTTPError as exc:
+            return 'direct' if video and exc.code == 401 else None     # 401: its author forbids other pages
         except (OSError, ValueError):
-            return False
+            return None
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(12) as pool:
-        playable = list(pool.map(embeddable, [e['id'] for e in out]))
-    return [e for e, good in zip(out, playable) if good][:16]
+        verdicts = list(pool.map(verdict, [e['id'] for e in out]))
+    return [{**e, 'direct': True} if v == 'direct' else e for e, v in zip(out, verdicts) if v][:16]
 
 
 AUDIO_URLS = {}                                    # video id -> (address of its sound alone, when yt-dlp found it)
 AUDIO_FAIL = {}                                    # video id -> (why yt-dlp gave nothing, when): kept 5 minutes, so the page can ask why without a second yt-dlp run
+STREAM_URLS = {}                                   # video id -> (address of its picture alone, when yt-dlp found it)
+STREAM_FAIL = {}                                   # the same for the picture
+STREAM_FORMAT = 'bestvideo[vcodec^=avc1][height<=720][protocol=https]/bestvideo[height<=720][protocol=https]'     # YouTube no longer offers picture and sound in one file: the picture alone (H.264 up to 720p), the sound is /tv/audio
+
+
+def url_fresh(url, found):
+    """a YouTube address lasts about six hours (its expire= says); it is asked for again with ten minutes to spare"""
+    m = re.search(r'expire[=/](\d+)', url)
+    return (int(m[1]) if m else found + 1800) - time.time() > 600
 
 
 def ytdlp_why(stderr):
@@ -1262,7 +1277,7 @@ def ytdlp_why(stderr):
     a bot check or a removed video fail the same way with the newest one)"""
     last = ((stderr or '').strip().splitlines() or [''])[-1]
     low = last.lower()
-    for words, why in (('confirm your age', 'age-restricted video: YouTube gives its sound only to a signed-in account'),
+    for words, why in (('confirm your age', 'age-restricted video: YouTube gives it only to a signed-in account'),
                        ('not a bot', 'YouTube wants proof that you are not a bot: try again later'),
                        ('not available', 'video not available (removed, private or blocked in this country)'),
                        ('unavailable', 'video not available (removed, private or blocked in this country)'),
@@ -1278,7 +1293,7 @@ def tv_audio_url(vid):
     """where a YouTube video's sound alone is (m4a when there is one), found by yt-dlp and kept 30 minutes; raises
     RuntimeError with the reason when yt-dlp is missing or gets nothing"""
     hit = AUDIO_URLS.get(vid)
-    if hit and time.time() - hit[1] < 1800:
+    if hit and url_fresh(*hit):
         return hit[0]
     fail = AUDIO_FAIL.get(vid)
     if fail and time.time() - fail[1] < 300:
@@ -1295,6 +1310,32 @@ def tv_audio_url(vid):
         raise RuntimeError(AUDIO_FAIL[vid][0])
     AUDIO_URLS[vid] = (url, time.time())
     return url
+
+
+def tv_stream_url(vid):
+    """where a YouTube video's picture alone is (an mp4 up to 720p), found by yt-dlp with its sound in the same run (kept for
+    /tv/audio); with it a video the embedded player refuses (its author forbids other pages) can still be shown. No cookie and no
+    account: an age-restricted video fails with the reason. Raises RuntimeError with the reason"""
+    hit = STREAM_URLS.get(vid)
+    if hit and url_fresh(*hit):
+        return hit[0]
+    fail = STREAM_FAIL.get(vid)
+    if fail and time.time() - fail[1] < 300:
+        raise RuntimeError(fail[0])
+    lines, stderr = [], ''
+    try:
+        r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', STREAM_FORMAT + ',bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
+                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=60, **YTDLP)
+        lines, stderr = (r.stdout or '').strip().splitlines(), r.stderr
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        stderr = str(exc) if isinstance(exc, OSError) else ''
+    if not lines or not re.match(r'https://[\w.-]+\.googlevideo\.com/', lines[0]):    # only YouTube's own servers are ever fetched
+        STREAM_FAIL[vid] = (ytdlp_why(stderr), time.time())
+        raise RuntimeError(STREAM_FAIL[vid][0])
+    STREAM_URLS[vid] = (lines[0], time.time())
+    if len(lines) > 1 and re.match(r'https://[\w.-]+\.googlevideo\.com/', lines[1]):
+        AUDIO_URLS[vid] = (lines[1], time.time())
+    return lines[0]
 
 
 def settings():
@@ -1808,30 +1849,35 @@ def cmd_serve(room, a):
                 return self.send(200, json.dumps(github.get() if github else {'enabled': False}, ensure_ascii=False), 'application/json; charset=utf-8')
             if path == '/tv.json':                    # the lounge TV's channels
                 return self.send(200, json.dumps({'channels': tv_channels()}, ensure_ascii=False), 'application/json; charset=utf-8')
-            m = re.fullmatch(r'/tv/audio/([A-Za-z0-9_-]{11})', path)
-            if m:                                      # a YouTube video's sound alone, passed through by ranges: the page places it left or right
-                try:
-                    url = tv_audio_url(m[1])
-                except RuntimeError as exc:
-                    return self.send(503, str(exc), 'text/plain')
-                ask = urllib.request.Request(url, headers={'Range': self.headers.get('Range') or 'bytes=0-', 'User-Agent': 'Mozilla/5.0'})
-                try:
-                    up = urllib.request.urlopen(ask, timeout=20)
-                except OSError as exc:
-                    AUDIO_URLS.pop(m[1], None)          # an address that expired: the next try asks yt-dlp again
-                    return self.send(502, f'YouTube did not give the sound: {exc}', 'text/plain')
-                with up:
-                    self.send_response(up.status)
-                    for h in ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges'):
-                        if up.headers.get(h):
-                            self.send_header(h, up.headers[h])
-                    self.end_headers()
+            m = re.fullmatch(r'/tv/(audio|stream)/([A-Za-z0-9_-]{11})', path)
+            if m:                                      # a YouTube video's sound alone or picture alone, passed through by ranges: the page places the sound left or right, and a video from another site cannot be a texture
+                audio = m[1] == 'audio'
+                cache = AUDIO_URLS if audio else STREAM_URLS
+                for attempt in (0, 1):
                     try:
-                        while chunk := up.read(65536):
-                            self.wfile.write(chunk)
-                    except OSError:                    # the page jumped elsewhere or moved on: it closed the line
-                        pass
-                return
+                        url = (tv_audio_url if audio else tv_stream_url)(m[2])
+                    except RuntimeError as exc:
+                        return self.send(503, str(exc), 'text/plain')
+                    ask = urllib.request.Request(url, headers={'Range': self.headers.get('Range') or 'bytes=0-', 'User-Agent': 'Mozilla/5.0'})
+                    try:
+                        up = urllib.request.urlopen(ask, timeout=20)
+                    except OSError as exc:
+                        cache.pop(m[2], None)           # an address that expired: ask yt-dlp again, once
+                        if attempt:
+                            return self.send(502, f'YouTube did not give the {"sound" if audio else "picture"}: {exc}', 'text/plain')
+                        continue
+                    with up:
+                        self.send_response(up.status)
+                        for h in ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges'):
+                            if up.headers.get(h):
+                                self.send_header(h, up.headers[h])
+                        self.end_headers()
+                        try:
+                            while chunk := up.read(65536):
+                                self.wfile.write(chunk)
+                        except OSError:                # the page jumped elsewhere or moved on: it closed the line
+                            pass
+                    return
             m = re.fullmatch(r'/tv/([\w.-]{1,60})/([\w.-]{1,120}\.(?:mp4|webm))', path)
             if m:                                      # a local video, by ranges (seeking, looping)
                 f = (TV_DIR / m[1] / m[2]).resolve()

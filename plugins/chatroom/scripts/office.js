@@ -138,8 +138,11 @@ const VISIT_URL = 'visit.json' + (new URLSearchParams(location.search).get('visi
 let visit = null, myLook = null;
 try { const r = await fetch('settings.json', {cache: 'no-store'}); if (r.ok) myLook = (await r.json()).avatar || null; } catch (e) {}
 if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
-const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: visit.items || DEFAULT_LAYOUT.items}
-  : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: saved.items} : DEFAULT_LAYOUT;
+// the console of the first default offices stood at the height of the TV's picture, in front of it, and an office saved then keeps it there:
+// it is set on the floor beside the TV when the layout loads (only the one that was never moved)
+const tidy = items => items.map(it => it.type === 'console' && it.x === -12.2 && it.y === 0.45 && it.z === 0.45 ? {...it, x: -11.25, y: 0, z: 0.5} : it);
+const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: tidy(visit.items || DEFAULT_LAYOUT.items)}
+  : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: tidy(saved.items)} : DEFAULT_LAYOUT;
 const PLACED = resolve(LAYOUT, {packSize: V.packSize});
 const ARC_ON = !visit && LAYOUT.floor.zones.some(z => z.kind === 'common');                // the arcade cabinet stands in the common room, whatever the furniture of a saved office
 if (ARC_ON) PLACED.boxes.push({x: ARCADE_AT.x, z: ARCADE_AT.z, hw: ARCADE_AT.hw, hd: ARCADE_AT.hd, rot: ARCADE_AT.rot});
