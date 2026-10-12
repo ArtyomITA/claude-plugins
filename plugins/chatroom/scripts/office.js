@@ -873,7 +873,8 @@ function walkOver(name) {
 function goToPoint(p) {
   if (!boss) return;
   if (Math.hypot(p.x - MACHINE.x, p.z - MACHINE.z) < 0.9) return walkTo(BREW.pos, BREW, brew);
-  const seat = sitSpots().find(s => Math.hypot(p.x - s.pos.x, p.z - s.pos.z) < 0.5);
+  const dist = s => Math.hypot(p.x - s.pos.x, p.z - s.pos.z), reach = p.y > 0.15 ? 0.7 : 0.5;       // the chair itself (its back, its arms) is wider than the floor round the seat
+  const seat = sitSpots().filter(s => dist(s) < reach).sort((a, b) => dist(a) - dist(b))[0];
   if (seat) return walkTo(outOf(seat), seat);
   const goal = new THREE.Vector3(p.x, 0, p.z);
   walkTo(goal, {pos: goal, rot: null, pose: 'stand'});
@@ -1565,7 +1566,8 @@ renderer.domElement.addEventListener('click', e => {
   if (editor.active()) return;
   if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   const r = renderer.domElement.getBoundingClientRect();
-  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  if (locked()) ndc.set(0, 0);                                                       // a captured mouse has no position (clientX/Y stay where the capture began): the click is where you look
+  else ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(raycastables, false)[0];
   if (hit?.object.userData.remote) { document.exitPointerLock?.(); return loungeTv.menu(); }                       // the TV's remote: its menu
@@ -1580,7 +1582,8 @@ renderer.domElement.addEventListener('click', e => {
   if (name && !name.endsWith('·sub') && !(pov && name === D.user)) return select(name);
   select(null);
   if (pov) return;
-  const spot = ray.intersectObjects(scene.children, true).find(h => h.object.isMesh && h.object.visible && !h.object.material?.transparent && !h.object.userData.person);
+  const shown = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };       // a mesh under a hidden group (the arena floor, 8 m above) still has visible = true, and the ray would stop on it
+  const spot = ray.intersectObjects(scene.children, true).find(h => h.object.isMesh && shown(h.object) && !h.object.material?.transparent && !h.object.userData.person);
   if (spot) goToPoint(spot.point);
 });
 controls.addEventListener('start', () => { tween = null; });
@@ -1783,11 +1786,22 @@ function tendCup(t) {
   const sip = Math.max(0, Math.sin(((t % 7) / 7) * Math.PI * 2 - 1.2)) ** 3;   // every 7 s, up to the lips
   fpCup.position.set(0.2 - sip * 0.12, -0.24 + sip * 0.16, -0.5 + sip * 0.18); fpCup.rotation.set(sip * 0.9, 0, -sip * 0.2);
 }
+/** the eye sits 0.32 m ahead of the middle of the head, but the body keeps only 0.2 m from walls and furniture: near a tall piece (a wall, a cabinet,
+ *  a counter at eye height) the eye comes back, until it is 0.2 m clear, so the view never goes through it; it goes forward again at 0.8 m/s */
+let lead = 0.32;
+function eyeLead(dt) {
+  climbList();
+  const y = boss.pos.y + boss.jumpY + 1.16, fx = Math.sin(boss.rot), fz = Math.cos(boss.rot);
+  const hit = d => { const x = boss.pos.x + fx * d, z = boss.pos.z + fz * d; return fN().blocked(x, z, 0.2) || (level !== 'arena' && [climb, small].some(l => l.some(e => e.top > y - 0.2 && e.y0 < y + 0.2 && x > e.x0 - 0.2 && x < e.x1 + 0.2 && z > e.z0 - 0.2 && z < e.z1 + 0.2))); };
+  let want = 0.32;
+  while (want > 0 && hit(want)) want -= 0.04;
+  return lead = want < lead ? Math.max(want, 0) : Math.min(want, lead + dt * 0.8);
+}
 function flyCamera(dt) {
   let pos = HOME.pos, look = HOME.target, fov = 30;
   if (pov && boss) {
     boss.root.updateMatrixWorld(true);
-    pos = boss.parts.head.localToWorld(_eye.set(0, 0.26, 0.32));
+    pos = boss.parts.head.localToWorld(_eye.set(0, 0.26, eyeLead(dt)));
     const dr = wrapAng(boss.rot - povRot); povRot = boss.rot;                    // the body turned by itself (walking to a seat, sitting): the view keeps pointing where it was
     if (dr) me.yaw = wrapAng(me.yaw - dr);
     const yaw = boss.rot + me.yaw, c = Math.cos(me.pitch);
