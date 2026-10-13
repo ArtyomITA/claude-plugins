@@ -38,6 +38,8 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
   chat.py transcript [--out FILE]                           (the whole chat as Markdown)
   chat.py command [NAME] [--as AUTHOR]                      (a quick command, see COMMANDS; no NAME lists them)
   chat.py alerts [--follow]                                 (the lead's relay: a ping line per user message)
+  chat.py helpers [OTHER_ROOM ...]                          (for the lead: who is free and for how long, who works on
+                                                            what, the pieces already lent, and pairs to consider)
   chat.py serve [--port 8765]                               (the live viewer, with a box to write as the user)
 
 Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --accent (#rrggbb), --theme
@@ -79,7 +81,7 @@ IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
 STATUS_KINDS = ('status', 'stato', 'board', 'finding')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
 STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str,
-              'done': str, 'evidence': list, 'risks': str}
+              'done': str, 'evidence': list, 'risks': str, 'free_min': int}
 IDLE = 'idle'
 PERCENT = re.compile(r'\d[^\S\n]?%')
 # a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all
@@ -159,6 +161,51 @@ COMMANDS = {
         'it': ('pausa', '⏸', 'Finire il passo, salvare lo stato, idle',
                "@tutti PAUSA. Finite il passo in corso senza lasciare file a metà. Poi ognuno scriva dove è arrivato "
                "(percentuale, cosa manca, come riprendere) e passi in idle con --idle finché non viene taggato.")},
+    # helping: who waits lends a hand to who works, with a packet that says what to do and which files; the lead pairs
+    'aiutatevi': {
+        'en': ('helpout', '🤝', 'Who waits helps a teammate (the lead pairs)',
+               '@all HELP EACH OTHER (the lead pairs you). Whoever is idle or waiting posts a --status in JSON with "free_min" '
+               '(the minutes you expect to wait still) and in "step" what you can do, then goes back to --idle. Whoever works says in one line '
+               'what could be split off ("SPLITTABLE T3: what, ~N min, files ...") or "nothing to split". The lead '
+               'pairs you with chat.py helpers: a long wait takes a lot, a short one a little (under 10 min a review, '
+               'a proof to redo or a test; 10-30 min a piece of a task; over 30 min a whole task). For each pair the '
+               'one who works writes the packet: task help T3 NAME --scope "what is in, what is out" --files a,b '
+               '--done-when "the proof expected" --note "decisions, where to read (file:line), what was tried"; or '
+               'says "no thanks" when explaining costs more than doing. The helper changes only those files and '
+               'closes with task done Tn --proof; if its own wait ends first, task giveback Tn --note "where I got '
+               'to". The lender does not touch the lent files until the packet is back. Shared files still go through '
+               'the lead.'),
+        'it': ('aiutatevi', '🤝', 'Chi aspetta aiuta un compagno (abbina il LEAD)',
+               '@tutti AIUTATEVI (abbina il LEAD). Chi è in idle o aspetta qualcosa scrive uno stato --status in JSON con '
+               '"free_min" (i minuti che stima di aspettare ancora) e in "step" cosa sa fare, poi torna in --idle. Chi lavora scrive in una '
+               'riga cosa si può staccare ("STACCABILE T3: cosa, ~N min, file ...") oppure "niente da staccare". Il '
+               'LEAD abbina con chat.py helpers: chi aspetta tanto prende tanto, chi aspetta poco prende poco (sotto '
+               '10 minuti una rilettura, una prova da rifare o un test; 10-30 minuti un pezzo di compito; oltre 30 un '
+               'compito intero). Per ogni coppia chi lavora scrive il pacchetto: task help T3 NOME --scope "cosa sì, '
+               'cosa no" --files a,b --done-when "la prova attesa" --note "decisioni, dove leggere (file:riga), cosa '
+               'è già stato provato"; oppure dice "no grazie" se spiegarlo costa più che farlo. Chi aiuta tocca solo '
+               'quei file e chiude con task done Tn --proof; se la sua attesa finisce prima, task giveback Tn --note '
+               '"dove sono arrivato". Chi presta non tocca i file prestati finché il pacchetto non torna. I file '
+               'comuni passano sempre dal LEAD.')},
+    'soccorso': {
+        'en': ('helpacross', '🌉', 'Who waits helps the other room (the lead pairs)',
+               '@all HELP THE OTHER ROOM (the lead pairs you). Whoever is idle or waiting here posts a --status in JSON '
+               'with "free_min" and in "step" what you can do, then goes back to --idle. The lead looks at the other room too and pairs you '
+               'with one of its people: the packet is written there, on that room\'s board (task help with your '
+               'name), and the lead tells you the room folder. You read it with board --room <that room>, change only '
+               'the files of the packet, and in that room\'s chat write only about the packet (post --room <that '
+               'room> --as you, tagging who gave it to you); close with task done Tn --proof "the proof" --room <that room>, or '
+               'task giveback Tn --room <that room> as soon as your own wait ends, and come back here. No shared files, no other work '
+               'over there.'),
+        'it': ('soccorso', '🌉', "Chi aspetta aiuta l'altra stanza (abbina il LEAD)",
+               "@tutti SOCCORSO ALL'ALTRA STANZA (abbina il LEAD). Chi qui è in idle o aspetta scrive uno stato --status "
+               'in JSON con "free_min" e in "step" cosa sa fare, poi torna in --idle. Il LEAD guarda anche l\'altra stanza e vi abbina a uno dei '
+               'suoi: il pacchetto si scrive di là, sul tabellone di quella stanza (task help con il vostro nome), e '
+               'il LEAD vi dà la cartella della stanza. Lo leggete con board --room <quella stanza>, toccate solo i '
+               'file del pacchetto e nella chat di quella stanza scrivete solo del pacchetto (post --room <quella '
+               'stanza> --as voi, taggando chi ve l\'ha dato); chiudete con task done Tn --proof "la prova" --room <quella '
+               'stanza>, oppure task giveback Tn --room <quella stanza> appena la vostra attesa finisce, e tornate qui. Niente file comuni, '
+               'niente altri lavori di là.')},
 }
 
 
@@ -737,6 +784,15 @@ def parse_state(text):
     if unknown:
         sys.exit(f'error: unknown keys in the JSON status: {", ".join(unknown)}. Allowed: {", ".join(STATE_KEYS)}. '
                  f'Nothing was posted.')
+    if d.get('free_min') not in (None, ''):         # minutes, maybe written as text ("15"): a number from 0 to 600
+        try:
+            if isinstance(d['free_min'], bool):
+                raise ValueError
+            d['free_min'] = float(d['free_min'])
+            if not 0 <= d['free_min'] <= 600:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            sys.exit('error: "free_min" is the minutes you expect to wait still, a number from 0 to 600. Nothing was posted.')
     out = {}
     for k, kind in STATE_KEYS.items():
         v = d.get(k)
@@ -763,6 +819,8 @@ def state_line(st):
     for key, label in (('risks', 'risks'), ('blocked_by', 'blocked by'), ('next', 'next'), ('needs', 'needs')):
         if st.get(key):
             line += f' · {label}: {st[key]}'
+    if st.get('free_min'):
+        line += f" · free for ~{st['free_min']} min"
     return line
 
 
@@ -828,11 +886,16 @@ class Board:
             return f"📋 {t['id']} taken by {name}: {t['title'][:120]}"
         return self.change(fn)
 
-    def done(self, name, tid, proof=''):
+    def done(self, name, tid, proof='', force=False):
         def fn(b):
             t = self.find(b, tid)
             if t['owner'] not in (None, name):
                 raise ValueError(f"{t['id']} belongs to {t['owner']}: only they close it")
+            out = [f"{o['id']} ({o['owner']})" for o in b['tasks'] if o.get('parent') == t['id'] and o['state'] == 'taken'
+                   and o['owner'] != name]
+            if out and not force:
+                raise ValueError(f"{t['id']} has pieces still lent: {', '.join(out)}. Wait for them to be done or given "
+                                 f"back, or --force")
             t.update(owner=name, state='done', proof=proof[:300], ts=time.time())
             freed = [o['id'] for o in b['tasks'] if o['state'] == 'open' and t['id'] in o['deps']
                      and all(self.find(b, d)['state'] == 'done' for d in o['deps'])]
@@ -867,6 +930,53 @@ class Board:
             return f"📋 {t['id']} handed from {name} to @{to}: {t['title'][:90]}" + (f' · {note[:200]}' if note else '')
         return self.change(fn)
 
+    def help(self, name, tid, helper, scope, files=(), done_when='', note=''):
+        """lend a piece of my task to someone who waits: a task of its own, already the helper's, with what it needs to
+        start without asking (what is in and out, the only files it may change, the proof that closes it, the context).
+        The rest of the task stays mine, and the lent files are the helper's until the piece is done or given back."""
+        def fn(b):
+            t = self.find(b, tid)
+            if t['owner'] != name:
+                raise ValueError(f"{t['id']} is not yours: only the one working on a task lends a piece of it")
+            if t['state'] != 'taken':
+                raise ValueError(f"{t['id']} is {t['state']}: only a task in progress lends a piece")
+            if not scope.strip() or not done_when.strip():
+                raise ValueError('a help packet needs --scope (what is in and what is out) and --done-when (the proof '
+                                 'that closes it)')
+            if helper == name:
+                raise ValueError('you cannot lend a piece to yourself')
+            clash = [(o['id'], o['owner'], f) for o in b['tasks'] if o is not t and o['state'] == 'taken'
+                     and o['owner'] not in (name, helper) for f in files if f in o['files']]
+            if clash:
+                raise ValueError('these files are already being changed: ' + '; '.join(f'{f} by {who} ({i})' for i, who, f in clash))
+            hid = f"T{len(b['tasks']) + 1}"
+            b['tasks'].append({'id': hid, 'title': scope.strip()[:200], 'by': name, 'owner': helper, 'state': 'taken', 'deps': [],
+                               'files': list(files), 'proof': '', 'parent': t['id'], 'lender': name,
+                               'done_when': done_when.strip()[:300], 'notes': [f'packet from {name}: {note[:300]}'] if note else [],
+                               'ts': time.time()})
+            t['notes'] = (t['notes'] + [f"lent to {helper} as {hid}" + (f": {', '.join(files)}" if files else '')])[-10:]
+            return (f"🤝 {hid} lent by {name} to @{helper} (a piece of {t['id']}): {scope.strip()[:140]}"
+                    + (f" · files {', '.join(files)}" if files else '') + f' · done when: {done_when.strip()[:140]}'
+                    + (f' · {note[:200]}' if note else ''))
+        return self.change(fn)
+
+    def giveback(self, name, tid, note=''):
+        """give a lent piece back to who lent it, at a clean point, saying where it got to"""
+        def fn(b):
+            t = self.find(b, tid)
+            if not t.get('lender'):
+                raise ValueError(f"{t['id']} is not a lent piece: hand it on with task handoff")
+            if t['owner'] != name:
+                raise ValueError(f"{t['id']} is not yours to give back")
+            if t['owner'] == t['lender']:
+                raise ValueError(f"{t['id']} is already back with you, its lender")
+            if t['state'] == 'done':
+                raise ValueError(f"{t['id']} is already done")
+            t.update(owner=t['lender'], ts=time.time())
+            t['notes'] = (t['notes'] + [f'given back by {name}: {note[:300]}'])[-10:]
+            return f"🤝 {t['id']} given back by {name} to @{t['lender']}: {t['title'][:90]}" + (f' · {note[:200]}' if note else '')
+        return self.change(fn)
+
     def decide(self, name, text):
         def fn(b):
             b['decisions'] = (b['decisions'] + [{'text': text[:300], 'by': name, 'ts': time.time()}])[-50:]
@@ -889,9 +999,14 @@ class Board:
         for t in sorted(b['tasks'], key=lambda t: (order.get(t['state'], 3), t['ts'])):
             state = f"in progress, {t['owner']}" if t['state'] == 'taken' else t['state']
             extra = ((f" · after {', '.join(t['deps'])}" if t['deps'] and t['state'] == 'open' else '')
+                     + (f" · 🤝 lent by {t['lender']} from {t.get('parent')} · done when: {t.get('done_when', '')}"
+                        if t.get('lender') and t['state'] != 'done' and t['owner'] != t['lender'] else '')
                      + (f" · files {', '.join(t['files'])}" if t['files'] else '') + (f" · proof: {t['proof']}" if t['proof'] else ''))
             lines.append(f"{t['id']} [{state}] {t['title']}{extra}")
-            lines += [f'    {n}' for n in t['notes'][-2:]]
+            shown = t['notes'][-2:]
+            if t.get('lender') and t['notes'] and t['notes'][0].startswith('packet from') and t['notes'][0] not in shown:
+                shown = [t['notes'][0]] + shown               # the packet's context stays in sight while the piece is out
+            lines += [f'    {n}' for n in shown]
         return '\n'.join(lines)
 
 
@@ -901,7 +1016,8 @@ def cmd_task(room, a):
         sys.exit('--as NAME required')
     if not a.pairs:
         sys.exit('task: add "title" [--deps T1,T2] [--files a,b] | take ID [--force] | done ID [--proof TEXT] | drop ID '
-                 '| note ID TEXT | handoff ID NAME [--note TEXT] | decide TEXT | fact TEXT')
+                 '| note ID TEXT | handoff ID NAME [--note TEXT] | help ID NAME --scope TEXT --done-when TEXT [--files a,b] '
+                 '[--note TEXT] | giveback ID [--note TEXT] | decide TEXT | fact TEXT')
     act, rest, b = a.pairs[0], a.pairs[1:], Board(room)
     split = lambda v: [x.strip() for x in (v or '').split(',') if x.strip()]
     if act == 'add' and rest:
@@ -909,8 +1025,20 @@ def cmd_task(room, a):
     elif act == 'take' and rest:
         line = b.take(a.name, rest[0], a.force)
     elif act == 'done' and rest:
-        line = b.done(a.name, rest[0], a.proof or '')
+        line = b.done(a.name, rest[0], a.proof or '', a.force)
+        lender = Board.find(b.load(), rest[0]).get('lender')
+        if lender and lender != a.name:               # a lent piece is back: its lender is tagged and woken
+            line = f'{line} · @{lender}'
+            n = room.append(a.name, line)
+            print(f'posted #{n}')
+            return print_alert(room, a.name, n, line, [])
     elif act == 'drop' and rest:
+        t = Board.find(b.load(), rest[0])
+        if t.get('lender') and t['owner'] == a.name and t['owner'] != t['lender'] and t['state'] == 'taken':
+            line = b.giveback(a.name, rest[0], a.note or 'dropped')     # a lent piece goes back to its lender, who is tagged
+            n = room.append(a.name, line)
+            print(f'posted #{n}')
+            return print_alert(room, a.name, n, line, [])
         line = b.drop(a.name, rest[0])
     elif act == 'note' and len(rest) > 1:
         line = b.note(a.name, rest[0], ' '.join(rest[1:]))
@@ -918,10 +1046,19 @@ def cmd_task(room, a):
         line = b.fact(a.name, ' '.join(rest))
     elif act == 'decide' and rest:
         line = b.decide(a.name, ' '.join(rest))
-    elif act == 'handoff' and len(rest) > 1:
+    elif act in ('handoff', 'help') and len(rest) > 1:
         to = rest[1].lstrip('@').upper()
-        line = b.handoff(a.name, rest[0], to, a.note or '')
+        line = (b.handoff(a.name, rest[0], to, a.note or '') if act == 'handoff'
+                else b.help(a.name, rest[0], to, a.scope or '', split(a.files), a.done_when or '', a.note or ''))
         n = room.append(a.name, line)                 # a real message: it tags the new owner, who must be woken
+        print(f'posted #{n}')
+        if to not in [p.upper() for p in room.config().get('participants', [])]:   # a helper from another room: no ping reaches it from here
+            print(f'NOTE: {to} is not in this room: write a line to the lead (@LEAD) so the lead tells them; they read '
+                  f'the packet with board --room "{room.dir}".')
+        return print_alert(room, a.name, n, line, [])
+    elif act == 'giveback' and rest:
+        line = b.giveback(a.name, rest[0], a.note or '')
+        n = room.append(a.name, line)                 # the lender is tagged: the piece is theirs again
         print(f'posted #{n}')
         return print_alert(room, a.name, n, line, [])
     else:
@@ -966,7 +1103,10 @@ def failures(room, now=None):
         if m.get('state', {}).get('files') and now - m.get('ts', 0) < 1200:
             for f in m['state']['files']:
                 touched.setdefault(f, {})[m['from']] = m['n']
+    lent = [t for t in Board(room).load()['tasks'] if t.get('lender') and t['state'] == 'taken']
     for f, who in touched.items():
+        if any(f in t['files'] and set(who) <= {t['owner'], t['lender']} for t in lent):
+            continue                                  # a piece lent with its files: the board already says who changes them
         if len(who) > 1:
             out.append((f"file:{f}:{','.join(sorted(who))}", f"{f} is in the statuses of {' and '.join(f'{k} (#{n})' for k, n in sorted(who.items()))}: "
                         f"agree who changes it, or take it on the board"))
@@ -1006,7 +1146,8 @@ folder as a participant, use it; the same commands work in both tools, or the sa
   "next": "...", "needs": "..."}`.
 - The shared plan is the task board: `board`, `task add "title" --files a,b --deps T1`, `task take T3` before you
   start (refused if the files are taken or the dependencies are open), `task done T3 --proof "..."`,
-  `task handoff T3 NAME --note "..."`, `task decide "..."`.
+  `task handoff T3 NAME --note "..."`, `task help T3 NAME --scope "..." --files a --done-when "..." --note "..."`
+  (lend a piece of your task to someone who waits), `task giveback T9 --note "..."`, `task decide "..."`.
 - Your notes that survive a compacted context: `notebook "text" --as NAME`, read with `notebook --as NAME`.
 - After every real message, send the pings that `post` prints (ALERT line).
 
@@ -1031,17 +1172,19 @@ MCP_TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {
          'text': {'type': 'string'}, 'status': {'type': 'boolean'}, 'idle': {'type': 'boolean'}, 'finding': {'type': 'boolean'},
          'reply': {'type': 'integer'}, 'state': {'type': 'object', 'description': 'a structured status: task, step, pct, files, '
-                                                                                   'blocked_by, next, needs, done, evidence, risks'}}}},
+                                                                                   'blocked_by, next, needs, done, evidence, risks, '
+                                                                                   'free_min (minutes you expect to wait still)'}}}},
     {'name': 'chat_wait', 'description': 'Wait for someone to write (up to 110 s, 540 s while idle).',
      'inputSchema': {'type': 'object', 'properties': {'timeout': {'type': 'integer'}}}},
     {'name': 'board', 'description': 'The task board: facts, decisions, tasks and who does what.', 'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'task', 'description': 'Change the task board: add (text, files, deps), take (id, force), done (id, proof), drop (id), '
-                                    'note (id, text), handoff (id, to, note), decide (text), fact (text).',
+                                    'note (id, text), handoff (id, to, note), help (id, to, scope, files, done_when, note: '
+                                    'lend a piece of your task to who waits), giveback (id, note), decide (text), fact (text).',
      'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
-         'action': {'type': 'string', 'enum': ['add', 'take', 'done', 'drop', 'note', 'handoff', 'decide', 'fact']},
+         'action': {'type': 'string', 'enum': ['add', 'take', 'done', 'drop', 'note', 'handoff', 'help', 'giveback', 'decide', 'fact']},
          'id': {'type': 'string'}, 'text': {'type': 'string'}, 'files': {'type': 'array', 'items': {'type': 'string'}},
          'deps': {'type': 'array', 'items': {'type': 'string'}}, 'proof': {'type': 'string'}, 'to': {'type': 'string'},
-         'note': {'type': 'string'}, 'force': {'type': 'boolean'}}}},
+         'note': {'type': 'string'}, 'force': {'type': 'boolean'}, 'scope': {'type': 'string'}, 'done_when': {'type': 'string'}}}},
     {'name': 'notebook', 'description': 'Your own notes, which survive a compacted context: with text adds a line, without reads them.',
      'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}},
     {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof, one file in two statuses, '
@@ -1065,7 +1208,7 @@ def mcp_call(room, name, tool, args):
         return 'say where and who: pass "room" (the room folder) and "as" (your name) in the call', True
     ns = argparse.Namespace(name=name, room=str(room.dir), status=False, idle=False, finding=False, reply=None, image=None,
                             focus=True, pairs=[], deps=None, files=None, proof=None, force=False, note=None, all=False,
-                            timeout=100, common=False, file=None)
+                            timeout=100, common=False, file=None, scope=None, done_when=None)
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
@@ -1083,10 +1226,12 @@ def mcp_call(room, name, tool, args):
                 cmd_board(room, ns)
             elif tool == 'task':
                 act = args['action']
-                ns.pairs = [act] + ([str(args['id'])] if args.get('id') else []) + ([args['to']] if act == 'handoff' and args.get('to') else []) \
+                ns.pairs = [act] + ([str(args['id'])] if args.get('id') else []) \
+                    + ([args['to']] if act in ('handoff', 'help') and args.get('to') else []) \
                     + ([str(args['text'])] if args.get('text') else [])
                 ns.files, ns.deps = ','.join(args.get('files') or []) or None, ','.join(args.get('deps') or []) or None
                 ns.proof, ns.force, ns.note = args.get('proof'), bool(args.get('force')), args.get('note')
+                ns.scope, ns.done_when = args.get('scope'), args.get('done_when')
                 cmd_task(room, ns)
             elif tool == 'notebook':
                 ns.pairs = [str(args['text'])] if args.get('text') else []
@@ -1538,6 +1683,94 @@ def cmd_status(room, a):
                    'waits_for': (m.get('text') or '').split('\n')[0][:160]} if m else False
     print(json.dumps({'total': len(items), 'per_participant': counts, 'seconds_silent': silent, 'idle': idle},
                      ensure_ascii=False))
+
+
+def help_size(minutes):
+    """how much a helper should take, from how long it will wait still"""
+    if minutes is not None and minutes < 10:
+        return 'small: a review, a proof to redo, a test'
+    return 'a whole task' if minutes is not None and minutes > 30 else 'a piece of a task'   # not said: a middle piece
+
+
+def cmd_helpers(room, a):
+    """chat.py helpers [OTHER_ROOM ...]: for the lead, who is free and for how long (an idle status, or a status with
+    free_min, or "~N min" in its text), who works on what (how many tasks wait for it, its percentage, whether it
+    already has a helper), the pieces already lent, and pairs to consider: the longest wait with the task that blocks
+    the most, in the same room first, then across the other rooms given. The lead decides; nothing is changed."""
+    now, rooms = time.time(), [room]
+    for p in a.pairs:
+        r = Room(p)
+        if not (r.dir / 'config.json').is_file():
+            sys.exit(f'error: no chat room in {r.dir}')
+        rooms.append(r)
+    boards = {r.dir: Board(r).load() for r in rooms}
+    lent_all = {r.dir: [t for t in boards[r.dir]['tasks'] if t.get('lender') and t['state'] == 'taken'
+                        and t['owner'] != t['lender']] for r in rooms}
+    helping = {t['owner'] for ts in lent_all.values() for t in ts}           # a helper is busy in every room, not just one
+    free, busy, many = [], [], len(rooms) > 1
+    for r in rooms:
+        c, items, b, lent = r.config(), r.messages(), boards[r.dir], lent_all[r.dir]
+        title, users, lenders = c.get('title') or c.get('topic') or r.dir.name, r.user_names(), {t['lender'] for t in lent}
+        print(f'ROOM {title} ({r.dir})')
+        names = [n for n in dict.fromkeys([*c.get('participants', []), *(m['from'] for m in items)]) if n not in users]
+        here_free = []
+        for n in names:
+            m = next((x for x in reversed(items) if x.get('from') == n), None)
+            st = (m or {}).get('state') or {}
+            said = re.search(r'~\s?(\d{1,3})\s?min', (m or {}).get('text', ''))
+            minutes = st.get('free_min') or (int(said.group(1)) if said else None)
+            if not m or n in helping or not (m.get('kind') == IDLE or minutes):
+                continue
+            left = max(0, minutes - int((now - m.get('ts', now)) / 60)) if minutes else None
+            waits = (st.get('blocked_by') or ('' if st else (m.get('text') or '').split('\n')[0]))[:110]
+            here_free.append({'room': r, 'title': title, 'name': n, 'left': left, 'waits': waits, 'can': st.get('step', '')[:80]})
+        print('  FREE:' + ('' if here_free else ' none'))
+        for f in sorted(here_free, key=lambda f: -(f['left'] if f['left'] is not None else 15)):
+            print(f"  - {f['name']}: {'~' + str(f['left']) + ' min' if f['left'] is not None else 'minutes not said'}"
+                  + (f" · waits for: {f['waits']}" if f['waits'] else '') + (f" · can: {f['can']}" if f['can'] else ''))
+        free += here_free
+        free_names = {f['name'] for f in here_free}
+        here_busy = []
+        for t in b['tasks']:
+            if t['state'] != 'taken' or not t['owner'] or t['owner'] in free_names or t in lent:
+                continue
+            m = next((x for x in reversed(items) if x.get('from') == t['owner'] and x.get('kind') in ('status', IDLE)), None)
+            pct = ((m or {}).get('state') or {}).get('pct')
+            if pct is None and m:
+                hit = re.search(r'(\d{1,3})\s?%', m.get('text', ''))
+                pct = int(hit.group(1)) if hit else None
+            blocks = [o['id'] for o in b['tasks'] if o['state'] == 'open' and t['id'] in o['deps']]
+            here_busy.append({'room': r, 'title': title, 'owner': t['owner'], 'task': t, 'pct': pct, 'blocks': blocks,
+                              'helped': t['owner'] in lenders})
+        print('  BUSY:' + ('' if here_busy else ' none'))
+        for w in here_busy:
+            t = w['task']
+            print(f"  - {w['owner']}: {t['id']} {t['title'][:90]}" + (f" (owner at {w['pct']}%)" if w['pct'] is not None else '')
+                  + (f" · blocks {', '.join(w['blocks'])}" if w['blocks'] else '')
+                  + (f" · files {', '.join(t['files'][:4])}" if t['files'] else '') + (' · already helped' if w['helped'] else ''))
+        busy += here_busy
+        for t in lent:
+            print(f"  LENT: {t['id']} {t['lender']} -> {t['owner']} (from {t.get('parent')}): {t['title'][:80]}"
+                  f" · done when: {t.get('done_when', '')[:80]}")
+    taken, paired, pairs = set(), set(), []
+    for across in (False, True):
+        for f in sorted(free, key=lambda f: -(f['left'] if f['left'] is not None else 15)):
+            if (f['room'].dir, f['name']) in paired:
+                continue
+            options = [w for w in busy if not w['helped'] and (w['room'].dir, w['owner']) not in taken
+                       and (w['room'].dir != f['room'].dir) == across]
+            if not options:
+                continue
+            w = sorted(options, key=lambda w: (-len(w['blocks']), w['pct'] if w['pct'] is not None else 0))[0]
+            taken.add((w['room'].dir, w['owner']))
+            paired.add((f['room'].dir, f['name']))
+            pairs.append((f, w))
+    print('PAIRS TO CONSIDER (the lead decides; same room first, then across rooms):' + ('' if pairs else ' none'))
+    for f, w in pairs:
+        where = (f" ({f['title']})" if many else '')
+        print(f"- {f['name']}{where} ({'~' + str(f['left']) + ' min' if f['left'] is not None else 'minutes not said'}) -> "
+              f"{w['owner']} on {w['task']['id']}" + (f" in {w['title']}" if many else '')
+              + (f", blocks {len(w['blocks'])}" if w['blocks'] else '') + f" · take {help_size(f['left'])}")
 
 
 def cmd_transcript(room, a):
@@ -2303,7 +2536,8 @@ def cmd_serve(room, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
-                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp'])
+                                        'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp',
+                                        'helpers'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -2339,7 +2573,9 @@ def main():
     p.add_argument('--files', help='task add: the files it changes, comma separated; two taken tasks cannot share one')
     p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
     p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
-    p.add_argument('--note', help='task handoff: the decisions taken, the files touched, what was tried')
+    p.add_argument('--note', help='task handoff / help / giveback: the decisions taken, the files touched, what was tried')
+    p.add_argument('--scope', help='task help: what the lent piece is, what is in and what is out')
+    p.add_argument('--done-when', dest='done_when', help='task help: the proof that closes the lent piece')
     p.add_argument('--finding', action='store_true', help='post: a finding the others should know now (no ping, no percentage); read --focus always shows it')
     p.add_argument('--reply', type=int, help='post: answer message #N; its author is tagged and gets the ping')
     p.add_argument('--focus', action='store_true', help='read: in full only what concerns you, the rest as a one-line digest per author')
@@ -2361,7 +2597,8 @@ def main():
             sys.exit(f'room {room.dir} does not exist: run init first')
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
-                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp}
+                    'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp,
+                    'helpers': cmd_helpers}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

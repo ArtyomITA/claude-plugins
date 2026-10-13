@@ -402,6 +402,7 @@ function card(m) {                          // a JSON status: the task, the bar,
     (st.evidence?.length ? row('🔎', `<ul>${st.evidence.map(x => `<li>${inline(x)}</li>`).join('')}</ul>`) : '') +
     (st.risks ? row('⚠️', inline(st.risks)) : '') + (st.blocked_by ? row('⛔', inline(st.blocked_by)) : '') +
     (st.needs ? row('🙋', inline(st.needs)) : '') + (st.next ? row('➡️', inline(st.next)) : '') +
+    (st.free_min ? row('🤝', `~${+st.free_min} min`) : '') +
     (st.files?.length ? `<div class="chips">${st.files.map(f => `<code>${esc(f)}</code>`).join('')}</div>` : '') +
     `<div style="text-align:right"><span class="num">#${m.n} ${esc(m.time || '')}</span></div>` + pics(m);
   return el;

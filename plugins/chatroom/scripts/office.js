@@ -1182,7 +1182,7 @@ function drawBoards() {
       for (const t of shown) {
         const who = t.owner || t.by;
         g.fillStyle = (who ? DATA.profile(who).color : '#90a4ae') + '30'; g.fillRect(i * w + 7 * f, y, w - 14 * f, cardH);
-        g.fillStyle = '#222'; g.font = `700 ${14 * f}px sans-serif`; g.fillText(`${t.id}${t.owner ? ' · ' + t.owner : ''}`, i * w + 12 * f, y + 16 * f);
+        g.fillStyle = '#222'; g.font = `700 ${14 * f}px sans-serif`; g.fillText(`${t.id}${t.lender && t.state === 'taken' && t.owner !== t.lender ? ' 🤝' : ''}${t.owner ? ' · ' + t.owner : ''}`, i * w + 12 * f, y + 16 * f);
         g.font = `${14 * f}px sans-serif`; wrapText(g, t.title, i * w + 12 * f, y + 33 * f, w - 24 * f, 15 * f, 2);
         y += cardH + gap;
       }
@@ -1627,6 +1627,8 @@ function placeTags() {
       if (d.tagged && !d.idle) flags.push(['tag', L.tagged]);
       if (d.late) flags.push(['late', '⏰ ' + L.late]);
       if (racks && racks.count(p.name)) flags.push(['proc', '⚙ ' + racks.count(p.name)]);
+      const lent = boardData?.tasks?.find(t => t.lender && t.state === 'taken' && t.owner === p.name && t.lender !== p.name);
+      if (lent) flags.push(['help', '🤝 ' + lent.lender]);           // a piece lent by a teammate (task help)
       if (d.idle) flags.push(['idle', '💤 ' + L.idle]);
       if (d.vote) flags.push([d.vote === 'yes' ? 'vote-yes' : 'vote-no', `v${D.plan?.v} ${d.vote === 'yes' ? '✓' : '✗'}`]);
       if (c) line = `${EMOJI[c]} ${L[c]}${a.target && !a.target.startsWith('chat:') ? ': ' + a.target : ''}`;
