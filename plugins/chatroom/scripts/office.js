@@ -1296,7 +1296,7 @@ const atMyDesk = () => boss && seated(boss) && boss.spot === OWNER_SEAT && !visi
 async function openCommands() {
   try {
     const list = await (await fetch('commands.json', {cache: 'no-store'})).json();
-    ui.palette(list, async c => { await post('command', {name: c.name}); ui.placeName(ui.t().cmdSent(c.icon + ' ' + c.name)); });
+    ui.palette(list, async c => { await post(viewScope === 'other' ? 'neighbor/command' : 'command', {name: c.name}); ui.placeName(ui.t().cmdSent(c.icon + ' ' + c.name)); });
   } catch (e) {}
 }
 document.addEventListener('keydown', e => {

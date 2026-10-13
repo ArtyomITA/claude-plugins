@@ -676,7 +676,8 @@ async function loadCommands() {
   catch (e) {}
 }
 function taggable() {
-  const names = [...(config.participants || []), ...Object.keys(config.profiles || {})].filter(n => !SELF.has(n));
+  const c = scope === 'other' && nConfig ? nConfig : config;       // the people of the room the message goes to
+  const names = [...(c.participants || []), ...Object.keys(c.profiles || {})].filter(n => !SELF.has(n));
   return [...new Set(names)];
 }
 function closeSuggest() { sug.mode = null; $('suggest').classList.remove('open'); }
@@ -723,9 +724,9 @@ function updateSuggest() {
 async function runCommand(c) {
   closeSuggest();
   try {
-    const r = await fetch('command', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch(scope === 'other' && nConfig ? 'neighbor/command' : 'command', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                       body: JSON.stringify({name: c.key})});
-    if (r.ok) { if (/^\/[\w-]*$/.test(box.value.trim())) box.value = ''; feed.scrollTop = feed.scrollHeight; poll(); }
+    if (r.ok) { if (/^\/[\w-]*$/.test(box.value.trim())) box.value = ''; feed.scrollTop = feed.scrollHeight; poll(); pollNeighbor(); }
     else alert(t().notSent + await r.text());
   } catch (e) { alert(t().notSent + t().unreachable); }
   box.focus();

@@ -2095,28 +2095,27 @@ def cmd_serve(room, a):
                         if isinstance(ev, dict):
                             activity.hook(ev)
                 return self.send(200, '{}', 'application/json')
-            if path == '/post':
+            if path in ('/post', '/neighbor/post'):   # /neighbor/post: the user writes in the other live room, from this one viewer
+                target = room
+                if path == '/neighbor/post':
+                    _, other, _ = other_room(room)
+                    if not other:
+                        return self.send(400, 'no other live room', 'text/plain')
+                    target = Room(other)
                 text = str(body.get('text', '')).strip()
                 images = []
                 try:
                     for i, item in enumerate((body.get('images') or [])[:6]):
                         data = str(item.get('data', ''))
                         data = data.split(',', 1)[1] if data.startswith('data:') else data
-                        images.append(room.store_image_bytes(str(item.get('name', 'image.png')),
-                                                             base64.b64decode(data), i))
+                        images.append(target.store_image_bytes(str(item.get('name', 'image.png')),
+                                                               base64.b64decode(data), i))
                 except (ValueError, TypeError, AttributeError) as exc:
                     return self.send(400, f'bad image: {exc}', 'text/plain')
                 if not text and not images:
                     return self.send(400, 'empty message', 'text/plain')
-                n = room.append(room.config().get('user_name', 'USER'), text[:4000], images=images)
+                n = target.append(target.config().get('user_name', 'USER'), text[:4000], images=images)
                 return self.send(200, json.dumps({'n': n}), 'application/json')
-            if path == '/neighbor/post':           # the user writes in the other live room, from this one viewer
-                _, other, _ = other_room(room)
-                text = str(body.get('text', '')).strip()[:4000]
-                if not other or not text:
-                    return self.send(400, 'no other live room, or an empty message', 'text/plain')
-                nb = Room(other)
-                return self.send(200, json.dumps({'n': nb.append(nb.config().get('user_name', 'USER'), text)}), 'application/json')
             if path == '/common/doc':             # the user attaches a document to the common room
                 try:
                     data = base64.b64decode(str(body.get('data', '')), validate=True)
@@ -2259,9 +2258,15 @@ def cmd_serve(room, a):
                     tmp.write_text(json.dumps(office, ensure_ascii=False), encoding='utf-8')
                     os.replace(tmp, OFFICE_FILE)
                 return self.send(200, json.dumps({'items': len(office['items']) if office else 0}), 'application/json')
-            if path == '/command':
+            if path in ('/command', '/neighbor/command'):   # a quick command, here or in the other live room
+                target = room
+                if path == '/neighbor/command':
+                    _, other, _ = other_room(room)
+                    if not other:
+                        return self.send(400, 'no other live room', 'text/plain')
+                    target = Room(other)
                 try:
-                    n, _ = run_command(room, str(body.get('name', '')), room.config().get('user_name', 'USER'))
+                    n, _ = run_command(target, str(body.get('name', '')), target.config().get('user_name', 'USER'))
                 except ValueError as exc:
                     return self.send(400, str(exc), 'text/plain')
                 return self.send(200, json.dumps({'n': n}), 'application/json')
