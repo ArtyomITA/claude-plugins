@@ -420,7 +420,7 @@ class Room:
 
     def user_names(self):
         c = self.config()
-        return {c.get('user_name', 'USER'), *c.get('self_names', []), *c.get('friends', [])}
+        return {c.get('user_name', 'USER'), *c.get('user_aliases', []), *c.get('self_names', []), *c.get('friends', [])}
 
     def heartbeat(self):
         return int(self.config().get('heartbeat', 120))

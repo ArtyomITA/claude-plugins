@@ -301,7 +301,7 @@ let config = {heartbeat: 120, user_name: 'USER', self_names: [], participants: [
 // visiting a friend who shares the room chat: the chat shown and written here is the friend's room chat
 const FRIEND = new URLSearchParams(location.search).has('visit')
   ? fetch('friendroom/config.json', {cache: 'no-store'}).then(r => r.ok ? 'friendroom/' : '').catch(() => '') : Promise.resolve('');
-let SELF = new Set(['USER']), shown = 0, lastFrom = null, all = [], unseen = 0, sound = false, query = '';
+let SELF = new Set(['USER']), USERS = new Set(['USER']), shown = 0, lastFrom = null, all = [], unseen = 0, sound = false, query = '';
 const t = () => T[config.lang] || T.en;
 
 function pref(key, fallback) { try { const v = localStorage.getItem('chatroom.' + key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
@@ -312,11 +312,13 @@ function profile(name, cfg = config) {
   const i = (config.participants || []).indexOf(name);
   let color = p.color;
   if (!color) {
-    if (SELF.has(name)) color = '#c0392b';
+    if (USERS.has(name)) color = '#c0392b';
+    else if (SELF.has(name)) color = '#5c6bc0';                                      // the lead: its own colour, not the user's
     else if (i >= 0) color = PALETTE[i % PALETTE.length];
     else { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; color = PALETTE[h % PALETTE.length]; }
   }
-  return {color, emoji: p.emoji || (SELF.has(name) ? '👤' : name.slice(0, 1)), role: p.role || ''};
+  return {color, emoji: p.emoji || (USERS.has(name) ? '👤' : SELF.has(name) ? '👓' : name.slice(0, 1)),
+          role: p.role || (SELF.has(name) && !USERS.has(name) ? 'LEAD' : '')};
 }
 function avatar(name, cls = '') {
   const p = profile(name);
@@ -443,7 +445,7 @@ function build(m) {
   } else {
     const first = lastFrom !== m.from + (m._room || ''), p = profile(m.from, m._room ? nConfig || config : config), b = badge(m.text);
     el = document.createElement('div');
-    el.className = 'row' + (SELF.has(m.from) ? ' out' : '') + (first ? ' first' : '');
+    el.className = 'row' + (USERS.has(m.from) ? ' out' : '') + (first ? ' first' : '');   // only the user's own lines sit on the right
     el.innerHTML = avatar(m.from) + `<div class="bubble${b && b.plan ? ' plan' : ''}">` +
       (first ? `<div class="who-line"><span class="name" style="color:${p.color}">${esc(m.from)}</span>` +
                (m._room ? `<span class="roomtag">🏢 ${esc(m._room)}</span>` : '') +
@@ -536,7 +538,8 @@ function beep() {
 }
 
 function applyLook() {
-  SELF = new Set([config.user_name || 'USER', ...(config.self_names || [])]);
+  USERS = new Set([config.user_name || 'USER', ...(config.user_aliases || [])]);   // the user, under any name it used
+  SELF = new Set([...USERS, ...(config.self_names || [])]);                       // the user and the lead: not participants
   const theme = config.theme === 'dark' || (config.theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty('--accent', config.accent || '#00a884');

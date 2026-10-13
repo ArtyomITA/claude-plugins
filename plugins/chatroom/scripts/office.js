@@ -712,7 +712,7 @@ let D = {names: [], self: new Set(), lead: 'LEAD', user: 'USER', per: {}, plan: 
 let lastSeenN = 0, firstDerive = true, lastClosedN = 0;
 function derive() {
   const c = DATA.config, all = DATA.all, now = Date.now() / 1000, hb = c.heartbeat || 120;
-  const user = c.user_name || 'USER', selfNames = new Set([user, ...(c.self_names || [])]);
+  const user = c.user_name || 'USER', selfNames = new Set([user, ...(c.user_aliases || []), ...(c.self_names || [])]);
   const leadNames = (c.self_names || []).filter(n => all.some(m => m.from === n));
   const lead = leadNames[leadNames.length - 1] || (c.self_names || [])[0] || 'LEAD';
   const names = [...new Set([...(c.participants || []), ...all.map(m => m.from).filter(n => !selfNames.has(n))])].filter(n => !(c.left || []).includes(n));
