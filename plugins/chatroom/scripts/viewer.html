@@ -676,8 +676,11 @@ async function loadCommands() {
   catch (e) {}
 }
 function taggable() {
-  const c = scope === 'other' && nConfig ? nConfig : config;       // the people of the room the message goes to
-  const names = [...(c.participants || []), ...Object.keys(c.profiles || {})].filter(n => !SELF.has(n));
+  const other = scope === 'other' && nConfig, c = other ? nConfig : config, msgs = other ? nAll : all;   // the room the message goes to
+  // its lead too (the name it writes as, or the first one it may use): the user alone is left out
+  const leads = (c.self_names || []).filter(n => msgs.some(m => m.from === n));
+  if (!leads.length && (c.self_names || []).length) leads.push(c.self_names[0]);
+  const names = [...(c.participants || []), ...Object.keys(c.profiles || {}), ...leads].filter(n => n !== (c.user_name || 'USER'));
   return [...new Set(names)];
 }
 function closeSuggest() { sug.mode = null; $('suggest').classList.remove('open'); }
