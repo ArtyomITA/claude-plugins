@@ -1519,12 +1519,30 @@ def save_settings(**changes):
     SETTINGS_FILE.write_text(json.dumps({**settings(), **changes}), encoding='utf-8')
 
 
-def other_room(room):
-    """the other live room sharing this office (at most one), as (rank of this room, its folder, its registry entry)"""
+def other_rooms(room):
+    """the other live rooms sharing this office, oldest first, as (rank of this room, [(rank, folder, registry entry)]):
+    the rank is the place in the order of opening, and the lead's table in the office"""
     me_key, rooms = str(room.dir.resolve()), live_rooms()
     keys = sorted(set(rooms) | {me_key}, key=lambda k: (float(rooms.get(k, {}).get('since', 0)), k))   # oldest first
-    other = next((k for k in keys if k != me_key), None)
-    return (keys.index(me_key) if other else 0), other, rooms.get(other)
+    others = [(i, k, rooms.get(k)) for i, k in enumerate(keys) if k != me_key]
+    return (keys.index(me_key) if others else 0), others
+
+
+def other_room(room, n=0):
+    """the n-th other live room sharing this office (oldest first), as (rank of this room, its folder, its registry entry)"""
+    rank, others = other_rooms(room)
+    if not others:
+        return 0, None, None
+    _, other, info = others[min(max(n, 0), len(others) - 1)]
+    return rank, other, info
+
+
+def query_n(path):
+    """?n= of a /neighbor/ request: which other live room (0 = the oldest)"""
+    try:
+        return int(urllib.parse.parse_qs(path.partition('?')[2]).get('n', ['0'])[0])
+    except ValueError:
+        return 0
 
 
 def cmd_rooms(room, a):
@@ -2215,15 +2233,14 @@ def cmd_serve(room, a):
                 if not IMAGE_NAME.match(name) or not ctype or not target.is_file():
                     return self.send(404, 'not found', 'text/plain')
                 return self.send(200, target.read_bytes(), ctype)
-            if path == '/neighbors.json':            # another session's live room shares this office: its people, nothing else
-                rank, other, info = other_room(room)
-                rooms = {other: info} if other else {}
-                body = {'rank': rank, 'room': None}
-                if other:
+            if path == '/neighbors.json':            # other sessions' live rooms share this office: their people, nothing else
+                rank, others = other_rooms(room)
+                body = {'rank': rank, 'room': None, 'rooms': []}
+                for i, (their_rank, other, info) in enumerate(others):
                     nb = Room(other)
                     c, items, state = nb.config(), nb.messages(), {}
                     try:
-                        with urllib.request.urlopen(rooms[other]['url'] + '/state.json', timeout=1) as r:
+                        with urllib.request.urlopen(info['url'] + '/state.json', timeout=1) as r:
                             state = json.loads(r.read().decode('utf-8')).get('agents', {})
                     except (OSError, ValueError):
                         pass
@@ -2233,10 +2250,12 @@ def cmd_serve(room, a):
                         prof, st = c.get('profiles', {}).get(n, {}), state.get(n) or {}
                         agents.append({'name': n, 'emoji': prof.get('emoji', ''), 'color': prof.get('color', '#888888'),
                                        'idle': bool(nb.idle_entry(n, items)), 'tool': st.get('tool'), 'waiting': bool(st.get('waiting'))})
-                    body['room'] = {'title': c.get('title') or c.get('topic', ''), 'lead': leads[-1] if leads else 'LEAD', 'agents': agents}
+                    body['rooms'].append({'n': i, 'rank': their_rank, 'title': c.get('title') or c.get('topic', ''),
+                                          'lead': leads[-1] if leads else 'LEAD', 'agents': agents})
+                body['room'] = body['rooms'][0] if body['rooms'] else None   # the oldest other room, for older viewers
                 return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
-            if path in ('/neighbor/chat.jsonl', '/neighbor/config.json'):   # the other live room, for the user's eyes only
-                _, other, _ = other_room(room)
+            if path in ('/neighbor/chat.jsonl', '/neighbor/config.json'):   # another live room (?n=), for the user's eyes only
+                _, other, _ = other_room(room, query_n(self.path))
                 if not other:
                     return self.send(404, 'no other live room', 'text/plain')
                 nb = Room(other)
@@ -2334,7 +2353,7 @@ def cmd_serve(room, a):
             if path in ('/post', '/neighbor/post'):   # /neighbor/post: the user writes in the other live room, from this one viewer
                 target = room
                 if path == '/neighbor/post':
-                    _, other, _ = other_room(room)
+                    _, other, _ = other_room(room, query_n(self.path))
                     if not other:
                         return self.send(400, 'no other live room', 'text/plain')
                     target = Room(other)
@@ -2497,7 +2516,7 @@ def cmd_serve(room, a):
             if path in ('/command', '/neighbor/command'):   # a quick command, here or in the other live room
                 target = room
                 if path == '/neighbor/command':
-                    _, other, _ = other_room(room)
+                    _, other, _ = other_room(room, query_n(self.path))
                     if not other:
                         return self.send(400, 'no other live room', 'text/plain')
                     target = Room(other)

@@ -269,7 +269,7 @@ const T = {
   en: { empty: 'No messages yet.', newer: n => `↓ ${n} new`, placeholder: u => `Write to everyone as ${u}… (Enter sends, Shift+Enter new line)`,
         hint: 'Type @ to tag a participant (it wakes up and gets the alert), / or ⚡ for the quick commands.',
         cmds: 'Quick commands: they post a ready message to everyone', tagsHead: 'Tag: the participant wakes up and gets the alert',
-        everyone: 'everyone', both: 'Both rooms',
+        everyone: 'everyone', both: 'Both rooms', allRooms: 'All rooms',
         idle: 'idle', idleSince: (time, n) => `idle since ${time} (#${n}), wakes up on a tag`,
         messages: n => `${n} messages`, members: n => `${n} participants`, notYet: 'has not written yet',
         ago: s => s < 60 ? `${Math.round(s)} s ago` : `${Math.round(s / 60)} min ago`, lastMsg: 'last message',
@@ -282,7 +282,7 @@ const T = {
   it: { empty: 'Ancora nessun messaggio.', newer: n => `↓ ${n} nuovi`, placeholder: u => `Scrivi a tutti come ${u}… (Invio manda, Maiusc+Invio a capo)`,
         hint: 'Scrivi @ per taggare un partecipante (si sveglia e riceve l\'alert), / o ⚡ per i comandi rapidi.',
         cmds: 'Comandi rapidi: mandano a tutti un messaggio pronto', tagsHead: 'Tag: il partecipante si sveglia e riceve l\'alert',
-        everyone: 'tutti', both: 'Tutte e due',
+        everyone: 'tutti', both: 'Tutte e due', allRooms: 'Tutte',
 
         idle: 'in attesa', idleSince: (time, n) => `in attesa dalle ${time} (#${n}), si sveglia con un tag`,
         messages: n => `${n} messaggi`, members: n => `${n} partecipanti`, notYet: 'non ha ancora scritto',
@@ -443,7 +443,7 @@ function build(m) {
     el.textContent = `✅ ${t().closed} · ${m.from}: ${m.text.split('\n')[0]} (${m.time})`;
     lastFrom = null;
   } else {
-    const first = lastFrom !== m.from + (m._room || ''), p = profile(m.from, m._room ? nConfig || config : config), b = badge(m.text);
+    const first = lastFrom !== m.from + (m._room || ''), p = profile(m.from, m._room ? roomCfg(m._room) || config : config), b = badge(m.text);
     el = document.createElement('div');
     el.className = 'row' + (USERS.has(m.from) ? ' out' : '') + (first ? ' first' : '');   // only the user's own lines sit on the right
     el.innerHTML = avatar(m.from) + `<div class="bubble${b && b.plan ? ' plan' : ''}">` +
@@ -491,7 +491,7 @@ function rerender() {
   const stick = nearBottom();
   feed.innerHTML = all.length || commonShown.length ? '' : `<div id="empty">${esc(t().empty)}</div>`;
   lastFrom = null;
-  const mine = scope === 'other' ? [] : all, theirs = scope === 'self' ? [] : nAll;
+  const mine = scope === 'other' ? [] : all, theirs = scope === 'self' ? [] : scope === 'all' ? nRooms.flatMap(r => r.all) : nAll;
   const items = [...mine.map(m => [stamp(m), m, false]), ...theirs.map(m => [stamp(m), m, false]), ...commonShown.map(c => [c._at, c, true])].sort((a, b) => a[0] - b[0]);
   for (const [, m, common] of items) feed.appendChild(common ? buildCommon(m) : build(m));
   if (stick) feed.scrollTop = feed.scrollHeight;
@@ -577,39 +577,52 @@ async function loadConfig(force) {
     }
   } catch (e) {}
 }
-// two live rooms share one office: see this room, the other, or both (the user's eyes only; agents never mix)
-let scope = pref('scope', 'self'), nAll = [], nConfig = null, nKey = '';
+// live rooms share one office: see this room, one of the others, or all (the user's eyes only; agents never mix)
+let scope = pref('scope', 'self'), nSel = pref('scopeRoom', 0), nRooms = [], nAll = [], nConfig = null, nKey = '';
+const roomCfg = title => (nRooms.find(r => r.title === title) || {}).config;
+const nQ = () => '?n=' + ((nRooms[nSel] || {}).n || 0);                    // which other room the /neighbor/ requests mean
 async function pollNeighbor() {
   try {
-    const rc = await fetch('neighbor/config.json?t=' + Date.now(), {cache: 'no-store'});
-    if (!rc.ok) { if (nConfig) { nConfig = null; nAll = []; drawScope(); if (scope !== 'self') setScope('self'); } return; }
-    nConfig = await rc.json();
-    const title = nConfig.title || nConfig.topic || '?';
-    const r = await fetch('neighbor/chat.jsonl?t=' + Date.now(), {cache: 'no-store'});
-    const next = [];
-    for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { next.push({...JSON.parse(l), _room: title}); } catch (e) {} } }
-    const key = title + next.length;
-    nAll = next;
-    window.dispatchEvent(new CustomEvent('chatroom:neighbor', {detail: {all: nAll, config: nConfig}}));
+    const rl = await fetch('neighbors.json', {cache: 'no-store'});
+    const list = rl.ok ? ((await rl.json()).rooms || []) : [];
+    const rooms = [];
+    for (const it of list) {
+      const rc = await fetch('neighbor/config.json?n=' + it.n + '&t=' + Date.now(), {cache: 'no-store'});
+      if (!rc.ok) continue;
+      const cfg = await rc.json(), title = cfg.title || cfg.topic || '?';
+      const r = await fetch('neighbor/chat.jsonl?n=' + it.n + '&t=' + Date.now(), {cache: 'no-store'});
+      const msgs = [];
+      for (const l of (await r.text()).split('\n')) { if (l.trim()) { try { msgs.push({...JSON.parse(l), _room: title}); } catch (e) {} } }
+      rooms.push({n: it.n, title, config: cfg, all: msgs});
+      window.dispatchEvent(new CustomEvent('chatroom:neighbor', {detail: {all: msgs, config: cfg}}));
+    }
+    nRooms = rooms;
+    if (nSel >= nRooms.length) nSel = 0;
+    nConfig = nRooms[nSel] ? nRooms[nSel].config : null;
+    nAll = nRooms[nSel] ? nRooms[nSel].all : [];
+    if (!nConfig && scope !== 'self') setScope('self');
     drawScope();
+    const key = nRooms.map(r => r.title + r.all.length).join('|') + '#' + nSel;
     if (key !== nKey) { nKey = key; if (scope !== 'self') rerender(); }
   } catch (e) {}
 }
 function drawScope() {
   const el = $('scope');
-  el.hidden = !nConfig;
-  if (!nConfig) return;
-  const mine = config.title || config.topic || 'Chat', theirs = nConfig.title || nConfig.topic || '?';
-  el.innerHTML = [['self', '🏠 ' + mine], ['other', '🏢 ' + theirs], ['all', '👁 ' + t().both]]
-    .map(([k, label]) => `<button data-s="${k}" class="${scope === k ? 'on' : ''}">${esc(label)}</button>`).join('');
+  el.hidden = !nRooms.length;
+  if (!nRooms.length) return;
+  const mine = config.title || config.topic || 'Chat';
+  el.innerHTML = [['self', '🏠 ' + mine], ...nRooms.map((r, i) => ['other:' + i, '🏢 ' + r.title, scope === 'other' && nSel === i]), ['all', '👁 ' + (nRooms.length > 1 ? t().allRooms : t().both)]]
+    .map(([k, label, on]) => `<button data-s="${k}" class="${(on ?? scope === k) ? 'on' : ''}">${esc(label)}</button>`).join('');
 }
 function setScope(s) {
+  if (s.startsWith('other:')) { nSel = +s.slice(6) || 0; setPref('scopeRoom', nSel); s = 'other'; nConfig = nRooms[nSel]?.config || null; nAll = nRooms[nSel]?.all || []; }
   scope = s; setPref('scope', s); drawScope(); rerender();
-  window.dispatchEvent(new CustomEvent('chatroom:scope', {detail: {scope}}));
+  window.dispatchEvent(new CustomEvent('chatroom:scope', {detail: {scope, room: scope === 'other' ? nRooms[nSel]?.title || '' : ''}}));
   $('box').placeholder = scope === 'other' && nConfig ? t().placeholder((nConfig.user_name || 'USER') + ' → ' + (nConfig.title || '')) : t().placeholder(config.user_name || 'USER');
 }
 $('scope').addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (b) setScope(b.dataset.s); });
 window.chatroomScope = () => scope;
+window.chatroomRoom = () => ({n: (nRooms[nSel] || {}).n || 0, title: scope === 'other' ? (nRooms[nSel] || {}).title || '' : ''});
 setInterval(pollNeighbor, 3000);
 let chatTag = '';                                    // the chat's ETag: an unchanged chat is not downloaded, parsed or drawn again
 async function poll() {
@@ -654,7 +667,7 @@ async function sendMessage() {
   const text = box.value.trim(); if (!text && !pending.length) return;
   send.disabled = true;
   try {
-    const r = await fetch((await FRIEND) ? 'friendroom/post' : scope === 'other' && nConfig ? 'neighbor/post' : 'post', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch((await FRIEND) ? 'friendroom/post' : scope === 'other' && nConfig ? 'neighbor/post' + nQ() : 'post', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                    body: JSON.stringify({text, images: pending})});
     if (r.ok) { box.value = ''; box.style.height = ''; pending = []; showPending(); feed.scrollTop = feed.scrollHeight; poll(); pollNeighbor(); }
     else alert(t().notSent + await r.text());
@@ -731,7 +744,7 @@ function updateSuggest() {
 async function runCommand(c) {
   closeSuggest();
   try {
-    const r = await fetch(scope === 'other' && nConfig ? 'neighbor/command' : 'command', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    const r = await fetch(scope === 'other' && nConfig ? 'neighbor/command' + nQ() : 'command', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                       body: JSON.stringify({name: c.key})});
     if (r.ok) { if (/^\/[\w-]*$/.test(box.value.trim())) box.value = ''; feed.scrollTop = feed.scrollHeight; poll(); pollNeighbor(); }
     else alert(t().notSent + await r.text());

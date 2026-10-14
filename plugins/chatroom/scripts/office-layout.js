@@ -84,6 +84,12 @@ Object.assign(CATALOG, {
 // two blocks of four cubicles, furnished even when nobody sits there; agents take the free ones in order, and when they
 // are all taken another block comes at the next pod slot. Behind them, against the north wall, the control room.
 const LS = -0.8;                                                 // the assistant's desk faces the open space
+// a third assistant, for a third session sharing this office (three live rooms): one more desk on the row of the leads;
+// an office saved before it existed gets it too (office.js), so the third lead always has a table
+export const LEAD3_ITEMS = [
+  {type: 'smallDesk', x: 8.0 + Math.sin(LS) * 0.62, z: -3.4 + Math.cos(LS) * 0.62, rot: LS},
+  {type: 'chair', x: 8.0, z: -3.4, rot: LS + Math.PI, color: '#8a5b3a', tag: 'lead3'},
+];
 const ring4 = (x, z, tag, color) => [[0, -0.72, 0], [0, 0.72, PI], [-0.72, 0, PI / 2], [0.72, 0, -PI / 2]]
   .map(([dx, dz, rot]) => ({type: 'cafeChair', x: x + dx, z: z + dz, rot, color, tag}));
 export const DEFAULT_LAYOUT = {
@@ -120,6 +126,7 @@ export const DEFAULT_LAYOUT = {
     // a second assistant, for a second session sharing this office
     {type: 'smallDesk', x: 9.8 + Math.sin(LS) * 0.62, z: -3.3 + Math.cos(LS) * 0.62, rot: LS},
     {type: 'chair', x: 9.8, z: -3.3, rot: LS + PI, color: '#5b4a8a', tag: 'lead2'},
+    ...LEAD3_ITEMS,
     // the open space: two blocks of four cubicles (furniture like the rest: they can be moved or removed); more blocks
     // come by themselves at podSlots when the agents fill them
     ...[[0.9, -0.9], [-4.1, -0.9]].map(([x, z]) => ({type: 'pod', x, z})),

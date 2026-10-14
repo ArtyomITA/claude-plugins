@@ -9,7 +9,7 @@ import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as V from './office-voxel.js';
-import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation} from './office-layout.js';
+import {DEFAULT_LAYOUT, CATALOG, resolve, floorPlan, workstation, LEAD3_ITEMS} from './office-layout.js';
 import {createEditor} from './office-edit.js';
 import {createTV, createRadio, createLofi, createMixer, mixLevel} from './office-tv.js';
 import {createArcade, ARCADE_AT} from './office-arcade.js';
@@ -141,8 +141,10 @@ if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.
 // the console of the first default offices stood at the height of the TV's picture, in front of it, and an office saved then keeps it there:
 // it is set on the floor beside the TV when the layout loads (only the one that was never moved)
 const tidy = items => items.map(it => it.type === 'console' && it.x === -12.2 && it.y === 0.45 && it.z === 0.45 ? {...it, x: -11.25, y: 0, z: 0.5} : it);
+// an office saved before the third lead's table existed gets it (three live rooms: three leads)
+const conLead3 = items => items.some(it => it.tag === 'lead3') ? items : [...items, ...LEAD3_ITEMS];
 const LAYOUT = visit ? {...DEFAULT_LAYOUT, items: tidy(visit.items || DEFAULT_LAYOUT.items)}
-  : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: tidy(saved.items)} : DEFAULT_LAYOUT;
+  : Array.isArray(saved?.items) ? {...DEFAULT_LAYOUT, items: conLead3(tidy(saved.items))} : DEFAULT_LAYOUT;
 const PLACED = resolve(LAYOUT, {packSize: V.packSize});
 const ARC_ON = !visit && LAYOUT.floor.zones.some(z => z.kind === 'common');                // the arcade cabinet stands in the common room, whatever the furniture of a saved office
 if (ARC_ON) PLACED.boxes.push({x: ARCADE_AT.x, z: ARCADE_AT.z, hw: ARCADE_AT.hw, hd: ARCADE_AT.hd, rot: ARCADE_AT.rot});
@@ -356,6 +358,8 @@ const vec = s => ({pos: new THREE.Vector3(s.x, s.y || 0, s.z), rot: s.rot, pose:
 const SEATS = PLACED.seats.map(vec), STANDS = PLACED.spots.map(vec);
 const seatOr = (tag, x, z) => SEATS.find(s => s.tag === tag) || {pos: new THREE.Vector3(x, 0, z), rot: 0, pose: 'stand', tag};
 const LEAD_SEAT = seatOr('lead', 0, 0), LEAD2_SEAT = SEATS.find(s => s.tag === 'lead2') || LEAD_SEAT;
+const LEAD3_SEAT = SEATS.find(s => s.tag === 'lead3') || LEAD2_SEAT;
+const LEAD_SEATS = [LEAD_SEAT, LEAD2_SEAT, LEAD3_SEAT];                   // one table per live room, in the order they opened
 const MEET = [...SEATS.filter(s => s.tag === 'meet'), ...SEATS.filter(s => s.tag === 'team')];
 const COMMON = SEATS.filter(s => s.tag === 'common');
 // the common room (the second coffee room): who may spend a break there, and whether friends share it (phase 4)
@@ -621,7 +625,7 @@ class Person {
 }
 
 // ------------------------------------------------------------------ data
-const NEIGH = {rank: 0, room: null, profiles: {}};                            // another session's room sharing this office
+const NEIGH = {rank: 0, room: null, rooms: [], profiles: {}};               // other sessions' rooms sharing this office
 const DATA = {
   all: [], config: {participants: [], profiles: {}, lang: 'it', user_name: 'USER', self_names: []}, state: {agents: {}}, loaded: false,
   profile(name) {
@@ -659,26 +663,28 @@ function deriveVisit() {
 if (VISIT && visit) setInterval(async () => {
   try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) { const j = await r.json(); visit = {...visit, people: j.people, plan: j.plan, live: j.live}; deriveVisit(); } } catch (e) {}
 }, 4000);
-let viewScope = window.chatroomScope ? window.chatroomScope() : 'self', nLastN = -1;
+let viewScope = window.chatroomScope ? window.chatroomScope() : 'self';
+const nLastN = new Map();                                                    // per other room: the last message turned into a bubble
 window.addEventListener('chatroom:scope', e => { viewScope = e.detail.scope; });
 window.addEventListener('chatroom:neighbor', e => {
   const all = e.detail.all || [], cfg = e.detail.config || {}, title = (cfg.title || cfg.topic || '').slice(0, 16), top = all.length ? all[all.length - 1].n : 0;
-  if (nLastN < 0) { nLastN = top; return; }
-  for (const m of all) if (m.n > nLastN) {
-    const who = people.get(`${m.from}@${title}`) || ((cfg.self_names || []).includes(m.from) ? otherLead : null);
+  if (!nLastN.has(title)) { nLastN.set(title, top); return; }
+  for (const m of all) if (m.n > nLastN.get(title)) {
+    const who = people.get(`${m.from}@${title}`) || ((cfg.self_names || []).includes(m.from) ? otherLeads.get(title) : null);
     if (who) who.bubble = {text: m.text, until: Date.now() / 1000 + (m.kind ? 4.5 : 7), kind: m.kind === 'idle' ? 'idle' : m.kind ? 'status' : 'msg'};
   }
-  nLastN = top;
+  nLastN.set(title, top);
 });
 async function pollNeighbors() {
   if (VISIT) return;
   try {
     const r = await fetch('neighbors.json', {cache: 'no-store'});
     if (!r.ok) return;
-    const n = await r.json(), room = n.room;
+    const n = await r.json(), list = n.rooms || (n.room ? [{...n.room, rank: n.rank ? 0 : 1}] : []);
     NEIGH.rank = n.rank || 0;
-    NEIGH.room = room ? {...room, agents: room.agents.map(a => ({...a, key: `${a.name}@${room.title.slice(0, 16)}`}))} : null;
-    NEIGH.profiles = Object.fromEntries((NEIGH.room?.agents || []).map(a => [a.key, {emoji: a.emoji, color: a.color, role: '🏢 ' + room.title}]));
+    NEIGH.rooms = list.map(room => ({...room, agents: room.agents.map(a => ({...a, key: `${a.name}@${room.title.slice(0, 16)}`}))}));
+    NEIGH.room = NEIGH.rooms[0] || null;
+    NEIGH.profiles = Object.fromEntries(NEIGH.rooms.flatMap(room => room.agents.map(a => [a.key, {emoji: a.emoji, color: a.color, role: '🏢 ' + room.title}])));
     derive();
   } catch (e) {}
 }
@@ -737,10 +743,10 @@ function derive() {
                  a: (DATA.state.agents || {})[name] || null, msgs: mine.filter(m => !m.kind).slice(-3).reverse()};
   }
   // the other session's agents: names, colours, working or on a break, the tool they run; their chat stays theirs
-  for (const a of NEIGH.room?.agents || []) {
+  for (const room of NEIGH.rooms) for (const a of room.agents) {
     const key = a.key;
     names.push(key);
-    per[key] = {pct: a.pct ?? null, idle: !!a.idle, late: false, silence: null, last: null, real: null, tagged: false, vote: null, neighbor: true,
+    per[key] = {pct: a.pct ?? null, idle: !!a.idle, late: false, silence: null, last: null, real: null, tagged: false, vote: null, neighbor: true, room: room.title,
                 a: a.tool || a.waiting ? {tool: a.tool, waiting: !!a.waiting, since: now, target: ''} : null, msgs: []};
   }
   const waiting = new Set(names.filter(n => per[n].a?.waiting));
@@ -749,7 +755,8 @@ function derive() {
 }
 
 // ------------------------------------------------------------------ cast: build and place the figures
-let boss = null, assistant = null, otherLead = null;
+let boss = null, assistant = null;
+const otherLeads = new Map();                                             // the lead of each other live room, by its title (16 characters)
 const OWNER_SEAT = seatOr('boss', 0, 0);
 let fromBridge = false;                                                    // back from a visit: you come in from the bridge
 try { fromBridge = sessionStorage.getItem('chatroom.fromBridge') === '1'; sessionStorage.removeItem('chatroom.fromBridge'); } catch (e) {}
@@ -1044,10 +1051,16 @@ function sync() {
     boss = new Person(D.user, 'boss', BOSS_SEAT, false, null, myLook);
     me.cup = V.mug('#f5f5f5'); me.cup.position.set(0, -0.5, 0.12); me.cup.visible = false; boss.parts.armR.add(me.cup);
   }
-  const mySeat = NEIGH.rank === 1 ? LEAD2_SEAT : LEAD_SEAT, theirSeat = mySeat === LEAD_SEAT ? LEAD2_SEAT : LEAD_SEAT;
+  const mySeat = LEAD_SEATS[NEIGH.rank] || LEAD_SEAT;
   if (!assistant) { assistant = new Person(D.lead, 'lead', mySeat, false); } else assistant.goTo(mySeat);
-  if (NEIGH.room && !otherLead) otherLead = new Person(NEIGH.room.lead + '@' + NEIGH.room.title.slice(0, 16), 'lead', theirSeat, true);
-  if (!NEIGH.room && otherLead) { otherLead.dispose(); otherLead = null; }
+  const live = new Set();
+  for (const room of NEIGH.rooms) {                                          // each other room's lead at the table of its turn
+    const title = room.title.slice(0, 16), seat = LEAD_SEATS[room.rank] || LEAD3_SEAT;
+    live.add(title);
+    if (!otherLeads.has(title)) { const p = new Person(room.lead + '@' + title, 'lead', seat, true); p.room = room; otherLeads.set(title, p); }
+    else { otherLeads.get(title).room = room; otherLeads.get(title).goTo(seat); }
+  }
+  for (const [title, p] of otherLeads) if (!live.has(title)) { p.dispose(); otherLeads.delete(title); }
   if (visit && !hostFigure) { hostFigure = new Person(visit.host, 'boss', OWNER_SEAT, false); hostFigure.act = 'code'; hostFigure.home = OWNER_SEAT; }
   for (const name of D.names) if (!people.has(name) && SPOTS.has(name)) people.set(name, new Person(name, 'agent', SPOTS.get(name).seat, !firstDerive));
   firstDerive = false;
@@ -1296,7 +1309,7 @@ const atMyDesk = () => boss && seated(boss) && boss.spot === OWNER_SEAT && !visi
 async function openCommands() {
   try {
     const list = await (await fetch('commands.json', {cache: 'no-store'})).json();
-    ui.palette(list, async c => { await post(viewScope === 'other' ? 'neighbor/command' : 'command', {name: c.name}); ui.placeName(ui.t().cmdSent(c.icon + ' ' + c.name)); });
+    ui.palette(list, async c => { await post(viewScope === 'other' ? 'neighbor/command?n=' + (window.chatroomRoom ? window.chatroomRoom().n : 0) : 'command', {name: c.name}); ui.placeName(ui.t().cmdSent(c.icon + ' ' + c.name)); });
   } catch (e) {}
 }
 document.addEventListener('keydown', e => {
@@ -1602,7 +1615,7 @@ new ResizeObserver(resize).observe(root);
 const _v = new THREE.Vector3();
 function placeTags() {
   const L = ui.t(), w = root.clientWidth, h = root.clientHeight, now = Date.now() / 1000;
-  const all = [...people.values(), ...remote.values(), boss, assistant, hostFigure, otherLead].filter(Boolean);
+  const all = [...people.values(), ...remote.values(), boss, assistant, hostFigure, ...otherLeads.values()].filter(Boolean);
   for (const p of all) {
     _v.copy(p.head()); _v.y += 0.25; const dist = camera.position.distanceTo(_v); _v.project(camera);
     const vis = _v.z < 1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2 && !(p === boss && !boss.parts.head.visible) && p.root.visible;
@@ -1610,12 +1623,15 @@ function placeTags() {
     const pr = DATA.profile(p.name), d = D.per[p.name], bubble = p.bubble && p.bubble.until > now ? p.bubble : null;
     const flags = [];
     let line = '', title = p.name, sub = pr.model, emoji = pr.emoji, pct = null;
-    if (p === otherLead) { emoji = '👓'; title = NEIGH.room?.lead || title; sub = '🏢 ' + (NEIGH.room?.title || ''); }
-    else if (D.per[p.name]?.neighbor) { title = p.name.split('@')[0]; sub = '🏢 ' + (NEIGH.room?.title || ''); }
+    const theirLead = !!p.room && [...otherLeads.values()].includes(p);
+    if (theirLead) { emoji = '👓'; title = p.room.lead || title; sub = '🏢 ' + (p.room.title || ''); }
+    else if (D.per[p.name]?.neighbor) { title = p.name.split('@')[0]; sub = '🏢 ' + (D.per[p.name].room || ''); }
     // which room's thoughts and messages show: this one, the other, or both (the figures always do)
-    const theirs = p === otherLead || !!D.per[p.name]?.neighbor, ours = !theirs && p !== boss && p !== hostFigure && p.kind !== 'guest';
-    const muted = (viewScope === 'self' && theirs) || (viewScope === 'other' && ours);
-    if (p === otherLead) {}
+    const theirs = theirLead || !!D.per[p.name]?.neighbor, ours = !theirs && p !== boss && p !== hostFigure && p.kind !== 'guest';
+    const seen = viewScope === 'other' && window.chatroomRoom ? window.chatroomRoom().title.slice(0, 16) : '';   // the other room shown
+    const roomOf = theirLead ? (p.room.title || '').slice(0, 16) : (D.per[p.name]?.room || '').slice(0, 16);
+    const muted = (viewScope === 'self' && theirs) || (viewScope === 'other' && (ours || (theirs && seen && roomOf !== seen)));
+    if (theirLead) {}
     else if (p === hostFigure) { emoji = '👑'; sub = '🌐 ' + L.guest; }
     else if (p === boss) { emoji = visit ? '🚶' : '👑'; sub = L.you; }
     else if (p.kind === 'guest') { emoji = p.remoteEmoji || '🌐'; sub = '🌐 ' + L.guest; }
@@ -1723,8 +1739,8 @@ function frame(now) {
   for (const p of interns.values()) p.update(dt, t);
   for (const p of remote.values()) { p.update(dt, t); p.root.visible = (p.pos.y > 2.5) === (level === 'arena'); }
   if (hostFigure) { hostFigure.update(dt, t); if ((hostFigure.pos.y > 2.5) !== (level === 'arena')) hostFigure.root.visible = false; }
-  if (otherLead) { otherLead.act = 'read'; otherLead.update(dt, t); }
-  if (level === 'arena') { for (const p of people.values()) p.root.visible = false; for (const p of interns.values()) p.root.visible = false; if (assistant) assistant.root.visible = false; if (otherLead) otherLead.root.visible = false; }     // the people of the office stay down there, tags and all
+  for (const p of otherLeads.values()) { p.act = 'read'; p.update(dt, t); }
+  if (level === 'arena') { for (const p of people.values()) p.root.visible = false; for (const p of interns.values()) p.root.visible = false; if (assistant) assistant.root.visible = false; for (const p of otherLeads.values()) p.root.visible = false; }     // the people of the office stay down there, tags and all
   if (boss) {
     drive(dt);
     if (pov && povLocked && level !== 'arena') { const r = roomAt(boss.pos.x, boss.pos.z); if (r !== povRoom) { povRoom = r; if (r) ui.placeName(roomName(r)); } }
@@ -2102,7 +2118,7 @@ function setLevel(next) {
     level = 'office'; arena.show(false);
     for (const o of hiddenUp) o.visible = true;
     hiddenUp = [];
-    for (const p of [...people.values(), ...interns.values(), assistant, otherLead]) if (p) p.root.visible = true;
+    for (const p of [...people.values(), ...interns.values(), assistant, ...otherLeads.values()]) if (p) p.root.visible = true;
     const f = cameFrom || {x: ELEVATOR_AT.out.x, z: ELEVATOR_AT.out.z, rot: ELEVATOR_AT.out.rot}; cameFrom = null;
     putBoss(f.x, f.z, f.rot, 0);
   }
