@@ -544,11 +544,14 @@ class Room:
 
     def show(self, items):
         users = self.user_names()
+        leads = set(self.config().get('self_names', []))
         for m in items:
             kind = m.get('kind')
             tag = (' [IDLE]' if kind == IDLE else ' [BOARD]' if kind == 'board' else ' [FINDING]' if kind == 'finding'
                    else ' [STATUS]' if kind in STATUS_KINDS else '')
-            if m['from'] in users:
+            if m['from'] in leads:  # the lead is not the user: own banner, same priority
+                print('!!! MESSAGE FROM THE LEAD: answer it before anything else !!!')
+            elif m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
             print(f"--- #{m['n']} {m['time']} {m['from']}{tag}:\n{m['text']}", flush=True)
             if m.get('doc'):
