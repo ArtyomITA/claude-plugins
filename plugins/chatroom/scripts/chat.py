@@ -1642,8 +1642,15 @@ def watch_line(m, users):
 def cmd_alerts(room, a):
     """the lead's relay: print a ping line for each new message of the user (--follow keeps watching);
     with --messages also one WATCH line per real message, so the lead follows the room without reading it all"""
-    name, checked, seen_checks = '_alerts', 0, set()
+    name, checked, seen_checks, last = '_alerts', 0, set(), None
     while True:
+        # the chat and the lend log are read again only when one of them changed: a long chat parsed every second
+        # kept a CPU core 20% busy for each room watched
+        sig = tuple(_stamp(f) for f in (room.chat, room.dir / 'common' / 'lend.jsonl'))
+        if sig == last and a.follow and (not a.messages or time.time() - checked <= 60):   # the checks still run each 60 s
+            time.sleep(1)
+            continue
+        last = sig
         items = room.messages()
         new = [m for m in items if m['n'] > room.cursor(name)]
         if new:
@@ -1668,6 +1675,15 @@ def cmd_alerts(room, a):
         time.sleep(1)
 
 
+def _stamp(path):
+    """(modification time, size) of a file, or None when it is missing: enough to tell that it changed"""
+    try:
+        st = path.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
 def lend_lines(room):
     """the agents the user agreed to lend to a friend (from the 🛋 panel), not yet announced to the lead"""
     log, seen = room.dir / 'common' / 'lend.jsonl', room.dir / 'common' / 'lend.seen'
@@ -1675,7 +1691,8 @@ def lend_lines(room):
         return []
     done = int(seen.read_text() or 0) if seen.exists() else 0
     lines = [json.loads(x) for x in log.read_text(encoding='utf-8').splitlines() if x.strip()]
-    seen.write_text(str(len(lines)))
+    if len(lines) != done:
+        seen.write_text(str(len(lines)))
     codex = ping_tool(room.roster()) == 'send_message'
     how = (lambda r: f"Spawn it now with spawn_agent, its message being the whole text of the file {r['prompt']}, unchanged"
                      + ('' if r['model'] == 'default' else f", model {r['model']}") + f", reasoning_effort {r['effort']}; keep it in your "
