@@ -54,6 +54,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import subprocess
 import urllib.parse
@@ -387,6 +388,35 @@ def parse_profile(text):
     return name, clean_profile(profile)
 
 
+def write_atomic(path, text):
+    """write a file whole or not at all: a reader never sees it half written. Windows refuses the swap while another
+    process has the file open for a moment, so it tries again a few times"""
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    for attempt in range(20):
+        try:
+            return os.replace(tmp, path)
+        except PermissionError:
+            time.sleep(0.02 + 0.02 * attempt)
+    tmp.unlink(missing_ok=True)
+    raise PermissionError(f'{path} stays locked by another program')
+
+
+def read_json(path, default):
+    """a JSON file written by write_atomic; on Windows the instant of the swap refuses readers too, so it tries again"""
+    for attempt in range(20):
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return default
+        except PermissionError:
+            time.sleep(0.02 + 0.02 * attempt)
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+_PARSED = {}                                # chat file -> (mtime_ns, size, messages): a chat is parsed again only when it changed
+
+
 class Room:
     def __init__(self, path):
         self.dir = Path(path)
@@ -396,12 +426,10 @@ class Room:
 
     # ------------------------------------------------------------------ files
     def config(self):
-        return json.loads(self.config_path.read_text(encoding='utf-8')) if self.config_path.exists() else {}
+        return read_json(self.config_path, {})
 
     def save_config(self, config):
-        tmp = self.config_path.with_suffix('.tmp')
-        tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding='utf-8')
-        os.replace(tmp, self.config_path)
+        write_atomic(self.config_path, json.dumps(config, indent=2, ensure_ascii=False))
 
     def update_config(self, settings=None, profiles=None, common=None):
         config = self.config()
@@ -415,8 +443,17 @@ class Room:
         return config
 
     def roster(self):
-        p = self.dir / 'roster.json'
-        return json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+        return read_json(self.dir / 'roster.json', {})
+
+    def update_roster(self, fn):
+        """change the roster under the room's lock and write it whole: the lead (chat.py roster) and the mod (a spawn)
+        may write it at the same moment, and every post reads it"""
+        def run():
+            roster = self.roster()
+            fn(roster)
+            write_atomic(self.dir / 'roster.json', json.dumps(roster, indent=2, ensure_ascii=False))
+            return roster
+        return self.locked(run)
 
     def user_names(self):
         c = self.config()
@@ -426,8 +463,17 @@ class Room:
         return int(self.config().get('heartbeat', 120))
 
     def messages(self):
-        if not self.chat.exists():
+        """every message, parsed again only when the file changed (a long chat costs about 10 ms per 1000 lines, and a
+        post, every wait and every page of the viewer ask for it). A new list each time; the messages themselves are shared
+        and nobody changes them"""
+        try:
+            st = self.chat.stat()
+        except OSError:
             return []
+        key = str(self.chat)
+        hit = _PARSED.get(key)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return list(hit[2])
         out = []
         for line in self.chat.read_text(encoding='utf-8').splitlines():
             if line.strip():
@@ -435,7 +481,8 @@ class Room:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
                     pass                  # a line being written right now
-        return out
+        _PARSED[key] = (st.st_mtime_ns, st.st_size, out)
+        return list(out)
 
     def cursor(self, name):
         p = self.dir / f'cursor_{name}.txt'
@@ -593,7 +640,8 @@ class Room:
                 or m.get('kind') == 'finding' or (m.get('kind') == 'board' and name.lower() in m.get('text', '').lower())
                 or name.lower() in str(m.get('state', {}).get('needs', '')).lower())]
         self.show(mine)
-        rest = [m for m in items if m not in mine and m['from'] != name]
+        shown = {m['n'] for m in mine}
+        rest = [m for m in items if m['n'] not in shown and m['from'] != name]
         if not mine and not rest:
             print('(nothing new from the others)')
         if rest:
@@ -604,7 +652,8 @@ class Room:
             print(f"(+{len(rest)} other messages, not for you: " + '; '.join(parts)
                   + ". If you need their details, read --all shows the whole chat.)", flush=True)
 
-    def wait(self, name, timeout):
+    def wait(self, name, timeout, focus=False):
+        """focus: what wakes it is shown as read --focus shows it (in full only what concerns you)"""
         items = self.messages()
         idle = self.idle_entry(name, items)
         timeout = max(1, min(timeout, IDLE_WAIT_MAX if idle else WAIT_MAX))
@@ -621,13 +670,13 @@ class Room:
                           f"it, post a --status (with your percentage) first: it ends your idle and restarts the "
                           f"timer. ***\n",
                           flush=True)
-                    return self.read(name)
+                    return self.read(name, focus)
             else:
                 if new:
-                    return self.read(name)
+                    return self.read(name, focus)
                 age = self.silence(name, items)
                 if age is None or age > limit:
-                    return self.read(name)    # the timer interrupts the wait
+                    return self.read(name, focus)    # the timer interrupts the wait
             if time.time() - start >= timeout:
                 break
             time.sleep(2)
@@ -677,7 +726,7 @@ def cmd_config(room, a):
 
 
 def cmd_roster(room, a):
-    roster = room.roster()
+    pairs = {}
     for pair in a.pairs:
         name, _, agent = pair.partition('=')
         if not agent:
@@ -685,9 +734,8 @@ def cmd_roster(room, a):
         agent = agent.strip()
         if '/root/' in agent:                 # Git Bash on Windows turns /root/a into C:/.../root/a
             agent = agent[agent.index('/root/'):]
-        roster[name.strip()] = agent
-    (room.dir / 'roster.json').write_text(json.dumps(roster, indent=2), encoding='utf-8')
-    print(json.dumps(roster))
+        pairs[name.strip()] = agent
+    print(json.dumps(room.update_roster(lambda roster: roster.update(pairs))))
 
 
 def cmd_post(room, a, text=None):
@@ -837,7 +885,7 @@ class Board:
 
     def load(self):
         try:
-            d = json.loads(self.path.read_text(encoding='utf-8'))
+            d = read_json(self.path, {})
         except (OSError, ValueError):
             d = {}
         return {'facts': d.get('facts', []), 'tasks': d.get('tasks', []), 'decisions': d.get('decisions', [])}
@@ -847,9 +895,7 @@ class Board:
         def run():
             b = self.load()
             line = fn(b)
-            tmp = self.path.with_suffix('.tmp')
-            tmp.write_text(json.dumps(b, ensure_ascii=False, indent=1), encoding='utf-8')
-            os.replace(tmp, self.path)
+            write_atomic(self.path, json.dumps(b, ensure_ascii=False, indent=1))
             return line
         return self.room.locked(run)
 
@@ -1050,12 +1096,14 @@ def cmd_task(room, a):
     elif act == 'decide' and rest:
         line = b.decide(a.name, ' '.join(rest))
     elif act in ('handoff', 'help') and len(rest) > 1:
-        to = rest[1].lstrip('@').upper()
+        want = rest[1].lstrip('@')                    # the name as the room writes it, in any case; a stranger in capitals
+        known = [*room.config().get('participants', []), *room.roster()]
+        to = next((n for n in known if n.lower() == want.lower()), want.upper())
         line = (b.handoff(a.name, rest[0], to, a.note or '') if act == 'handoff'
                 else b.help(a.name, rest[0], to, a.scope or '', split(a.files), a.done_when or '', a.note or ''))
         n = room.append(a.name, line)                 # a real message: it tags the new owner, who must be woken
         print(f'posted #{n}')
-        if to not in [p.upper() for p in room.config().get('participants', [])]:   # a helper from another room: no ping reaches it from here
+        if to not in known:                           # a helper from another room: no ping reaches it from here
             print(f'NOTE: {to} is not in this room: write a line to the lead (@LEAD) so the lead tells them; they read '
                   f'the packet with board --room "{room.dir}".')
         return print_alert(room, a.name, n, line, [])
@@ -1121,7 +1169,8 @@ def failures(room, now=None):
             if k == m['from'] or not tags(m['text'], k):
                 continue
             after = [x for x in recent[i + 1:] if x['from'] == k and not x.get('kind')]   # real messages: working statuses are not an answer, but not a dodge either
-            answered = any(f"#{m['n']}" in x['text'] or m['from'].lower() in x['text'].lower() for x in after)
+            ref = re.compile(rf"#{m['n']}(?!\d)|(?<![\w@])@?{re.escape(m['from'])}(?![\w-])", re.IGNORECASE)   # #1 is not #12, ALFA is not ALFABETO
+            answered = any(ref.search(x['text']) for x in after)
             if len(after) >= 2 and not answered:
                 out.append((f"tag:{m['n']}:{k}", f"{k} has not answered #{m['n']} from {m['from']} and has posted {len(after)} times since"))
     for k in people:
@@ -1177,8 +1226,9 @@ MCP_TOOLS = [
          'reply': {'type': 'integer'}, 'state': {'type': 'object', 'description': 'a structured status: task, step, pct, files, '
                                                                                    'blocked_by, next, needs, done, evidence, risks, '
                                                                                    'free_min (minutes you expect to wait still)'}}}},
-    {'name': 'chat_wait', 'description': 'Wait for someone to write (up to 110 s, 540 s while idle).',
-     'inputSchema': {'type': 'object', 'properties': {'timeout': {'type': 'integer'}}}},
+    {'name': 'chat_wait', 'description': 'Wait for someone to write (up to 110 s, 540 s while idle). focus=true (default): what '
+                                         'arrives is shown as chat_read shows it.',
+     'inputSchema': {'type': 'object', 'properties': {'timeout': {'type': 'integer'}, 'focus': {'type': 'boolean'}}}},
     {'name': 'board', 'description': 'The task board: facts, decisions, tasks and who does what.', 'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'task', 'description': 'Change the task board: add (text, files, deps), take (id, force), done (id, proof), drop (id), '
                                     'note (id, text), handoff (id, to, note), help (id, to, scope, files, done_when, note: '
@@ -1198,6 +1248,25 @@ for _t in MCP_TOOLS:      # one server for every agent (subagents share their le
                                             'as': {'type': 'string', 'description': 'your name in the room, when the server was started without --as'}})
 
 
+class ThreadOut:
+    """sys.stdout for the MCP server: each call runs in its own thread and prints into its own buffer, so a chat_wait of
+    one agent (up to 540 s) never holds up the calls of the others; what no call captures goes to the real stdout"""
+    def __init__(self, real):
+        self.real, self.local = real, threading.local()
+
+    def _to(self):
+        return getattr(self.local, 'buf', None) or self.real
+
+    def write(self, s):
+        return self._to().write(s)
+
+    def flush(self):
+        return self._to().flush()
+
+    def __getattr__(self, k):
+        return getattr(self.real, k)
+
+
 def mcp_call(room, name, tool, args):
     """run one tool as the shell command would, and return what it prints (errors included) as text"""
     import contextlib
@@ -1213,8 +1282,20 @@ def mcp_call(room, name, tool, args):
                             focus=True, pairs=[], deps=None, files=None, proof=None, force=False, note=None, all=False,
                             timeout=100, common=False, file=None, scope=None, done_when=None)
     out = io.StringIO()
+
+    @contextlib.contextmanager
+    def capture():
+        if isinstance(sys.stdout, ThreadOut):         # the server: this thread's own buffer
+            sys.stdout.local.buf = out
+            try:
+                yield
+            finally:
+                sys.stdout.local.buf = None
+        else:
+            with contextlib.redirect_stdout(out):
+                yield
     try:
-        with contextlib.redirect_stdout(out):
+        with capture():
             if tool == 'chat_read':
                 room.read(name, args.get('focus', True))
             elif tool == 'chat_post':
@@ -1224,7 +1305,7 @@ def mcp_call(room, name, tool, args):
                     ns.status = True
                 cmd_post(room, ns, text)
             elif tool == 'chat_wait':
-                room.wait(name, int(args.get('timeout', 100)))
+                room.wait(name, int(args.get('timeout', 100)), bool(args.get('focus', True)))
             elif tool == 'board':
                 cmd_board(room, ns)
             elif tool == 'task':
@@ -1257,12 +1338,21 @@ def cmd_mcp(room, a):
     """an MCP server on stdin/stdout (newline-delimited JSON-RPC) with the room's tools. Added once for every room and agent
     (claude mcp add chatroom -- python chat.py mcp; codex mcp add chatroom -- python chat.py mcp), each call names its
     room and its agent ("room", "as"); --room and --as fix them for a session that is one participant."""
-    out = sys.stdout
+    out, sending = sys.stdout, threading.Lock()
+    sys.stdout = ThreadOut(out)                      # every call prints into its own buffer (see mcp_call)
     who = (f'You are {a.name} in the chat room {room.dir}. ' if a.name and room else
            'Every call names the room folder ("room") and your name in it ("as"). ')
     def send(obj):
-        out.write(json.dumps(obj, ensure_ascii=False) + '\n')
-        out.flush()
+        with sending:                                # answers come from several threads: one line at a time
+            out.write(json.dumps(obj, ensure_ascii=False) + '\n')
+            out.flush()
+
+    def call(mid, params):
+        try:
+            text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') if isinstance(params.get('arguments'), dict) else {})
+        except Exception as exc:                      # one server serves every agent: a bad call (a room that is not a path...) answers with an error, never ends it
+            text, err = f'error: {type(exc).__name__}: {exc}', True
+        send({'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': err}})
     sys.stdin.reconfigure(encoding='utf-8')          # JSON-RPC is UTF-8; Windows would read it as cp1252
     for line in sys.stdin:
         try:
@@ -1281,13 +1371,10 @@ def cmd_mcp(room, a):
                                          'your percentage, and send the pings chat_post returns.'}
         elif method == 'tools/list':
             res = {'tools': MCP_TOOLS}
-        elif method == 'tools/call':
+        elif method == 'tools/call':                  # in its own thread: a long wait of one agent never holds up the others
             params = msg.get('params') if isinstance(msg.get('params'), dict) else {}
-            try:
-                text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') if isinstance(params.get('arguments'), dict) else {})
-            except Exception as exc:                      # one server serves every agent: a bad call (a room that is not a path...) answers with an error, never ends it
-                text, err = f'error: {type(exc).__name__}: {exc}', True
-            res = {'content': [{'type': 'text', 'text': text}], 'isError': err}
+            threading.Thread(target=call, args=(mid, params), daemon=True).start()
+            continue
         elif method == 'ping':
             res = {}
         else:
@@ -1580,15 +1667,15 @@ def cmd_remove(room, a):
     names = [n.strip() for n in (a.participants or '').split(',') if n.strip()]
     if not names:
         sys.exit('remove: give --participants A,B')
-    config, roster = room.config(), room.roster()
+    config = room.config()
     config['participants'] = [n for n in config.get('participants', []) if n not in names]
     config['left'] = sorted(set(config.get('left', [])) | set(names))
-    gone = {n: roster.pop(n) for n in names if n in roster}
+    gone = {}
+    room.update_roster(lambda roster: gone.update({n: roster.pop(n) for n in names if n in roster}))
     if gone:
         kept = room.dir / 'roster.left.json'
         old = json.loads(kept.read_text(encoding='utf-8')) if kept.exists() else {}
-        kept.write_text(json.dumps({**old, **gone}, ensure_ascii=False, indent=2), encoding='utf-8')
-        (room.dir / 'roster.json').write_text(json.dumps(roster, ensure_ascii=False, indent=2), encoding='utf-8')
+        write_atomic(kept, json.dumps({**old, **gone}, ensure_ascii=False, indent=2))
     room.save_config(config)
     print(f"room {room.dir}: {', '.join(names)} left; participants now {', '.join(config['participants']) or 'none'}")
 
@@ -1641,8 +1728,12 @@ def watch_line(m, users):
 
 def cmd_alerts(room, a):
     """the lead's relay: print a ping line for each new message of the user (--follow keeps watching);
-    with --messages also one WATCH line per real message, so the lead follows the room without reading it all"""
-    name, checked, seen_checks, last = '_alerts', 0, set(), None
+    with --messages also one WATCH line per real message, so the lead follows the room without reading it all. Each lead
+    (--as) keeps its own place; the first time, what is older than ten minutes is not replayed"""
+    name, checked, seen_checks, last = '_alerts' + (f'_{a.name}' if a.name else ''), 0, set(), None
+    if not (room.dir / f'cursor_{name}.txt').exists():
+        old = [m['n'] for m in room.messages() if time.time() - float(m.get('ts') or 0) > 600]
+        room.set_cursor(name, max(old, default=0))
     while True:
         # the chat and the lend log are read again only when one of them changed: a long chat parsed every second
         # kept a CPU core 20% busy for each room watched
@@ -2075,6 +2166,30 @@ def cmd_serve(room, a):
             self.end_headers()
             self.wfile.write(data)
 
+        def send_chat(self, chat):
+            """a chat file for the viewer: 304 when it did not change (ETag), and with `Range: bytes=N-` only what was appended
+            after byte N (206); a range past the end (a file that shrank) gets the whole file"""
+            try:
+                st = chat.stat(); tag, size = f'"{st.st_mtime_ns:x}-{st.st_size:x}"', st.st_size
+            except OSError:
+                tag, size = '"0"', 0
+            if self.headers.get('If-None-Match') == tag:
+                self.send_response(304); self.send_header('ETag', tag); self.send_header('Content-Length', '0'); self.end_headers()
+                return
+            r = re.fullmatch(r'bytes=(\d+)-', self.headers.get('Range') or '')
+            start = int(r[1]) if r and int(r[1]) <= size else 0
+            body = b''
+            if size:
+                with chat.open('rb') as f:
+                    f.seek(start)
+                    body = f.read(size - start)
+            self.send_response(206 if start else 200)
+            self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8'); self.send_header('Cache-Control', 'no-store'); self.send_header('ETag', tag)
+            if start:
+                self.send_header('Content-Range', f'bytes {start}-{start + len(body) - 1}/{size}' if body else f'bytes */{size}')
+            self.send_header('Content-Length', str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
         def body(self):
             n = int(self.headers.get('Content-Length', 0))
             if not 0 <= n <= 64 * 1024 * 1024:
@@ -2226,23 +2341,14 @@ def cmd_serve(room, a):
                         'n': items[-1]['n'] if items else 0, 'last': items[-12:], 'state': state,
                         'idle': [k for k in c.get('participants', []) if room.idle_entry(k, items)],
                         'lang': c.get('lang', 'en'), 'pct': {}}
-                for m in items:                       # each participant's latest percentage (the lowest it states)
-                    nums = [int(x) for x in re.findall(r'(\d{1,3})[^\S\n]?%', m.get('text', '')) if int(x) <= 100]
+                for m in items:                       # each participant's latest percentage: a JSON status's own, else the lowest the text states
+                    pct = (m.get('state') or {}).get('pct')
+                    nums = [pct] if pct is not None else [int(x) for x in re.findall(r'(\d{1,3})[^\S\n]?%', m.get('text', '')) if int(x) <= 100]
                     if nums:
                         body['pct'][m['from']] = min(nums)
                 return self.send(200, json.dumps(body, ensure_ascii=False), 'application/json; charset=utf-8')
-            if path == '/chat.jsonl':                 # the viewer asks every 1.5 s: an unchanged chat answers 304 with no body
-                try:
-                    st = room.chat.stat(); tag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
-                except OSError:
-                    tag = '"0"'
-                if self.headers.get('If-None-Match') == tag:
-                    self.send_response(304); self.send_header('ETag', tag); self.send_header('Content-Length', '0'); self.end_headers()
-                    return
-                body = room.chat.read_bytes() if room.chat.exists() else b''
-                self.send_response(200); self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8'); self.send_header('Cache-Control', 'no-store')
-                self.send_header('ETag', tag); self.send_header('Content-Length', str(len(body))); self.end_headers()
-                return self.wfile.write(body)
+            if path == '/chat.jsonl':                 # the viewer asks every 1.5 s: an unchanged chat answers 304, a grown one only its new bytes
+                return self.send_chat(room.chat)
             if path.startswith('/images/'):
                 name = path[len('/images/'):]
                 target = room.images_dir / name
@@ -2277,7 +2383,7 @@ def cmd_serve(room, a):
                     return self.send(404, 'no other live room', 'text/plain')
                 nb = Room(other)
                 if path.endswith('.jsonl'):
-                    return self.send(200, nb.chat.read_bytes() if nb.chat.exists() else b'', 'application/x-ndjson; charset=utf-8')
+                    return self.send_chat(nb.chat)
                 return self.send(200, json.dumps(nb.config(), ensure_ascii=False), 'application/json; charset=utf-8')
             if path in ('/friendroom/config.json', '/friendroom/chat.jsonl'):   # the host's room chat, when the host shares it
                 b = guest['bridge']
@@ -2617,7 +2723,7 @@ def main():
     p.add_argument('--done-when', dest='done_when', help='task help: the proof that closes the lent piece')
     p.add_argument('--finding', action='store_true', help='post: a finding the others should know now (no ping, no percentage); read --focus always shows it')
     p.add_argument('--reply', type=int, help='post: answer message #N; its author is tagged and gets the ping')
-    p.add_argument('--focus', action='store_true', help='read: in full only what concerns you, the rest as a one-line digest per author')
+    p.add_argument('--focus', action='store_true', help='read, wait: in full only what concerns you, the rest as a one-line digest per author')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--repo', default='', help='serve: the project folder the GitHub window on the office wall reads (gh and git run there); or "repo" in the room config')
     p.add_argument('--host', default='127.0.0.1')
@@ -2656,7 +2762,7 @@ def main():
         return cmd_post(room, a)
     if a.command == 'read':
         return room.read(a.name, a.focus)
-    return room.wait(a.name, a.timeout)         # wait caps the timeout: 110 s, or 540 s while idle
+    return room.wait(a.name, a.timeout, a.focus)         # wait caps the timeout: 110 s, or 540 s while idle
 
 
 if __name__ == '__main__':

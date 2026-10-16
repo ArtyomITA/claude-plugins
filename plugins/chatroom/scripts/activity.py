@@ -64,6 +64,9 @@ def window_of(model):
 def target_of(tool, inp):
     """a short label of what a tool call works on: a file name, a command, a host, a query"""
     inp = inp if isinstance(inp, dict) else {}
+    mcp = re.match(r'mcp__\w*chatroom\w*__(\w+)\Z', str(tool or ''))
+    if mcp:                                                       # the room's own tools through the MCP server: the chat row, like the shell commands
+        return 'chat:' + {'chat_post': 'post', 'chat_wait': 'wait', 'chat_read': 'read', 'check': 'status'}.get(mcp[1], 'read')
     if tool in ('Read', 'Edit', 'Write', 'NotebookEdit', 'MultiEdit'):
         return re.split(r'[\\/]', str(inp.get('file_path') or inp.get('notebook_path') or ''))[-1]      # a Windows path reads the same on any system
     if tool in ('Bash', 'PowerShell'):
@@ -173,6 +176,7 @@ class Agent:
         self.name, self.id = name, agent_id
         self.tool, self.target, self.since = None, '', None      # the tool running now
         self.calls = {}                                            # tool_use_id -> (tool, target, start)
+        self.ended = {}                                            # the latest finished ids: the transcript tells a call again after the mod did
         self.waiting = None                                        # since when it waits for a permission
         self.error_at = self.done_at = self.text_at = self.seen = None
         self.ctx = self.model = self.win = None                    # win: a window the transcript states (Codex)
@@ -191,8 +195,8 @@ class Agent:
             self.ctxs.append((ts, self.ctx))
 
     def start(self, call_id, tool, target, ts):
-        if call_id in self.calls:
-            return                                                 # the same call from both sources
+        if call_id in self.calls or call_id in self.ended:
+            return                                                 # the same call from both sources, running or already over
         self.calls[call_id] = (tool, target, ts)
         self.tool, self.target, self.since, self.seen = tool, target, ts, ts
         self.pulse.append(ts)
@@ -203,6 +207,9 @@ class Agent:
         call = self.calls.pop(call_id, None)
         if call is None:
             return
+        self.ended[call_id] = True
+        if len(self.ended) > 400:
+            self.ended.pop(next(iter(self.ended)))
         tool, target, start = call
         self.recent.append({'tool': tool, 'target': target, 'ts': start, 'ms': int((ts - start) * 1000), 'ok': ok})
         self.history.append((start, int((ts - start) * 1000), lane_of(tool, target), bool(ok)))
@@ -311,10 +318,13 @@ class Activity:
         aid = str(ev.get('agentId') or '')
         if kind == 'spawn':
             name = self.name_in(ev.get('description'))
-            roster = self.room.roster()
-            if name and AGENT_ID.match(aid) and name not in roster:
-                roster[name] = aid                 # the roster writes itself: pings work without a manual roster
-                (self.room.dir / 'roster.json').write_text(json.dumps(roster, indent=2), encoding='utf-8')
+            if name and AGENT_ID.match(aid) and name not in self.room.roster():
+                put = lambda roster: roster.setdefault(name, aid)    # the roster writes itself: pings work without a manual roster
+                if hasattr(self.room, 'update_roster'):
+                    self.room.update_roster(put)     # under the room's lock, written whole: the lead may be writing it too
+                else:
+                    roster = self.room.roster(); put(roster)
+                    (self.room.dir / 'roster.json').write_text(json.dumps(roster, indent=2), encoding='utf-8')
             return
         a = self.agent(aid)
         if a is None:
@@ -657,6 +667,11 @@ def _prova():
         assert tl['run'][1] == TOOL_LANES.index('chat'), tl                           # a chat command is on its own row
         act.hook({'kind': 'done', 'agentId': 'a1111111111111111', 'id': 't2', 'ok': True})
         assert lane_of('Grep') == 'read' and lane_of('WebSearch') == 'web' and lane_of('Agent') == 'agent' and lane_of('Zzz') == 'other'
+        assert target_of('mcp__chatroom__chat_wait', {}) == 'chat:wait' and lane_of('mcp__chatroom__chat_post', target_of('mcp__chatroom__chat_post', {})) == 'chat'
+        f = act.agents['a1111111111111111']; n = len(f.history)               # the mod told the call, the transcript tells it again later: counted once
+        act.record(f, {'type': 'assistant', 'timestamp': '2026-10-10T10:00:00Z', 'message': {'content': [{'type': 'tool_use', 'id': 't2', 'name': 'Bash', 'input': {}}]}})
+        act.record(f, {'type': 'user', 'timestamp': '2026-10-10T10:00:01Z', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 't2'}]}})
+        assert len(f.history) == n and f.tool is None, (len(f.history), n)
         assert all(e[0] <= TIMELINE_SPAN for e in act.timeline(60)['agents']['FETTE']['ev'])
         act.hook({'kind': 'spawn', 'agentId': 'a2222222222222222', 'description': 'LUCE: lights and shadows'})
         assert room.roster()['LUCE'] == 'a2222222222222222'                       # the roster wrote itself

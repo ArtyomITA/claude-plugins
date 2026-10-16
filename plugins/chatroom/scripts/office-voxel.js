@@ -130,7 +130,45 @@ export const darker = (hex, f = 0.7) => '#' + new THREE.Color(hex).multiplyScala
 /** a chibi voxel person facing +z; returns {root, body, parts} with pivots to animate */
 export const LOOK = {skins: SKIN, hairs: HAIR, styles: STYLES, outfits: ['suit', 'cardigan', 'hoodie', 'polo']};
 /** a figure; `look` (skin, hair, style, outfit, top, pants, glasses, headphones) overrides what the name would pick */
+// The geometries of a figure depend only on its name, shirt, kind and look: built once (7 ms for an agent) and shared by every figure with the
+// same four (an intern that comes back, a friend's figure rebuilt, the two legs and the two arms). A figure that goes releases them; the
+// last few released are kept for a while, then disposed.
+const PERSON_GEO = new Map(), PERSON_IDLE = [];
 export function person({name = '?', shirt = '#3a7bd5', kind = 'agent', scale = 1, look = null}) {
+  const key = JSON.stringify([name, shirt, kind, look]);
+  let entry = PERSON_GEO.get(key);
+  if (!entry) { entry = {...personGeo(name, shirt, kind, look), refs: 0}; PERSON_GEO.set(key, entry); }
+  entry.refs++;
+  const idle = PERSON_IDLE.indexOf(key); if (idle >= 0) PERSON_IDLE.splice(idle, 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    if (--entry.refs > 0) return;
+    PERSON_IDLE.push(key);
+    while (PERSON_IDLE.length > 24) {
+      const k = PERSON_IDLE.shift(), e = PERSON_GEO.get(k);
+      if (e && e.refs === 0) { for (const g of Object.values(e.geo)) g.dispose(); PERSON_GEO.delete(k); }
+    }
+  };
+  const root = new THREE.Group(), body = new THREE.Group();
+  root.add(body); body.scale.setScalar(scale);
+  const part = (geo, x, y, z) => {
+    const g = new THREE.Group(), m = new THREE.Mesh(geo, MAT.solid);
+    m.castShadow = m.receiveShadow = true; g.position.set(x, y, z); g.add(m); body.add(g); return g;
+  };
+  const G = entry.geo, parts = {
+    legL: part(G.leg, -0.1, 0.4, 0), legR: part(G.leg, 0.1, 0.4, 0),
+    torso: part(G.torso, 0, 0.4, 0),
+    head: part(G.head, 0, 0.9, 0),
+  };
+  parts.armL = part(G.arm, -0.4, 0.88, 0); parts.armR = part(G.arm, 0.4, 0.88, 0);
+  parts.torso.add(parts.head); parts.head.position.set(0, 0.5, 0);           // the head follows the torso
+  parts.torso.add(parts.armL); parts.armL.position.set(-0.4, 0.48, 0);
+  parts.torso.add(parts.armR); parts.armR.position.set(0.4, 0.48, 0);
+  return {root, body, parts, style: entry.style, glasses: entry.glasses, release};
+}
+function personGeo(name, shirt, kind, look) {
   const r = rnd(hashName(name)), L = look || {};
   const skin = L.skin || SKIN[Math.floor(r() * SKIN.length)], hair = L.hair || HAIR[Math.floor(r() * HAIR.length)];
   const pants = L.pants || (kind === 'boss' ? '#1f2230' : PANTS[Math.floor(r() * PANTS.length)]);
@@ -182,19 +220,8 @@ export function person({name = '?', shirt = '#3a7bd5', kind = 'agent', scale = 1
   if (headphones) { head.box(0, 12, 5, 13, 12, 6, '#222222').box(-2, 3, 4, -1, 7, 7, shirt).box(14, 3, 4, 15, 7, 7, shirt); }
   if (glasses) { head.box(2, 4, 12, 5, 5, 12, '#9fd3ff').box(8, 4, 12, 11, 5, 12, '#9fd3ff').box(2, 6, 12, 11, 6, 12, '#20202a').box(6, 5, 12, 7, 5, 12, '#20202a'); }
 
-  const root = new THREE.Group(), body = new THREE.Group();
-  root.add(body); body.scale.setScalar(scale);
-  const part = (vox, pivot, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); g.add(mesh(vox, {pivot, scale: 0.05, jitter: 0.04})); body.add(g); return g; };
-  const parts = {
-    legL: part(leg, [2, 8, 2], -0.1, 0.4, 0), legR: part(leg, [2, 8, 2], 0.1, 0.4, 0),
-    torso: part(torso, [6, 0, 3], 0, 0.4, 0),
-    head: part(head, [7, 0, 6], 0, 0.9, 0),
-  };
-  parts.armL = part(arm, [2, 10, 2], -0.4, 0.88, 0); parts.armR = part(arm, [2, 10, 2], 0.4, 0.88, 0);
-  parts.torso.add(parts.head); parts.head.position.set(0, 0.5, 0);           // the head follows the torso
-  parts.torso.add(parts.armL); parts.armL.position.set(-0.4, 0.48, 0);
-  parts.torso.add(parts.armR); parts.armR.position.set(0.4, 0.48, 0);
-  return {root, body, parts, style, glasses};
+  const geo = (vox, pivot) => vox.geometry({pivot, scale: 0.05, jitter: 0.04});
+  return {geo: {leg: geo(leg, [2, 8, 2]), arm: geo(arm, [2, 10, 2]), torso: geo(torso, [6, 0, 3]), head: geo(head, [7, 0, 6])}, style, glasses};
 }
 
 // ------------------------------------------------------------------ furniture

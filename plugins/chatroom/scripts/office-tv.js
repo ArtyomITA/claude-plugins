@@ -26,6 +26,15 @@ function quadMatrix(w, h, q) {
   return `matrix3d(${[a, d, 0, g, bb, e, 0, hh, 0, 0, 1, 0, c, f, 0, 1].join(',')})`;
 }
 
+/** where the canvas and the office sit on the page, read again only when one of them changes size or the page scrolls: reading them
+ *  every frame, after the name tags were written, forced a layout every frame */
+function rectsOf(canvas, root) {
+  let v = null;
+  const drop = () => { v = null; }, ro = new ResizeObserver(drop);
+  ro.observe(canvas); ro.observe(root); addEventListener('resize', drop); addEventListener('scroll', drop, true);
+  return () => v || (v = {rect: canvas.getBoundingClientRect(), rr: root.getBoundingClientRect()});
+}
+
 // Placed sound: Web Audio fades a sound with distance and puts it left or right. A page can only place a sound it
 // serves itself (another site's player is closed to it), so YouTube's sound comes through the viewer (tv/audio/<id>,
 // found by yt-dlp) while YouTube's player shows the picture, muted. In the sound's own area it is full and centred.
@@ -526,8 +535,9 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
         Object.assign(frame.style, {display: '', zIndex: '26', transform: `translate(${b.left - r0.left}px, ${b.top - r0.top}px) scale(${b.width / FW}, ${b.height / FH})`});
         return;
       }
-      const rect = renderer.domElement.getBoundingClientRect(), rr = root.getBoundingClientRect();
       const facing = _p.copy(camera.position).sub(at).dot(n) > 0.05;
+      if (!facing) { if (frame.style.display !== 'none') frame.style.display = 'none'; return; }      // its back: nothing to place
+      const {rect, rr} = (this._rects ||= rectsOf(renderer.domElement, root))();
       const q = corners.map(([x, y]) => { _p.set(x, y, 0); screen.localToWorld(_p); _p.project(camera);
                                           return [(_p.x * 0.5 + 0.5) * rect.width + rect.left - rr.left, (-_p.y * 0.5 + 0.5) * rect.height + rect.top - rr.top, _p.z]; });
       let show = facing && q.every(p => p[2] < 1) && q.some(p => p[0] > 0 && p[0] < rect.width && p[1] > 0 && p[1] < rect.height);
@@ -540,8 +550,12 @@ export function createTV({THREE, scene, camera, renderer, root, tvMesh, table, r
         hidden = !!hit && hit.distance < dist - 0.08;
       }
       show = show && !hidden;
-      frame.style.display = show ? '' : 'none';
-      if (show) frame.style.transform = quadMatrix(FW, FH, q.map(p => [p[0], p[1]]));
+      const display = show ? '' : 'none';
+      if (frame.style.display !== display) frame.style.display = display;
+      if (show) {                                                             // the same corners (a camera standing still): the same matrix, nothing to write
+        const key = q.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+        if (key !== this._quad) { this._quad = key; frame.style.transform = quadMatrix(FW, FH, q.map(p => [p[0], p[1]])); }
+      } else this._quad = null;
     },
   };
 }

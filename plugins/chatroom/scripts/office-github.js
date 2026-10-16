@@ -37,7 +37,7 @@ const age = (at, now) => { const s = Math.max(0, Math.round(now - at)); return s
 const esc = x => String(x ?? '').replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
 
 /** board: {mesh, canvas, g, tex} made by the office (a plane of the size of the screen, drawn at canvas.lw x canvas.lh); frame: a mesh to hide with it */
-export function createGithubWall({board, frame = null, raycastables, root, lang = () => 'en', url = 'github.json', every = 30000, onEnabled = () => {}}) {
+export function createGithubWall({board, frame = null, raycastables, root, lang = () => 'en', url = 'github.json', every = 30000, onEnabled = () => {}, paused = () => false}) {
   const L = () => S[lang()] || S.en;
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   let data = null, ov = null, drawnAt = 0, timer = 0, busy = false, announced = false;
@@ -99,7 +99,7 @@ export function createGithubWall({board, frame = null, raycastables, root, lang 
     } catch (e) { /* the viewer is away: the screen keeps what it had */ }
     busy = false;
   }
-  load(); timer = setInterval(load, every);
+  load(); timer = setInterval(() => { if (ov || !paused()) load(); }, every);      // gh and git run for it on the server: not while nobody sees the office
 
   // ------------------------------------------------ the panel
   function fill() {

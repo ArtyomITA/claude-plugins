@@ -130,14 +130,12 @@ function wrapText(g, text, x, y, maxW, lh, maxLines) {
 // office-layout.js holds the plan as data (furniture catalog, walls, glass, zones, boards, pods); here it turns into
 // meshes, lights and the places people use. Outer walls drop to a low stub when the camera is outside them (the
 // dollhouse view) and stand whole in first person, where the ceiling appears too.
-await V.loadPack('vendor/office-pack.json');                             // pack models, before the room is built
-let saved = null;                                                           // the user's own office, if they furnished one
-try { const r = await fetch('office.json', {cache: 'no-store'}); if (r.ok) saved = await r.json(); } catch (e) {}
 const VISIT = new URLSearchParams(location.search).has('visit');            // visiting the friend whose common room you joined
 const VISIT_URL = 'visit.json' + (new URLSearchParams(location.search).get('visit') ? '?who=' + encodeURIComponent(new URLSearchParams(location.search).get('visit')) : '');
-let visit = null, myLook = null;
-try { const r = await fetch('settings.json', {cache: 'no-store'}); if (r.ok) myLook = (await r.json()).avatar || null; } catch (e) {}
-if (VISIT) { try { const r = await fetch(VISIT_URL, {cache: 'no-store'}); if (r.ok) visit = await r.json(); } catch (e) {} }
+const getJson = url => fetch(url, {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
+// the pack models (before the room is built), the user's own office if they furnished one, their look, a friend's office on a visit: together
+const [, saved, settingsJson, visitJson] = await Promise.all([V.loadPack('vendor/office-pack.json'), getJson('office.json'), getJson('settings.json'), VISIT ? getJson(VISIT_URL) : null]);
+let visit = visitJson, myLook = settingsJson?.avatar || null;
 // the console of the first default offices stood at the height of the TV's picture, in front of it, and an office saved then keeps it there:
 // it is set on the floor beside the TV when the layout loads (only the one that was never moved)
 const tidy = items => items.map(it => it.type === 'console' && it.x === -12.2 && it.y === 0.45 && it.z === 0.45 ? {...it, x: -11.25, y: 0, z: 0.5} : it);
@@ -184,8 +182,6 @@ let bridgeLeaf = null;
 for (const d of PLACED.doors) {
   const leaf = add(d.kind === 'glass' ? V.glassDoor(d.len) : V.woodDoor(d.len), d.hinge[0], 0, d.hinge[1], d.rot);
   if (d.kind === 'bridge') { bridgeLeaf = leaf; leaf.userData.closed = d.rot; }
-  const sill = new THREE.Mesh(new THREE.BoxGeometry(d.kind === 'bridge' ? d.len : d.len, 0.02, 0.18), new THREE.MeshStandardMaterial({color: '#9ea7b0', metalness: 0.5, roughness: 0.4}));
-  if (d.kind !== 'bridge') { sill.visible = false; }
 }
 // the building the office is in, and the street far below: no black void out of the windows
 {
@@ -320,7 +316,7 @@ function openBridge(on) {
   FLOOR.setExtra(on ? [{x0: B.x - w / 2, z0: B.z - 0.2, x1: B.x + w / 2, z1: B.z + B.length}] : [],
                  on ? [{x: B.x - w / 2, z: B.z + B.length / 2, hw: 0.05, hd: B.length / 2, rot: Math.PI / 2}, {x: B.x + w / 2, z: B.z + B.length / 2, hw: 0.05, hd: B.length / 2, rot: Math.PI / 2}]
                     : [{x: B.x, z: B.z, hw: 0.7, hd: 0.15, rot: 0}]);
-  outCache.clear();
+  outCache.clear(); noRoom = false;
 }
 if (LAYOUT.bridge) {
   const B = LAYOUT.bridge, w = B.width, len = B.length, z1 = B.z + len, mid = B.z + len / 2;
@@ -337,7 +333,8 @@ if (LAYOUT.bridge) {
   for (let k = 0; k <= len; k += 1) { box(w, 0.08, 0.08, B.x, 2.5, B.z + k); for (const sx of [-1, 1]) box(0.08, 2.5, 0.08, B.x + sx * w / 2, 1.25, B.z + k); }
   const roof = V.glassPane(w, len); roof.rotation.x = -Math.PI / 2; roof.position.set(B.x, 2.52, mid); bridge.add(roof);
   // the friend's building: same floor height as ours, lit windows facing us, an open entrance with a sign
-  const fb = V.building(40, 30, 26, '#3a4660'); fb.position.set(B.x, -12, z1 + 6.5);      // its roof level with our ceiling fb.castShadow = false; bridge.add(fb);
+  const fb = V.building(40, 30, 26, '#3a4660'); fb.position.set(B.x, -12, z1 + 6.5);      // its roof level with our ceiling
+  fb.castShadow = false; bridge.add(fb);
   const lit = [], r = V.rnd(19);
   for (let y = -11; y < 2.6; y += 1.6) for (let x = -9; x <= 9; x += 1.5) if (Math.abs(x) > 1.6 || y < -0.5 || y > 2.6) if (r() < 0.62) lit.push([B.x + x, y, z1 - 0.02]);
   const wins = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshBasicMaterial({color: '#ffd9a0', toneMapped: false}), lit.length);
@@ -381,37 +378,43 @@ const ledGeo = new THREE.BoxGeometry(0.06, 0.04, 0.02), ledMat = new THREE.MeshB
 const leds = new THREE.InstancedMesh(ledGeo, ledMat, Math.max(1, LED_AT.length));
 LED_AT.forEach(([[x, y, z]], i) => leds.setMatrixAt(i, new THREE.Matrix4().makeTranslation(x, y, z)));
 scene.add(leds);
-const ledColor = new THREE.Color();
+const LED_COLORS = ['#00e676', '#40c4ff', '#ffab40', '#10301c', '#ff5252'].map(c => new THREE.Color(c).multiplyScalar(1.15));   // green, blue, amber, dark, the espresso red
+const ledState = new Int8Array(LED_AT.length).fill(-1);
 
 // ------------------------------------------------------------------ particles
 const PMAX = 700, pGeo = new THREE.BoxGeometry(1, 1, 1), pMat = new THREE.MeshBasicMaterial({toneMapped: false});
 const parts = new THREE.InstancedMesh(pGeo, pMat, PMAX); parts.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 parts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(PMAX * 3), 3);
+parts.frustumCulled = false;                    // its bounds would be taken from the empty pool (one point at the origin): particles vanished with the origin out of view
+parts.count = 0;
 scene.add(parts);
 const P = [];
-function emit(n, at, {color = '#ffffff', speed = 2, up = 2, life = 1.2, size = 0.07, gravity = -6, spread = 0.3, glow = 1, to = null} = {}) {
+let ambient = 0;                                // how many live particles are only ambience (steam): they keep nothing awake
+/** amb: ambience that never stops (steam of the machines and the cups); it does not count as something moving */
+function emit(n, at, {color = '#ffffff', speed = 2, up = 2, life = 1.2, size = 0.07, gravity = -6, spread = 0.3, glow = 1, to = null, amb = false} = {}) {
   const c = new THREE.Color(), list = Array.isArray(color) ? color : [color];
   for (let i = 0; i < n && P.length < PMAX; i++) {
     c.set(list[i % list.length]).multiplyScalar(glow);
     P.push({p: at.clone().add(new THREE.Vector3((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread)),
             v: new THREE.Vector3((Math.random() - 0.5) * speed, Math.random() * up, (Math.random() - 0.5) * speed),
-            life, age: 0, size: size * (0.6 + Math.random() * 0.8), gravity, c: c.clone(), to, spin: Math.random() * 6});
+            life, age: 0, size: size * (0.6 + Math.random() * 0.8), gravity, c: c.clone(), to, spin: Math.random() * 6, amb});
+    if (amb) ambient++;
   }
 }
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
 function stepParticles(dt) {
+  if (!P.length && !parts.count) return;                                   // nothing alive and nothing left drawn
   for (let i = P.length - 1; i >= 0; i--) {
     const q = P[i]; q.age += dt;
-    if (q.age >= q.life) { P.splice(i, 1); continue; }
+    if (q.age >= q.life) { if (q.amb) ambient--; P.splice(i, 1); continue; }
     if (q.to) q.p.lerp(q.to, Math.min(1, dt * 3.2)); else { q.v.y += q.gravity * dt; q.p.addScaledVector(q.v, dt); if (q.p.y < 0.02) { q.p.y = 0.02; q.v.multiplyScalar(0.4); q.v.y *= -0.3; } }
   }
-  for (let i = 0; i < PMAX; i++) {
-    const q = P[i];
-    if (!q) { _m.makeScale(0, 0, 0); parts.setMatrixAt(i, _m); continue; }
-    const k = 1 - Math.max(0, (q.age - q.life * 0.7) / (q.life * 0.3));
+  for (let i = 0; i < P.length; i++) {                                    // only the live ones: count draws no more than these
+    const q = P[i], k = 1 - Math.max(0, (q.age - q.life * 0.7) / (q.life * 0.3));
     _s.setScalar(q.size * k); _q.setFromEuler(_e.set(q.spin * q.age, q.spin * q.age * 0.7, 0));
     _m.compose(q.p, _q, _s); parts.setMatrixAt(i, _m); parts.setColorAt(i, q.c);
   }
+  parts.count = P.length;
   parts.instanceMatrix.needsUpdate = true; parts.instanceColor.needsUpdate = true;
 }
 
@@ -480,13 +483,15 @@ function addPod() {
   }
   return null;
 }
+let noRoom = false;                                                        // the last search found no free floor: not searched again until the floor changes
 function addWorkstation() {
-  const cx = DESKS.reduce((a, d) => a + d.g.position.x, 0) / Math.max(1, DESKS.length), cz = DESKS.reduce((a, d) => a + d.g.position.z, 0) / Math.max(1, DESKS.length);
+  if (noRoom) return null;
+  const cx =DESKS.reduce((a, d) => a + d.g.position.x, 0) / Math.max(1, DESKS.length), cz = DESKS.reduce((a, d) => a + d.g.position.z, 0) / Math.max(1, DESKS.length);
   const fits = (x, z) => { for (let dx = -1.0; dx <= 1.0; dx += 0.25) for (let dz = -0.6; dz <= 1.3; dz += 0.25) if (FLOOR.blocked(x + dx, z + dz, 0.05)) return false; return true; };
   let best = null;
   for (let x = -SIZE_X / 2 + 1.5; x < SIZE_X / 2 - 1.5; x += 0.5) for (let z = -SIZE_Z / 2 + 1; z < SIZE_Z / 2 - 1.5; z += 0.5)
     if (fits(x, z) && (!best || Math.hypot(x - cx, z - cz) < best.d)) best = {x, z, d: Math.hypot(x - cx, z - cz)};
-  if (!best) return null;
+  if (!best) { noRoom = true; return null; }
   const out = {boxes: [], desks: []};
   workstation(out, best.x, best.z, 0);
   FLOOR.addBoxes(out.boxes); outCache.clear();
@@ -503,10 +508,19 @@ function deskLayout(names) {
     const color = DATA.profile(name).color;
     d.owner = name; racks?.attach(name, d);
     d.g.remove(d.chair); d.chair = chairFor(color); d.chair.position.set(0, 0, 0.8); d.chair.rotation.y = Math.PI; d.g.add(d.chair);
-    const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); d.g.add(mug);
+    const mug = V.mug(color); mug.position.set(0.6, 0.71, 0.08); d.g.add(mug); d.mug = mug;
     SPOTS.set(name, d);
   }
   if (DESKS.every(k => k.owner)) addPod() || addWorkstation();      // always one free desk for whoever comes in next
+}
+/** an agent left the room: its desk is free again (plain chair, no mug, screen off), so it does not stay taken by nobody */
+function releaseDesk(name) {
+  const d = SPOTS.get(name);
+  if (!d) return;
+  SPOTS.delete(name); d.owner = null; d.scrKey = null; d.beacon.visible = false;
+  if (d.mug) { d.g.remove(d.mug); d.mug = null; }
+  d.g.remove(d.chair); d.chair = chairFor(null); d.chair.position.set(0, 0, 0.8); d.chair.rotation.y = Math.PI; d.g.add(d.chair);
+  const {g, canvas: k} = d.scr; g.fillStyle = '#0b0e15'; g.fillRect(0, 0, k.lw, k.lh); g.fillStyle = '#1b2230'; g.fillRect(k.lw / 2 - 6, k.lh / 2 - 6, 12, 12); d.scr.tex.needsUpdate = true;
 }
 
 const _cupAt = new THREE.Vector3();
@@ -618,14 +632,17 @@ class Person {
     }
     if (this.cup?.visible) {
       this.cup.rotation.x = -P_.armR.rotation.x + 0.8 * this.sip;
-      if (Math.random() < dt * 1.5) { this.cup.getWorldPosition(_cupAt); _cupAt.y += 0.12; emit(1, _cupAt, {color: '#ffffff', speed: 0.04, up: 0.3, life: 1, size: 0.03, gravity: 0.1, glow: 0.9}); }
+      if (Math.random() < dt * 1.5) { this.cup.getWorldPosition(_cupAt); _cupAt.y += 0.12; emit(1, _cupAt, {color: '#ffffff', speed: 0.04, up: 0.3, life: 1, size: 0.03, gravity: 0.1, glow: 0.9, amb: true}); }
     }
   }
-  dispose() { scene.remove(this.root); this.root.traverse(o => { const i = raycastables.indexOf(o); if (i >= 0) raycastables.splice(i, 1); }); ui.remove(this.name); }     // the figure goes, and its tag with it
+  dispose() { scene.remove(this.root); this.root.traverse(o => { const i = raycastables.indexOf(o); if (i >= 0) raycastables.splice(i, 1); }); ui.remove(this.name); this.release?.(); }     // the figure goes, its tag with it, and its geometries when nobody else shares them
 }
 
+/** p looks at a point for ms; a new glance replaces the one before (whose timer would otherwise cut the new one short) */
+function glance(p, at, ms) { clearTimeout(p.lookT); p.look = at; p.lookT = setTimeout(() => { p.look = null; }, ms); }
+
 // ------------------------------------------------------------------ data
-const NEIGH = {rank: 0, room: null, rooms: [], profiles: {}};               // other sessions' rooms sharing this office
+const NEIGH ={rank: 0, room: null, rooms: [], profiles: {}};               // other sessions' rooms sharing this office
 const DATA = {
   all: [], config: {participants: [], profiles: {}, lang: 'it', user_name: 'USER', self_names: []}, state: {agents: {}}, loaded: false,
   profile(name) {
@@ -675,29 +692,36 @@ window.addEventListener('chatroom:neighbor', e => {
   }
   nLastN.set(title, top);
 });
+let neighborsText = '', neighborsBusy = false;
 async function pollNeighbors() {
-  if (VISIT) return;
+  if (VISIT || neighborsBusy) return;
+  neighborsBusy = true;
   try {
     const r = await fetch('neighbors.json', {cache: 'no-store'});
     if (!r.ok) return;
-    const n = await r.json(), list = n.rooms || (n.room ? [{...n.room, rank: n.rank ? 0 : 1}] : []);
+    const text = await r.text();
+    if (text === neighborsText) return;                                   // the same rooms doing the same: nothing to work out again
+    neighborsText = text;
+    const n = JSON.parse(text), list = n.rooms || (n.room ? [{...n.room, rank: n.rank ? 0 : 1}] : []);
     NEIGH.rank = n.rank || 0;
     NEIGH.rooms = list.map(room => ({...room, agents: room.agents.map(a => ({...a, key: `${a.name}@${room.title.slice(0, 16)}`}))}));
     NEIGH.room = NEIGH.rooms[0] || null;
     NEIGH.profiles = Object.fromEntries(NEIGH.rooms.flatMap(room => room.agents.map(a => [a.key, {emoji: a.emoji, color: a.color, role: '🏢 ' + room.title}])));
     derive();
-  } catch (e) {}
+  } catch (e) {} finally { neighborsBusy = false; }
 }
 setInterval(pollNeighbors, 2500);
+let stateBusy = false;                                                      // a slow answer is never asked for twice at once
 async function pollState() {
-  if (VISIT && visit) return;
-  try { const r = await fetch('state.json?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) { DATA.state = await r.json(); derive(); } } catch (e) {}
+  if ((VISIT && visit) || stateBusy) return;
+  stateBusy = true;
+  try { const r = await fetch('state.json?t=' + Date.now(), {cache: 'no-store'}); if (r.ok) { DATA.state = await r.json(); derive(); } } catch (e) {} finally { stateBusy = false; }
 }
 setInterval(pollState, 1000);
 // the timeline of every agent (activity.py, through /timeline.json): a strip in each tag and a chart in the inspector
 let TL = null;
 async function pollTimeline() {
-  if (VISIT) return;
+  if (VISIT || officeUnseen()) return;                                      // the server reads the transcripts for it: not while nobody looks
   try {
     const r = await fetch('timeline.json?span=1800', {cache: 'no-store'});
     if (!r.ok) return;
@@ -708,20 +732,33 @@ async function pollTimeline() {
 }
 setTimeout(pollTimeline, 1500); setInterval(pollTimeline, 5000);
 
-const cat = (tool, target = '') => !tool ? null : /^(Edit|Write|NotebookEdit|MultiEdit)$/.test(tool) ? 'code' : /^(Read|Grep|Glob|LS)$/.test(tool) ? 'read'
-  : tool === 'Bash' || tool === 'PowerShell' ? (target === 'chat:post' ? 'post' : target.startsWith('chat:') ? 'chat' : 'term')
+// the room's own commands, from the shell or from the MCP tools (activity.py names both chat:post, chat:wait...), are the chat
+const cat = (tool, target = '') => !tool ? null : target === 'chat:post' ? 'post' : target.startsWith('chat:') ? 'chat'
+  : /^(Edit|Write|NotebookEdit|MultiEdit)$/.test(tool) ? 'code' : /^(Read|Grep|Glob|LS)$/.test(tool) ? 'read'
+  : tool === 'Bash' || tool === 'PowerShell' ? 'term'
   : /^Web/.test(tool) ? 'web' : tool === 'Agent' || tool === 'Task' ? 'agent' : tool === 'SendMessage' ? 'msg' : 'other';
 const pctOf = text => { const n = [...String(text).matchAll(PCT)].map(m => +m[1]).filter(x => x <= 100); return n.length ? Math.min(...n) : null; };
-const tagsName = (text, name) => new RegExp(`(^|[^\\w@])@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i').test(text || '');
+/** the percentage a message states: a JSON status's own pct (its evidence may hold other percentages), else the lowest in the text */
+const pctOfMsg = m => Number.isFinite(m?.state?.pct) ? m.state.pct : pctOf(m.text);
+const TAG_RE = new Map();                                                  // one RegExp per name, not one per message
+const tagsName = (text, name) => {
+  let re = TAG_RE.get(name);
+  if (!re) { re = new RegExp(`(^|[^\\w@])@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`, 'i'); TAG_RE.set(name, re); }
+  return re.test(text || '');
+};
 
 let D = {names: [], self: new Set(), lead: 'LEAD', user: 'USER', per: {}, plan: null, closed: null, waiting: new Set()};
 let lastSeenN = 0, firstDerive = true, lastClosedN = 0;
-function derive() {
-  const c = DATA.config, all = DATA.all, now = Date.now() / 1000, hb = c.heartbeat || 120;
+// what only the chat and the config decide (names, plan, votes, each one's last messages, percentage, tags): worked out again only when one of
+// them is a new object (the viewer makes new ones only when they changed), not at every state poll
+let chatMemo = {all: null, config: null, base: null};
+function chatBase(c, all) {
   const user = c.user_name || 'USER', selfNames = new Set([user, ...(c.user_aliases || []), ...(c.self_names || [])]);
-  const leadNames = (c.self_names || []).filter(n => all.some(m => m.from === n));
+  const byFrom = new Map();                                                // one pass over the chat instead of one per name
+  for (const m of all) { let l = byFrom.get(m.from); if (!l) byFrom.set(m.from, l = []); l.push(m); }
+  const leadNames = (c.self_names || []).filter(n => byFrom.has(n));
   const lead = leadNames[leadNames.length - 1] || (c.self_names || [])[0] || 'LEAD';
-  const names = [...new Set([...(c.participants || []), ...all.map(m => m.from).filter(n => !selfNames.has(n))])].filter(n => !(c.left || []).includes(n));
+  const names = [...new Set([...(c.participants || []), ...[...byFrom.keys()].filter(n => !selfNames.has(n))])].filter(n => !(c.left || []).includes(n));
   let plan = null, closed = null;
   for (const m of all) {
     if (m.kind) continue;
@@ -733,14 +770,28 @@ function derive() {
   if (plan) for (const m of all) { const v = String(m.text).match(VOTE); if (v && +v[2] === plan.v && m.n > plan.n) votes[m.from] = /no/i.test(v[3]) ? 'no' : 'yes'; }
   const per = {};
   for (const name of names) {
-    const mine = all.filter(m => m.from === name), last = mine[mine.length - 1];
-    let pct = null; for (let i = mine.length - 1; i >= 0 && pct === null; i--) pct = pctOf(mine[i].text);
-    const real = [...mine].reverse().find(m => !m.kind);
-    const idle = last?.kind === 'idle', silence = last ? now - (last.ts || now) : null;
-    const after = all.filter(m => m.n > (last?.n || 0) && m.from !== name);
-    const tagged = after.some(m => tagsName(m.text, name) || EVERY.test(m.text) || m.from === user);
-    per[name] = {pct, idle, late: !idle && silence !== null && silence > hb, silence, last, real, tagged, vote: votes[name] || null,
-                 a: (DATA.state.agents || {})[name] || null, msgs: mine.filter(m => !m.kind).slice(-3).reverse()};
+    const mine = byFrom.get(name) || [], last = mine[mine.length - 1];
+    let pct = null; for (let i = mine.length - 1; i >= 0 && pct === null; i--) pct = pctOfMsg(mine[i]);
+    let real = null; for (let i = mine.length - 1; i >= 0 && !real; i--) if (!mine[i].kind) real = mine[i];
+    let tagged = false;                                                    // a message after its last one tags it, tags everyone or comes from the user
+    for (let i = all.length - 1; i >= 0 && !tagged; i--) {
+      const m = all[i];
+      if (m.n <= (last?.n || 0)) break;
+      if (m.from !== name && (tagsName(m.text, name) || EVERY.test(m.text) || m.from === user)) tagged = true;
+    }
+    const msgs = []; for (let i = mine.length - 1; i >= 0 && msgs.length < 3; i--) if (!mine[i].kind) msgs.push(mine[i]);
+    per[name] = {pct, last, real, tagged, vote: votes[name] || null, msgs, idle: last?.kind === 'idle'};
+  }
+  return {user, selfNames, lead, names, plan, closed, per};
+}
+function derive() {
+  const c = DATA.config, all = DATA.all, now = Date.now() / 1000, hb = c.heartbeat || 120;
+  if (chatMemo.all !== all || chatMemo.config !== c) chatMemo = {all, config: c, base: chatBase(c, all)};
+  const {user, selfNames, lead, plan, closed} = chatMemo.base, names = [...chatMemo.base.names];
+  const per = {};
+  for (const name of chatMemo.base.names) {                                // the clock and the tools: every time
+    const b = chatMemo.base.per[name], silence = b.last ? now - (b.last.ts || now) : null;
+    per[name] = {...b, late: !b.idle && silence !== null && silence > hb, silence, a: (DATA.state.agents || {})[name] || null};
   }
   // the other session's agents: names, colours, working or on a break, the tool they run; their chat stays theirs
   for (const room of NEIGH.rooms) for (const a of room.agents) {
@@ -863,21 +914,21 @@ let watching = null;
 /** the agent turns to you and the chat opens with its name tagged */
 function talkTo(name) {
   const p = people.get(name) || (name === D.lead ? assistant : null);
-  if (p) { p.look = boss.head(); setTimeout(() => { p.look = null; }, 4000); }
+  if (p) { glance(p, boss.head(), 4000); }
   if (mode === 'office') { mode = 'split'; setPref('mode', mode); applyMode(); }
   window.chatroom?.tag(name);
 }
 /** Q: a wave; whoever is near turns to look */
 function wave() {
   me.waveUntil = performance.now() / 1000 + 2.2;
-  for (const p of [...people.values(), assistant]) if (p && p.pos.distanceTo(boss.pos) < 7) { p.look = boss.head(); setTimeout(() => { p.look = null; }, 2500); }
+  for (const p of [...people.values(), assistant]) if (p && p.pos.distanceTo(boss.pos) < 7) { glance(p, boss.head(), 2500); }
 }
 /** from the inspector: walk up to an agent and stop a step in front of it */
 function walkOver(name) {
   const p = people.get(name) || (name === D.lead ? assistant : null);
   if (!p || !boss) return;
   const goal = nearestFree(p.pos.clone().add(boss.pos.clone().sub(p.pos).setY(0).setLength(1.1)));
-  walkTo(goal, {pos: goal, rot: Math.atan2(p.pos.x - goal.x, p.pos.z - goal.z), pose: 'stand'}, () => { p.look = boss.head(); setTimeout(() => { p.look = null; }, 3000); });
+  walkTo(goal, {pos: goal, rot: Math.atan2(p.pos.x - goal.x, p.pos.z - goal.z), pose: 'stand'}, () => { glance(p, boss.head(), 3000); });
 }
 /** a click outside first person: the coffee machine, a free seat, or that spot on the floor */
 function goToPoint(p) {
@@ -1094,7 +1145,11 @@ function sync() {
     if (subs === 0 && interns.has(name)) { const it = interns.get(name); emit(25, it.head(), {color: ['#ffffff', DATA.profile(name).color]}); it.dispose(); interns.delete(name); }
     spot.beacon.visible = !!a?.waiting;
   }
-  for (const [name, p] of people) if (!D.names.includes(name)) { p.dispose(); people.delete(name); racks?.detach(name); }
+  const here = new Set(D.names);
+  for (const [name, p] of people) if (!here.has(name)) {
+    p.dispose(); people.delete(name); racks?.detach(name); releaseDesk(name);
+    const it = interns.get(name); if (it) { it.dispose(); interns.delete(name); }     // its subagent goes with it
+  }
 }
 
 // what happened since the last update: bubbles, planes, confetti, chimes, notifications
@@ -1117,8 +1172,8 @@ function events() {
       if (PLAN.test(m.text)) sendVisit(from, boardSpot(), 14, 'raise');
       else { const mate = D.names.find(n => n !== m.from && SPOTS.has(n) && tagsName(m.text, n)); if (mate) sendVisit(from, SPOTS.get(mate).stand, REVIEW.test(m.text) ? 12 : 7, REVIEW.test(m.text) ? 'read' : 'speak', people.get(mate)); }
     }
-    if (m.from === D.user) for (const p of people.values()) { p.look = boss.head(); setTimeout(() => { p.look = null; }, 3500); }
-    if (assistant && from !== assistant) { assistant.look = from.head(); assistant.act = 'read'; setTimeout(() => { assistant.look = null; }, 2500); }
+    if (m.from === D.user) for (const p of people.values()) { glance(p, boss.head(), 3500); }
+    if (assistant && from !== assistant) { glance(assistant, from.head(), 2500); assistant.act = 'read'; }
     emit(10, from.head(), {color: ['#fff59d', '#ffffff'], speed: 1, up: 1.2, life: 0.7, size: 0.05});
     if (tagsName(m.text, D.user)) notify('tag' + m.n, `💬 ${m.from} → ${D.user}`, m.text.slice(0, 160), false, () => window.chatroom?.jumpTo(m.n));
     if (CLOSED.test(m.text) && m.n > lastClosedN) {
@@ -1140,8 +1195,15 @@ function events() {
 let printJob = 0;
 
 // ------------------------------------------------------------------ boards: TV, whiteboard, coffee sign, nameplate, clock
+// each board is drawn again only when what it shows changed (a canvas upload of 1-5 MB each, at every state poll before), and not at all
+// while nobody can see the office (chat alone, a hidden tab): then it is drawn when the office comes back
+const boardSigs = {};
+const boardChanged = (k, sig) => boardSigs[k] === sig ? false : (boardSigs[k] = sig, true);
+const officeUnseen = () => document.hidden || document.body.classList.contains('mode-chat');
+let boardsStale = false;
 function drawScoreboard() {
   const {g, canvas: k} = scoreboard, L = ui.t(), data = commonState?.scores || {}, me = myName();
+  if (!boardChanged('scores', `${scoresKey}|${me}|${DATA.config.lang}`)) return;
   g.fillStyle = '#10131c'; g.fillRect(0, 0, k.lw, k.lh); g.fillStyle = '#1b2233'; g.fillRect(0, 0, k.lw, 50);
   g.fillStyle = '#ffd54f'; g.font = '800 26px sans-serif'; g.textBaseline = 'alphabetic'; g.fillText('🏆 ' + L.scores.toUpperCase(), 14, 36);
   const games = [['pool', '🎱', L.pool], ['pingpong', '🏓', 'Ping pong'], ['foos', '⚽', L.foosball], ['tris', '⭕', L.tris], ['morra', '✊', L.morra], ['zombie', '🧟', 'Zombie'], ['paintball', '🔫', 'Paintball'],
@@ -1160,6 +1222,7 @@ function drawScoreboard() {
 // the task board (chat.py task / board.json), read every 3 s; the whiteboard shows it when it has tasks
 let boardData = null, boardSig = '';
 async function pollBoard() {
+  if (officeUnseen() && boardData) return;
   try {
     const r = await fetch('board.json', {cache: 'no-store'}); if (!r.ok) return;
     const text = await r.text(); if (text === boardSig) return;
@@ -1169,11 +1232,21 @@ async function pollBoard() {
 if (!VISIT) { pollBoard(); setInterval(pollBoard, 3000); }
 function drawBoards() {
   const c = DATA.config, L = ui.t();
+  if (LAYOUT.bridge) {                                // the bridge is not a drawing: it opens the way, seen or not
+    const shared = VISIT || commonRoom().shared;
+    bridge.visible = shared; commonDoor.visible = !shared;
+    if (shared !== bridgeOpen) { bridgeOpen = shared; openBridge(shared); }
+  }
+  if (officeUnseen()) { boardsStale = true; return; }
+  boardsStale = false;
   drawScoreboard(); signs?.redraw();
-  {
+  const visiting = VISIT && visit, liveMsgs = [];
+  if (visiting) liveMsgs.push(...(DATA.live || []).slice(-4));
+  else for (let i = D.all.length - 1; i >= 0 && liveMsgs.length < 4; i--) if (!D.all[i].kind) liveMsgs.unshift(D.all[i]);
+  if (boardChanged('tv', JSON.stringify([c.lang, D.user, !!visiting, liveMsgs.map(m => [m.n, m.from, DATA.profile(m.from).color, m.text])]))) {
     const {g, canvas: k} = tv; g.fillStyle = '#0d1018'; g.fillRect(0, 0, k.lw, k.lh);
     g.fillStyle = '#4fc3f7'; g.font = '700 22px sans-serif'; g.fillText('● LIVE', 14, 30);
-    const visiting = VISIT && visit, msgs = (visiting ? DATA.live || [] : D.all.filter(m => !m.kind)).slice(-4); let y = 62;
+    const msgs = liveMsgs; let y = 62;
     if (visiting && !msgs.length) { g.fillStyle = '#6b7280'; g.font = '16px sans-serif'; g.fillText(c.lang === 'en' ? 'the chat is not shared' : 'chat non condivisa', 14, 62); }
     g.font = '17px sans-serif';
     for (const m of msgs) {
@@ -1182,7 +1255,12 @@ function drawBoards() {
     }
     tv.tex.needsUpdate = true;
   }
-  if (boardData?.tasks?.length) {                     // the room's task board (chat.py task): to do, in progress, done, and the last fact
+  const colorsOf = list => list.map(n => DATA.profile(n).color).join();
+  const wbSig = boardData?.tasks?.length
+    ? JSON.stringify([L.bTodo, boardSig, colorsOf(boardData.tasks.map(t => t.owner || t.by).filter(Boolean))])
+    : JSON.stringify([c.lang, D.names.map(n => [n, DATA.profile(n).color, !!D.per[n].a?.waiting, !!D.per[n].idle, D.per[n].vote]), D.plan, D.closed?.v]);
+  if (!boardChanged('wb', wbSig)) {}
+  else if (boardData?.tasks?.length) {                // the room's task board (chat.py task): to do, in progress, done, and the last fact
     const {g, canvas: k} = wb, f = k.lw / 512; g.fillStyle = '#f7f7f2'; g.fillRect(0, 0, k.lw, k.lh);
     const cols = [[`📝 ${L.bTodo}`, '#f5b400', 'open'], [`⚙️ ${L.bDoing}`, '#1e88e5', 'taken'], [`✅ ${L.bDone}`, '#43a047', 'done']], w = k.lw / 3;
     const fact = boardData.facts?.[boardData.facts.length - 1], foot = fact ? 26 * f : 6 * f;
@@ -1219,27 +1297,24 @@ function drawBoards() {
     if (D.plan) { g.fillStyle = D.closed ? '#2e7d32' : '#f5b400'; g.font = '800 20px sans-serif'; g.fillText(D.closed ? `${L.done} v${D.closed.v}` : `PLAN v${D.plan.v} · ${D.plan.author}`, 12, k.lh - 14); }
     wb.tex.needsUpdate = true;
   }
-  {
+  if (boardChanged('coffee', c.lang)) {
     const {g, canvas: k} = coffeeSign; g.fillStyle = '#2b2f36'; g.fillRect(0, 0, k.lw, k.lh);
     g.font = '700 46px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#f3e3c3';
     g.fillText(DATA.config.lang === 'en' ? '☕ coffee' : '☕ caffè', k.lw / 2, k.lh / 2 + 3); g.textAlign = 'left';
     coffeeSign.tex.needsUpdate = true;
   }
-  {
+  if (boardChanged('nameplate', D.user)) {
     const {g, canvas: k} = nameplate; g.fillStyle = '#1b1b1b'; g.fillRect(0, 0, k.lw, k.lh);
     g.fillStyle = '#d4a640'; g.font = '700 40px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(`👑 ${D.user}`, k.lw / 2, k.lh / 2 + 2);
     g.textAlign = 'left'; nameplate.tex.needsUpdate = true;
   }
-  if (LAYOUT.bridge) {
-    const shared = VISIT || commonRoom().shared;
-    bridge.visible = shared; commonDoor.visible = !shared;
-    if (shared !== bridgeOpen) { bridgeOpen = shared; openBridge(shared); }
+  if (LAYOUT.bridge && boardChanged('friend', L.friendOffice)) {
     const {g, canvas: k} = friendSign;
     g.fillStyle = '#0f1a24'; g.fillRect(0, 0, k.lw, k.lh); g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillStyle = '#80deea'; g.font = '700 22px "Segoe UI", sans-serif'; g.fillText(`🌐 ${L.friendOffice}`, k.lw / 2, k.lh / 2 + 1);
     g.textAlign = 'left'; friendSign.tex.needsUpdate = true;
   }
-  if (commonSign) {
+  if (commonSign && boardChanged('common', JSON.stringify([L.common, commonRoom().all, [...commonRoom().who], commonRoom().shared]))) {
     const {g, canvas: k} = commonSign, room = commonRoom();
     g.fillStyle = '#2b2f36'; g.fillRect(0, 0, k.lw, k.lh); g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillStyle = '#f3e3c3'; g.font = '700 25px "Segoe UI", sans-serif'; g.fillText(`🛋 ${L.common}`, k.lw / 2, k.lh * 0.36);
@@ -1259,9 +1334,16 @@ function drawClock() {
 }
 
 // the screen of each desk shows what its agent does
+// what makes a screen's picture: the act, the colour and the tick its drawing moves at (a chat screen never moves; the web globe, the
+// floating icon and the agent turn smoothly, so they always draw)
+const SCREEN_TICK = {code: 6, other: 6, term: 6, read: 2, raise: 3, post: 0, chat: 0, speak: 0};
 function drawScreen(name, act, t) {
   const spot = SPOTS.get(name); if (!spot) return;
-  const {g, canvas: k} = spot.scr, W = k.lw, H = k.lh, color = DATA.profile(name).color;
+  const color = DATA.profile(name).color, tick = SCREEN_TICK[act];
+  const key = tick === undefined ? null : `${act}|${color}|${tick ? Math.floor(t * tick) : 0}`;
+  if (key && key === spot.scrKey) return;
+  spot.scrKey = key;
+  const {g, canvas: k} = spot.scr, W = k.lw, H = k.lh;
   g.fillStyle = '#0e1320'; g.fillRect(0, 0, W, H);
   const r = V.rnd(Math.floor(t * 3) + V.hashName(name));
   if (act === 'code' || act === 'other') {
@@ -1477,14 +1559,16 @@ setInterval(() => {
   if (!boss || !linked()) return;
   const pos = {x: boss.pos.x, y: boss.pos.y + (boss.lvl || 0), z: boss.pos.z, rot: boss.rot, pose: boss.pose, where: visit ? 'visit:' + visit.host : 'home', look: myLook, jump: jumpSeq, pb: myPb};
   const key = JSON.stringify(pos, (k, v) => typeof v === 'number' ? Math.round(v * 20) / 20 : v);
-  if (key !== presenceSent) {
-    presenceSent = key;
-    post('presence', pos).then(r => { if (r && r.status === 404 && !oldServerSaid) { oldServerSaid = true; ui.roomTip(ui.t().oldServer, 20, 120); } });
+  if (key !== presenceSent && !presencePosting) {                          // one at a time: over a slow tunnel they would cross and land out of order
+    presenceSent = key; presencePosting = true;
+    post('presence', pos).then(r => { if (r && r.status === 404 && !oldServerSaid) { oldServerSaid = true; ui.roomTip(ui.t().oldServer, 20, 120); } }).finally(() => { presencePosting = false; });
   }
 }, 200);
+let presencePosting = false, presenceAsking = false;
 setInterval(async () => {
-  if (!linked()) return;
-  try { const r = await fetch('presence.json', {cache: 'no-store'}); if (r.ok) { presence = await r.json(); placeOthers(); } } catch (e) {}
+  if (!linked() || presenceAsking) return;
+  presenceAsking = true;
+  try { const r = await fetch('presence.json', {cache: 'no-store'}); if (r.ok) { presence = await r.json(); placeOthers(); } } catch (e) {} finally { presenceAsking = false; }
 }, 300);
 function placeOthers() {
   const meName = presence.me, here = 'visit:' + (visit ? visit.host : meName);
@@ -1682,7 +1766,8 @@ function nearestLights(t) {
   if (t - lightsAt < 0.25 || pointLights.length <= LIGHT_POOL) return;
   lightsAt = t;
   const from = pov ? camera.position : controls.target;
-  for (const l of pointLights) { l.getWorldPosition(_lp); l.userData.k = (l.intensity > 0 ? 0 : 1e6) + ((_lp.y > 3.7) !== (level === 'arena') ? 1e6 : 0) + _lp.distanceToSquared(from); }
+  const lit = l => { if (!(l.intensity > 0)) return false; for (let o = l.parent; o; o = o.parent) if (!o.visible) return false; return true; };   // a light in a hidden group (the bridge while not shared) lights nothing
+  for (const l of pointLights) { l.getWorldPosition(_lp); l.userData.k = (lit(l) ? 0 : 1e6) + ((_lp.y > 3.7) !== (level === 'arena') ? 1e6 : 0) + _lp.distanceToSquared(from); }
   pointLights.sort((a, b) => a.userData.k - b.userData.k).forEach((l, i) => { l.visible = i < LIGHT_POOL; });
 }
 
@@ -1701,7 +1786,7 @@ function watchCinema() {
 // Smooth before sharp: when frames come slower than about 48 a second while the office moves, draw fewer pixels (down
 // to 60% of the quality's own); when they come back fast, give the pixels back. A slow GPU keeps 60 fps, a fast one
 // never notices.
-let drawnAt = 0, frameEma = 16.7, dynAt = 0;
+let drawnAt = 0, frameEma = 16.7, dynAt = 0, dynDir = 0;
 function steerResolution(now) {
   if (speed === 'idle' || document.hidden) { drawnAt = 0; return; }        // 30 fps on purpose, or not on screen: nothing to learn
   if (drawnAt) frameEma += (now - drawnAt - frameEma) * 0.1;
@@ -1709,29 +1794,35 @@ function steerResolution(now) {
   if (now - dynAt < 1500) return;
   const next = frameEma > 21 ? Math.max(0.6, dynScale - 0.1) : frameEma < 17.6 ? Math.min(1, dynScale + 0.05) : dynScale;
   if (next === dynScale) return;
-  dynScale = next; dynAt = now; renderer.setPixelRatio(basePr * dynScale); resize();
+  const dir = Math.sign(next - dynScale);
+  if (dir !== dynDir && now - dynAt < 6000) return;                       // turning back so soon would see-saw (and each step reallocates the targets)
+  dynScale = next; dynAt = now; dynDir = dir; renderer.setPixelRatio(basePr * dynScale); resize();
 }
 
 // ------------------------------------------------------------------ loop
 const FORCE = /[?&]force\b/.test(location.search);              // keep drawing in a hidden tab (screenshots, tests)
-let last = performance.now(), acc = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0, lastInput = 0, shadowAt = 0, speed = 'idle';
+let last = performance.now(), acc = 0, drewAt = 0, hourDrawn = -1, secDrawn = -1, screenAcc = 0, uiAcc = 0, lastInput = 0, shadowAt = 0, speed = 'idle';
 for (const ev of ['pointerdown', 'pointermove', 'wheel']) root.addEventListener(ev, () => { lastInput = performance.now(); }, {passive: true, capture: true});
 const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sp = new THREE.Vector3();
 function frame(now) {
   requestAnimationFrame(frame);
   const startAt = performance.now();
   if (mode === 'chat' || (document.hidden && !FORCE)) { last = now; return; }
+  if (boardsStale && DATA.loaded) drawBoards();                             // the boards skipped while nobody could see them
   // how fast to draw: full speed while you use the office (mouse, keys, your figure walking), calmer while agents work, slow when all is idle
   if (editor.active() !== bakedEditing) { bakedEditing = editor.active(); baked.setEditing(bakedEditing); climb = null; }
   const using = now - lastInput < 4000 || tween || flyHome || (pov && !povLocked) || keys.size || boss?.path.length || me.act === 'brew';
-  const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length || planes.length || pov;
+  const working = D.names.some(n => D.per[n] && !D.per[n].idle) || P.length > ambient || planes.length || pov;      // the steam never stops: it alone keeps nothing awake
   const covered = games.active() || arcade?.active() || github?.active() || racks?.active();       // a game, the arcade or a panel covers the office (dimmed): it only needs the calm rate, the game gets the GPU
   speed = covered ? 'idle' : using ? 'use' : working ? 'work' : 'idle';
   // smooth first: 60 while you use it or agents work (a 144 Hz screen would only burn the GPU), 30 when nothing moves
   const fps = {use: 60, work: quality === 'bassa' ? 30 : 60, idle: quality === 'bassa' ? 15 : 30}[speed];
   acc += now - last; last = now;
   if (acc < 1000 / fps - 2) return;                                             // 2 ms slack: a 60 cap on a 60 Hz screen must not drop to 30
-  const dt = Math.min(0.1, acc / 1000); acc = 0; frameT = now / 1000;
+  // the time left over goes to the next frame (at most one frame's worth): with acc = 0 a 75-165 Hz screen gave 37-55 frames a second, and the
+  // resolution steering read those slow frames as a slow GPU
+  const dt = Math.min(0.1, (now - (drewAt || now - 1000 / fps)) / 1000); drewAt = now;           // the real time since the last frame drawn
+  acc = Math.max(0, Math.min(acc - 1000 / fps, 1000 / fps)); frameT = now / 1000;
   const t = now / 1000, d = new Date(), hour = d.getHours() + d.getMinutes() / 60;
   if (Math.floor(hour * 4) !== hourDrawn) { hourDrawn = Math.floor(hour * 4); drawSky(hour); }
   if (d.getSeconds() !== secDrawn) { secDrawn = d.getSeconds(); drawClock(); }
@@ -1758,9 +1849,14 @@ function frame(now) {
     for (const [n, p] of people) { const sc = SPOTS.get(n)?.scr; if (sc && _fr.containsPoint(sc.mesh.getWorldPosition(_sp))) drawScreen(n, p.act, t); }
   }
   for (const s of SPOTS.values()) if (s.beacon.visible) { s.beacon.rotation.y += dt * 6; s.beaconLight.intensity = 1.6 + Math.sin(t * 9) * 1.2; } else s.beaconLight.intensity = 0;
-  for (let i = 0; i < LED_AT.length; i++) { ledColor.set(LED_AT[i][1] ? '#ff5252' : (Math.sin(t * (2 + i % 5) + i) > 0.2 ? ['#00e676', '#40c4ff', '#ffab40'][i % 3] : '#10301c')).multiplyScalar(1.15); leds.setColorAt(i, ledColor); }
-  if (leds.instanceColor) leds.instanceColor.needsUpdate = true;
-  for (const at of STEAM) if (Math.random() < dt * 3) emit(1, at, {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9});
+  let ledsChanged = false;                                                    // a LED is red, lit or dark: only a change is uploaded
+  for (let i = 0; i < LED_AT.length; i++) {
+    const s = LED_AT[i][1] ? 4 : Math.sin(t * (2 + i % 5) + i) > 0.2 ? i % 3 : 3;
+    if (ledState[i] === s) continue;
+    ledState[i] = s; leds.setColorAt(i, LED_COLORS[s]); ledsChanged = true;
+  }
+  if (ledsChanged && leds.instanceColor) leds.instanceColor.needsUpdate = true;
+  for (const at of STEAM) if (Math.random() < dt * 3) emit(1, at, {color: '#ffffff', speed: 0.1, up: 0.5, life: 1.6, size: 0.05, gravity: 0.25, glow: 0.9, amb: true});
   if (printJob > 0 && Math.random() < dt * 2) { printJob -= 1; emit(1, PAPER, {color: '#ffffff', speed: 0.2, up: 1.5, life: 2, size: 0.18, gravity: -1.5, glow: 1}); }
   stepParticles(dt); stepPlanes(dt);
   cutWalls();
@@ -1943,7 +2039,7 @@ const arcade = ARC_ON ? createArcade({THREE, scene, camera, raycastables, root, 
 if (arcade) ui.addExtra('arcade', '🕹', 'Arcade', () => arcade.open());
 racks = visit ? null : createRacks({THREE, V, root, raycastables, lang: () => DATA.config.lang,
                                     tail: (name, id) => fetch(`procs.json?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}&n=14`, {cache: 'no-store'}).then(r => r.json())});
-if (!visit) github = createGithubWall({board: ghBoard, frame: ghFrame, raycastables, root, lang: () => DATA.config.lang, onEnabled: () => ui.addExtra('github', '🐙', 'GitHub', () => github.open())});
+if (!visit) github = createGithubWall({board: ghBoard, frame: ghFrame, raycastables, root, lang: () => DATA.config.lang, paused: officeUnseen, onEnabled: () => ui.addExtra('github', '🐙', 'GitHub', () => github.open())});
 const GAME_TABLES = ITEM_MESHES.filter(m => CATALOG[itemOf(m)?.type]?.game).map(m => {
   const type = itemOf(m).type, [w, d] = CATALOG[type].foot, c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
   m.userData.game = type; raycastables.push(m);

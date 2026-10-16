@@ -10,12 +10,13 @@ same rules, no quoting.
 - new messages, only what concerns you (tags, the user, the lead, plans, board lines and needs that name you) in full,
   the rest as one digest line per author; use it while you work, the plain read when you need the whole picture:
                          python "{{CHAT}}" read --focus --as {{NAME}} --room "{{ROOM}}"
-- wait for someone (blocks up to ~100 s, returns early when someone writes or your timer expires):
-                         python "{{CHAT}}" wait --as {{NAME}} --room "{{ROOM}}" --timeout 100
+- wait for someone (blocks up to ~100 s, returns early when someone writes or your timer expires; --focus shows what
+  arrives as read --focus does, drop it when you need everything in full):
+                         python "{{CHAT}}" wait --focus --as {{NAME}} --room "{{ROOM}}" --timeout 100
 - wait while you are IDLE (rule 9; blocks up to 540 s, returns only when you are tagged, the user or the lead writes,
   or someone posts a PLAN, a VOTE or a CLOSED; give the shell call a timeout of at least 600 s, 600000 ms for the
   Bash tool of Claude Code; if your shell hands the command back while it still runs, keep polling it until it ends):
-                         python "{{CHAT}}" wait --as {{NAME}} --room "{{ROOM}}" --timeout 540
+                         python "{{CHAT}}" wait --focus --as {{NAME}} --room "{{ROOM}}" --timeout 540
 - write (always with a QUOTED heredoc, so apostrophes and quotes pass):
 python "{{CHAT}}" post --as {{NAME}} --room "{{ROOM}}" <<'EOF'
 your message

@@ -615,7 +615,19 @@ export function createGames({root, t, me, sendShot, onResult}) {
     for (const [px, py] of POCKETS) { gr = k.createRadialGradient(px, py, 2, px, py, POCKET + 2); gr.addColorStop(0, '#000'); gr.addColorStop(1, '#1a1a1a'); k.fillStyle = gr; k.beginPath(); k.arc(px, py, POCKET, 0, 7); k.fill(); }
     return cv;
   })();
+  // each ball painted once per scale of the canvas (its shadow, stripe, number and shine: a gradient and a clip each), then copied: 16 balls
+  // a frame cost 16 radial gradients and 7 clips
+  const ballSprites = new Map(), PAD = 6;
   function drawBall(g, x, y, n) {
+    const s = g.getTransform().a || 1, key = n + '|' + s, size = 2 * (R + PAD);
+    let sp = ballSprites.get(key);
+    if (!sp) {
+      sp = document.createElement('canvas'); sp.width = sp.height = Math.ceil(size * s);
+      const k = sp.getContext('2d'); k.scale(s, s); paintBall(k, R + PAD, R + PAD, n); ballSprites.set(key, sp);
+    }
+    g.drawImage(sp, x - R - PAD, y - R - PAD, sp.width / s, sp.height / s);
+  }
+  function paintBall(g, x, y, n) {
     g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(x + 2.5, y + 3.5, R, R * 0.85, 0, 0, 7); g.fill();
     g.fillStyle = n > 8 ? '#f5f5f5' : COLORS[n]; g.beginPath(); g.arc(x, y, R, 0, 7); g.fill();
     if (n > 8) { g.save(); g.beginPath(); g.arc(x, y, R, 0, 7); g.clip(); g.fillStyle = COLORS[n]; g.fillRect(x - R, y - 5, 2 * R, 10); g.restore(); }

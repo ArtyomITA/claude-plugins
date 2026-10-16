@@ -417,6 +417,7 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
   root.addEventListener('pointerdown', e => { if (!e.target.closest('.o-more')) closeMenu(); }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   const labels = new Map(), itemLabels = new Map(), tlData = new Map();
+  let hudKey = '', inspHtml = '', inspTl = '';
   /** the strip over the head of an agent: its calls of the last ten minutes (office-timeline.js), only when there is something to show */
   function drawTl(name) {
     const l = labels.get(name), a = tlData.get(name);
@@ -454,7 +455,9 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
     t,
     /** place a tag at screen x, y (CSS pixels); visible false hides it */
     place(name, x, y, visible, scale = 1) {
-      const l = label(name);
+      const l = label(name), at = `${visible ? 1 : 0}|${x.toFixed(1)}|${y.toFixed(1)}|${scale.toFixed(3)}`;
+      if (at === l.at) return;                                            // a still camera: the same place, nothing to write (16 times a second)
+      l.at = at;
       l.el.style.opacity = visible ? '1' : '0';
       l.el.style.left = x + 'px'; l.el.style.top = y + 'px';
       l.el.style.transform = `translate(-50%, -100%) scale(${scale})`;
@@ -474,6 +477,9 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       l.bub.innerHTML = d.bubble ? `<div class="o-bubble o-${esc(d.bubbleKind || 'x')}">${esc(d.bubble)}</div>` : '';
     },
     hud(d) {
+      const key = JSON.stringify([d, lang, cp.classList.contains('o-open'), menuEl.classList.contains('o-open'), notifyOn(), extras.size]);
+      if (key === hudKey) return;                                       // 16 times a second, almost always the same: about thirty DOM writes saved
+      hudKey = key;
       chip('title').textContent = d.title; chip('pct').textContent = d.pct == null ? '–' : `${d.pct}%`;
       chip('wait').style.display = d.waiting ? '' : 'none'; chip('wait').textContent = `🙋 ${t().waiting(d.waiting)}`;
       chip('work').textContent = `⚙️ ${t().working(d.working)}`; chip('idle').textContent = `💤 ${t().idles(d.idle)}`;
@@ -493,27 +499,36 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
       const ht = d.pov ? t().povHelp : t().help; if (helpEl.textContent !== ht) helpEl.textContent = ht;
     },
     inspect(d) {
-      if (!d) { insp.classList.remove('o-open'); return; }
+      if (!d) { insp.classList.remove('o-open'); inspHtml = inspTl = ''; return; }
       insp.classList.add('o-open');
       const bins = new Array(30).fill(0);
       for (const age of d.pulse || []) bins[Math.max(0, 29 - Math.floor(age / 10))]++;
       const max = Math.max(1, ...bins);
       const ctx = d.ctx && d.window ? Math.min(100, Math.round(100 * d.ctx / d.window)) : null;
-      insp.innerHTML = `<h3><span>${esc(d.emoji)}</span>${esc(d.name)}</h3>
-        <div class="o-meta">${esc([d.role, d.model, d.state].filter(Boolean).join(' · '))}</div>
+      // a frame built once per agent (title, the chart's canvas, the buttons) and parts filled only when they changed: a rebuild between the
+      // press and the release of a button swallowed the click, and the card was rebuilt every second
+      const frame = `<h3><span>${esc(d.emoji)}</span>${esc(d.name)}</h3><div class="o-i-top"></div>
+        <div class="o-i-tl"${d.tl ? '' : ' hidden'}><div>${t().tl}</div><canvas class="o-chart" width="544" height="300"></canvas><div class="o-meta">${t().tlHint}</div></div>
+        <div class="o-i-low"></div>
+        <div class="o-row"><button data-x="tag">${t().tag}</button><button data-x="jump">${t().jump}</button>${d.you ? '' : `<button data-x="go">🚶 ${t().go}</button>`}</div>`;
+      if (frame !== inspHtml) {
+        inspHtml = frame; inspTl = '';
+        insp.innerHTML = frame;
+        insp.querySelector('[data-x="tag"]').onclick = () => onTag(d.name);
+        insp.querySelector('[data-x="go"]')?.addEventListener('click', () => onGo(d.name));
+        insp.querySelector('.o-i-low').onclick = e => { const el = e.target.closest('[data-n]'); if (el) onJump(+el.dataset.n); };
+      }
+      insp.querySelector('[data-x="jump"]').onclick = () => onJump(d.lastN);            // its latest message moves on
+      const part = (sel, html) => { const el = insp.querySelector(sel); if (el._html !== html) { el.innerHTML = html; el._html = html; } };
+      part('.o-i-top', `<div class="o-meta">${esc([d.role, d.model, d.state].filter(Boolean).join(' · '))}</div>
         ${d.pct != null ? `<div>${d.pct}%</div><div class="o-bar"><div style="width:${d.pct}%;background:${esc(d.color)}"></div></div>` : ''}
         ${ctx != null ? `<div>${t().ctx}: ${Math.round(d.ctx / 1000)}k / ${Math.round(d.window / 1000)}k (${ctx}%)</div><div class="o-bar"><div style="width:${ctx}%"></div></div>` : ''}
-        ${d.pulse ? `<div>${t().pulse}</div><div class="o-spark">${bins.map(b => `<div style="height:${Math.round(100 * b / max)}%"></div>`).join('')}</div>` : ''}
-        ${d.tl ? `<div>${t().tl}</div><canvas class="o-chart" width="544" height="300"></canvas><div class="o-meta">${t().tlHint}</div>` : ''}
-        ${(d.recent || []).length ? `<div>${t().tools}</div><div class="o-tools">${d.recent.slice(0, 10).map(r => `<div class="${r.ok ? '' : 'o-err'}"><span>${esc(r.emoji)}</span><span>${esc(r.tool)} ${esc(r.target || '')}</span><span>${r.ms < 1000 ? r.ms + ' ms' : Math.round(r.ms / 1000) + ' s'}</span></div>`).join('')}</div>` : ''}
-        ${(d.msgs || []).length ? `<div style="margin-top:8px">${t().msgs}</div><div class="o-msgs">${d.msgs.map(m => `<div data-n="${m.n}">#${m.n} ${esc(m.text.slice(0, 140))}</div>`).join('')}</div>` : ''}
-        <div class="o-row"><button data-x="tag">${t().tag}</button><button data-x="jump">${t().jump}</button>${d.you ? '' : `<button data-x="go">🚶 ${t().go}</button>`}</div>`;
-      insp.querySelector('[data-x="tag"]').onclick = () => onTag(d.name);
-      insp.querySelector('[data-x="jump"]').onclick = () => onJump(d.lastN);
-      if (!d.you) insp.querySelector('[data-x="go"]').onclick = () => onGo(d.name);
-      insp.querySelectorAll('.o-msgs [data-n]').forEach(el => el.onclick = () => onJump(+el.dataset.n));
-      const cv = insp.querySelector('.o-chart');
-      if (cv) { const g = cv.getContext('2d'); g.setTransform(2, 0, 0, 2, 0, 0); drawChart(g, 272, 150, d.tl, 1800, t().lanes, {now: t().now}); }
+        ${d.pulse ? `<div>${t().pulse}</div><div class="o-spark">${bins.map(b => `<div style="height:${Math.round(100 * b / max)}%"></div>`).join('')}</div>` : ''}`);
+      part('.o-i-low', `${(d.recent || []).length ? `<div>${t().tools}</div><div class="o-tools">${d.recent.slice(0, 10).map(r => `<div class="${r.ok ? '' : 'o-err'}"><span>${esc(r.emoji)}</span><span>${esc(r.tool)} ${esc(r.target || '')}</span><span>${r.ms < 1000 ? r.ms + ' ms' : Math.round(r.ms / 1000) + ' s'}</span></div>`).join('')}</div>` : ''}
+        ${(d.msgs || []).length ? `<div style="margin-top:8px">${t().msgs}</div><div class="o-msgs">${d.msgs.map(m => `<div data-n="${m.n}">#${m.n} ${esc(m.text.slice(0, 140))}</div>`).join('')}</div>` : ''}`);
+      const tl = d.tl ? JSON.stringify(d.tl) : '';
+      insp.querySelector('.o-i-tl').hidden = !d.tl;
+      if (d.tl && tl !== inspTl) { inspTl = tl; const g = insp.querySelector('.o-chart').getContext('2d'); g.setTransform(2, 0, 0, 2, 0, 0); drawChart(g, 272, 150, d.tl, 1800, t().lanes, {now: t().now}); }
     },
     /** the common room panel: who may take breaks there, the whole room, sharing with friends; null closes it */
     /** the common room panel: who may take breaks there, sharing it with friends, joining a friend's, its chat;
@@ -739,11 +754,12 @@ export function createUI(root, {onMode, onPov, onRun, onSound, onLook, onReset, 
         <div class="o-reqrow"><label><input type="checkbox" data-k="glasses"${cur.glasses ? ' checked' : ''}> 👓</label>
           <label><input type="checkbox" data-k="headphones"${cur.headphones ? ' checked' : ''}> 🎧</label></div>
         <div class="o-reqrow"><button data-act="save">💾 ${esc(L.save)}</button> <button data-act="close">${esc(L.close)}</button></div>`;
-      const changed = () => onChange({...cur}, false);
+      let queued = false, done = false;                                    // dragging a colour fires input after input: the figure is rebuilt once a frame at most
+      const changed = () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; if (!done) onChange({...cur}, false); }); };
       el.addEventListener('click', e => {
         const b = e.target.closest('button'); if (!b) return;
-        if (b.dataset.act === 'save') { onChange({...cur}, true); el.remove(); return; }
-        if (b.dataset.act === 'close') { onChange(look, false); el.remove(); return; }
+        if (b.dataset.act === 'save') { done = true; onChange({...cur}, true); el.remove(); return; }
+        if (b.dataset.act === 'close') { done = true; onChange(look, false); el.remove(); return; }
         if (b.dataset.k) { cur[b.dataset.k] = b.dataset.v; el.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.classList.toggle('o-on', x === b)); changed(); }
       });
       el.addEventListener('input', e => { const k = e.target.dataset.k; if (!k) return; cur[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; changed(); });
@@ -831,7 +847,8 @@ window.addEventListener('focus', () => { for (const n of shown.values()) n.close
 /** the tab title counts who waits for you; the favicon gets a red dot */
 let lastIcon = '';
 export function badge(baseTitle, waiting, icon) {
-  document.title = (waiting ? `(${waiting}) 🙋 ` : '') + baseTitle;
+  const title = (waiting ? `(${waiting}) 🙋 ` : '') + baseTitle;
+  if (document.title !== title) document.title = title;
   const keyIcon = icon + waiting;
   if (keyIcon === lastIcon) return;
   lastIcon = keyIcon;

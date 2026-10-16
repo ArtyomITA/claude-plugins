@@ -346,12 +346,12 @@ export function resolve(layout, {packSize = null} = {}) {
 export function floorPlan(layout, placed, {body = 0.2, cell = 0.25} = {}) {
   const [sx, sz] = layout.size, GW = Math.round(sx / cell), GH = Math.round(sz / cell), N = GW * GH, X0 = -sx / 2, Z0 = -sz / 2;
   const cx = k => X0 + (k % GW + 0.5) * cell, cz = k => Z0 + (Math.floor(k / GW) + 0.5) * cell;
-  let boxes = placed.boxes, grid = null, open = [], extra = [];
+  let boxes = placed.boxes, grid = null, open = [], extra = [], all = boxes;      // all: boxes and extra in one list, made when they change (not at each call)
 
   function blocked(x, z, r = body) {
     const out = x < X0 + r || x > -X0 - r || z < Z0 + r || z > -Z0 - r;
     if (out && !open.some(o => x > o.x0 + r && x < o.x1 - r && z > o.z0 + r && z < o.z1 - r)) return true;
-    for (const b of extra.length ? [...boxes, ...extra] : boxes) {
+    for (const b of all) {
       const dx = x - b.x, dz = z - b.z, reach = b.hw + b.hd + r;
       if (dx * dx + dz * dz > reach * reach) continue;
       const c = Math.cos(b.rot), s = Math.sin(b.rot);
@@ -434,10 +434,10 @@ export function floorPlan(layout, placed, {body = 0.2, cell = 0.25} = {}) {
   return {
     blocked, clear, route,
     nearest(p) { const k = nearestCell(p); return k < 0 ? null : {x: cx(k), z: cz(k)}; },
-    setPods(pods) { boxes = [...placed.boxes, ...pods.map(p => ({x: p.cx, z: p.z0, hw: 1.7, hd: 0.85, rot: 0}))]; grid = null; },
+    setPods(pods) { boxes = [...placed.boxes, ...pods.map(p => ({x: p.cx, z: p.z0, hw: 1.7, hd: 0.85, rot: 0}))]; all = extra.length ? [...boxes, ...extra] : boxes; grid = null; },
     /** walkable rectangles beyond the room ({x0, z0, x1, z1}) and extra obstacles (boxes); the grid is rebuilt */
-    setExtra(walk = [], obstacles = []) { open = walk; extra = obstacles; grid = null; },
+    setExtra(walk = [], obstacles = []) { open = walk; extra = obstacles; all = extra.length ? [...boxes, ...extra] : boxes; grid = null; },
     /** furniture added while running (a workstation for an extra agent) */
-    addBoxes(list) { boxes = [...boxes, ...list]; grid = null; },
+    addBoxes(list) { boxes = [...boxes, ...list]; all = extra.length ? [...boxes, ...extra] : boxes; grid = null; },
   };
 }

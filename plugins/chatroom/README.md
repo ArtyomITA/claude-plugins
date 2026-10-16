@@ -118,9 +118,9 @@ The server answers only on 127.0.0.1: a request must carry one of its own Host n
 
 The office is data, not code. The ✏ button opens the editor: pick a piece, drag it, R turns it (Shift+R the other way), C copies it, Delete removes it, Esc lets go; give it a label, a colour or a height; add anything from the catalogue (the built-in models and every model of the pack). Save keeps your layout in `~/.claude/chatroom/office.json`, outside any repository; Reset brings back the default.
 
-### Two rooms, one office
+### Up to three rooms, one office
 
-Two sessions can each have a live room at the same time, and they share one office: the first room's agents take the desks from the front, the second's from the back, and the second lead sits at the second assistant desk. Nothing else is shared between the two chats. Above the chat a switch picks what you read: this room, the other, or both (each message marked with its room); bubbles and activity lines in the office follow the same switch, while every figure stays visible. With the other room selected, what you write goes to that room. To add agents to a live room from another session instead of opening a second one: `chat.py rooms` lists the live rooms, `chat.py add --room ROOM --participants A,B` adds them. `chat.py remove --room ROOM --participants A,B` takes agents out of a room (out of the office and the pings; their messages stay).
+Up to three sessions can each have a live room at the same time, and they share one office: the first room's agents take the desks from the front, the others' from the back, and each lead sits at the assistant table of its turn (the order the rooms opened). Nothing else is shared between the chats. Above the chat a switch picks what you read: this room, one of the others, or all (each message marked with its room); bubbles and activity lines in the office follow the same switch, while every figure stays visible. With another room selected, what you write goes to that room. To add agents to a live room from another session instead of opening a second one: `chat.py rooms` lists the live rooms, `chat.py add --room ROOM --participants A,B` adds them. `chat.py remove --room ROOM --participants A,B` takes agents out of a room (out of the office and the pings; their messages stay).
 
 ### The common room and friends
 
