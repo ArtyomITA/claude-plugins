@@ -97,3 +97,5 @@ Their messages come first for everyone. If they write to you instead of the view
 When all agents stopped or the user closes: `transcript --out ROOM/transcript.md`, then tell the user from the
 transcript and the reports only: the key moments, the outcome (the closed plan, or the last version and its votes), the
 open disagreements, the messages per agent.
+
+Replacing an agent: `python CHAT retire NAME --room ROOM --as LEAD`, then generate its prompt again (it acts as `NAME~1`), spawn the new agent and `roster` it. The retired agent's calls are refused, so a stopped agent woken by a message cannot post again; its call count starts over.

@@ -60,7 +60,17 @@ Simplicity: at equal results the shorter program wins
 
 Inference and training: benchmarks are noisy, so use `--repeats` (3 to 5) and a `--min-gain` above the spread you
 see on the baseline; put the warmup and the timing inside the sealed evaluator, never in the program; for training, a
-fixed time or step budget inside the evaluator and the seed from `CHATROOM_SEED`.
+fixed time or step budget inside the evaluator and the seed from `CHATROOM_SEED`. Secondary numbers that must not get
+worse (prefill speed, memory, accuracy) are guards: the evaluator writes `NAME: value` on every measure (in its output,
+or in `$CHATROOM_RESULT` with `--result-file`), and `--guard NAME:min|max:TOL` compares their median with the baseline's
+(a single cold sample makes false crashes). `min` means lower is better, as for `--direction`: a speed is `max`
+(`--guard prefill_tps:max:3%`), a memory `min`. The final evaluator is not checked for guards.
+
+Ask in phase 0: does the evaluator (and each guard) exercise the code paths the program will change? A gate that runs
+only the prefill does not check a change to the decoding kernels.
+
+On Windows: write build scripts in Python, not `.bat` (the worktrees are checked out byte for byte, so a `.bat`
+committed with LF line endings stays LF, which `cmd` parses badly).
 
 ## 3. Open it
 
@@ -78,6 +88,9 @@ python CHAT research init --room ROOM --as LEAD --repo <repository> --program <f
 `init` prints the longest one evaluate call can take (build + repeats x 2 x budget + git work) and warns when a build has
 no `--keep` folder (it would rebuild from scratch every run). Without `--build-min` a build may take 2 x the budget.
 
+The worktrees are checked out byte for byte (`core.autocrlf` off) and seals are git blob ids, so a global
+`core.autocrlf=true` never breaks a seal.
+
 Roles, then prompts (always generated, passed unchanged):
 
 ```bash
@@ -94,9 +107,26 @@ python CHAT prompt S1 --room ROOM --template research_searcher.md --out ROOM/pro
 `max` in the brief is the checkpoint: every N messages an agent asks you whether to continue (set it high for a long
 research; answer every checkpoint). Generate a worker's prompt after its `assign`, so it names its own worktree.
 
+Replacing an agent (an explorer is a fresh agent): `python CHAT retire W1 --room ROOM --as LEAD`, then generate W1's
+prompt again (it now acts as `W1~1`) and spawn the new agent, in this order (retire first, then spawn and `roster`).
+Chat and research calls of the retired agent are refused, so an agent stopped and woken again by a message cannot post
+or run anything; the call count starts again. Files are another matter: it could still edit its old worktree, which
+the next `evaluate` reports as changed files; `assign` resets the worktree for the new agent.
+
+Long builds: before a worker's first run, `python CHAT research prebuild W1 --room ROOM --as LEAD` builds its worktree in
+a detached process (a session's background reaper cannot kill it), with the log in `ROOM/research/runs/prebuild-W1.log`;
+no evaluate starts until it exits, so a build never disturbs another worker's measures. The build output goes in a
+`--keep` folder. `research status` shows how it ended (exit code, log).
+
+The GPU outside the runs (a profile, a microbenchmark, the auditor's check): `research hold --minutes 20 --reason "..."`
+then `research release`; while it holds, only the holder may evaluate. Any agent can take it, and `research status`
+shows it. An agent holds it at most 120 minutes, the lead 720.
+
 ## 4. Phase 2: investigation, the loop you run
 
-1. The first run of the research is the baseline (a worker runs the program unchanged).
+1. The first run of the research is the baseline (a worker runs the program unchanged; the evaluator gets
+   `CHATROOM_BASELINE=1`, to write the references only that run needs). Its cycle needs no idea:
+   `research assign W1 --parent base --type optimizer`.
 2. The PROPOSER posts ideas; the kernel accepts only complete bundles, in turn gap and analogy, not too close to earlier
    ones, and not four in a row that change only the method.
 3. You start each cycle, choosing the parent and the kind of worker, never the idea's content:
@@ -113,7 +143,11 @@ python CHAT research assign W1 --idea I3 --parent best|base|att-N --type explore
 4. Workers run `research evaluate`: each keep is against the worker's own best, or the baseline while its line has no
    keep yet (beam per worker); the global best is the best of all. With roles assigned, after 5 runs without evidence a
    worker must report what it learned; 3 crashes in a row pause it (`research resume W`). A run whose caller was killed
-   is recorded as a crash at the next call, and its evaluator process is stopped.
+   is recorded as a crash at the next call, and its evaluator process is stopped. A new `assign` keeps the crash
+   series and the pause: `research status` shows both.
+   A correction that gains nothing (a race, a safety bound, a wrong result) is a fix: the AUDITOR allows it
+   (`research allow-fix W1 --reason "..."`) and the worker runs `research evaluate --kind fix`; it is kept if not worse
+   than its best by more than `--min-gain`, and replaces the best it corrects.
 5. Searchers bring prior work as evidence with links; the REGISTRAR curates (`curate`), keeps the map (`direction`), and
    writes each cycle's conclusion (`conclude`).
 6. The AUDITOR reads every keep (`git show research/<tag>/att-N`) and revokes what does not hold (`research revoke`): the
@@ -170,7 +204,13 @@ the background; answers are written to the file as they come. Treat them as opin
 - Contract changes: `research amend` (how runs are measured only before a baseline is kept; budgets any time).
 - Tell the user plainly: the kernel runs as the user, the seal is a check, not a wall; without `--result-file` a
   program could print a false metric (a second line is a crash); the final gap and the ablations are the honest numbers.
-- Research actions over MCP are the agents'; you use the shell (`chat.py research ... --as LEAD`).
+- Research actions over MCP are the agents'; you use the shell (`chat.py research ... --as LEAD`). A refused command
+  exits with code 1 and prints `error:`; a refused `assign` is also posted on the board: never announce an assign the
+  kernel did not confirm.
+- Use one install: the MCP server keeps the version it started with until the session restarts. From 0.10.1 the kernel
+  writes its version into the state, and a kernel from 0.10.1 on refuses a state written by a newer one (0.10.0 does
+  not check: restart the session after an update).
+- The relay: one `alerts --follow --messages` per lead; starting a new one stops the old (it no longer eats messages).
 - At the end report from `results.tsv`, `research status` and the report: baseline, best (run, metric, change), the
   final number, the ablations, what failed, and the best tag `research/<tag>/att-N`. The user decides whether to merge.
 - Cleaning up, when the user says so, in the repository (one worktree per command):

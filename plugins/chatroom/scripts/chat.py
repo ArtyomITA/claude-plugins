@@ -45,8 +45,10 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
                                                             constraints, closing, max)
   chat.py prompt NAME [--template FILE] [--out FILE]        (the filled prompt of one participant: pass it unchanged)
   chat.py guide normal|research                             (the lead's guide for that kind of room)
-  chat.py research init|amend|evaluate|status               (the research kernel: one file changes, a sealed evaluator,
+  chat.py research init|amend|evaluate|status ...           (the research kernel: one file changes, a sealed evaluator,
                                                             keep if better or reset; see research.py)
+  chat.py retire NAME --as LEAD                             (the agent behind NAME is replaced: its calls are refused,
+                                                            the new one acts as NAME~G)
 
 Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --accent (#rrggbb), --theme
 (auto|light|dark), --wallpaper (dots|plain|grid), --lang (en|it), --heartbeat, --user-name, and --profile
@@ -1095,7 +1097,60 @@ def cmd_roster(room, a):
         if '/root/' in agent:                 # Git Bash on Windows turns /root/a into C:/.../root/a
             agent = agent[agent.index('/root/'):]
         pairs[name.strip()] = agent
+    before = room.roster()
+    for name, agent in pairs.items():         # another agent behind the same name: its call count starts again
+        if before.get(name) and before[name] != agent:
+            (room.dir / 'counters' / f'{name}.json').unlink(missing_ok=True)
     print(json.dumps(room.update_roster(lambda roster: roster.update(pairs))))
+
+
+def generation(room, name):
+    """how many times the lead retired the agent behind a name (0: never)"""
+    return int(room.config().get('generations', {}).get(name, 0))
+
+
+def resolve_name(room, raw):
+    """NAME~G is the G-th agent behind NAME, since the lead retired the ones before; a retired one (an older G, or the
+    bare name after a retirement) is refused, so an agent stopped and woken again by a message cannot act"""
+    base, _, g = (raw or '').partition('~')
+    if not base:
+        return raw
+    if room is None or not (room.dir / 'config.json').is_file():
+        return base
+    current = generation(room, base)
+    if g and base not in room.config().get('participants', []) and base not in room.user_names():
+        raise ValueError(f'{base} is not a participant of this room')
+    if (int(g) if g.isdigit() else 0 if not g else -1) != current:
+        raise ValueError(f'{raw} was retired by the lead and replaced by {base}~{current}: stop now, end your turn and do '
+                         f'not write or run anything again in this room')
+    return base
+
+
+def cmd_retire(room, a):
+    """chat.py retire NAME --as LEAD: the agent behind NAME is replaced; its calls are refused from now on, its call count
+    starts again, and the next prompt of NAME carries the new identity (NAME~G)"""
+    if a.name not in room.user_names():
+        sys.exit('retire: only the lead or the user')
+    if len(a.pairs) != 1:
+        sys.exit('retire: give one participant name')
+    name = a.pairs[0]
+    if name not in room.config().get('participants', []):
+        sys.exit(f'retire: {name} is not a participant')
+
+    def change(config):
+        config.setdefault('generations', {})[name] = int(config.get('generations', {}).get(name, 0)) + 1
+        return config
+    g = room.edit_config(change)['generations'][name]
+    (room.dir / 'counters' / f'{name}.json').unlink(missing_ok=True)
+
+    gone = []
+    room.update_roster(lambda roster: gone.append(roster.pop(name, None)))
+    if gone[0]:                               # its address is kept apart, out of the pings
+        path = room.dir / 'roster.retired.json'
+        write_atomic(path, json.dumps(read_json(path, []) + [{'name': name, 'agent': gone[0], 'generation': g - 1}], indent=2))
+    room.append(a.name, f'🔁 {name} retired by {a.name}: the agent before stops; the new one is {name}~{g} (chat.py prompt {name})', 'board')
+    print(f'{name} retired: calls as {name} or an older {name}~N are refused; generate the new prompt now (chat.py prompt '
+          f'{name} ...), it uses --as {name}~{g}; then register the new agent (chat.py roster {name}=<its id>)')
 
 
 def cmd_post(room, a, text=None):
@@ -1833,6 +1888,7 @@ def failures(room, now=None):
                 out.append((f"flip:{m['from']}:{version}:{m['n']}", f"{m['from']} turned a no into a yes on v{version} "
                             f"(#{m['n']}) without new evidence: conformity, or a reason left unsaid?"))
             flips[key] = 'yes' if yes else 'no'
+    research_room = (room.dir / 'research' / 'contract.json').is_file()   # roles there are not independent opinions
     for t in board['tasks']:
         if t.get('extra_files'):
             out.append((f"extra:{t['id']}", f"{t['id']} ({t['owner']}) changed files it did not declare: {', '.join(t['extra_files'][:8])}"))
@@ -1841,11 +1897,11 @@ def failures(room, now=None):
         if m.get('kind') == IDLE:
             st = None
             continue
-        full = (st and st.get('pct') == 100) or (not st and m.get('kind') in ('status', 'stato')
-                                                  and re.search(r'(?<!\d)100\s?%', m.get('text', '')))
+        pct = re.search(r'(?<![\d/.,])(\d{1,3})\s?%', m.get('text', ''))      # the status's percentage is its first one
+        full = (st and st.get('pct') == 100) or (not st and m.get('kind') in ('status', 'stato') and pct and pct.group(1) == '100')
         if full and not (st and st.get('evidence')) and not has_artifact((st or {}).get('done', '') if st else m.get('text', '')):
             out.append((f"claim:{m['from']}:{m['n']}", f"{m['from']} says 100% (#{m['n']}) without evidence: which output, file:line or test shows it?"))
-        if m.get('after_read'):
+        if m.get('after_read') and not research_room:
             out.append((f"echo:{m['from']}", f"{m['from']} wrote its first position (#{m['n']}) after reading the others': an independent view may be missing"))
     real_since = 0
     for m in items:
@@ -1888,6 +1944,8 @@ def failures(room, now=None):
                 out.append((f"checkpoint:{k}:{mine // every}", f"{k} reached {mine // every * every} messages: it asks you whether to "
                             f"continue. Answer it (go on, or stop); `chat.py brief max=N` changes the checkpoint."))
     budget = int(config.get('budget_calls', BUDGET_CALLS))
+    if research_room and budget:                      # the registrar and the auditor work per run: 10 calls more for each
+        budget += 10 * int(read_json(room.dir / 'research' / 'state.json', {}).get('evals', 0))
     for k, v in room.counters().items():
         used = sum(v.values())
         if budget and used >= budget:
@@ -1908,8 +1966,8 @@ def failures(room, now=None):
                         f"agree who changes it, or take it on the board"))
     recent = items[-60:]
     for i, m in enumerate(recent):
-        if m.get('kind') or now - m.get('ts', now) < 180:
-            continue
+        if m.get('kind') or now - m.get('ts', now) < 180 or '?' not in m.get('text', ''):
+            continue                                  # an acknowledgement asks nothing: only a question waits for an answer
         for k in people:
             if k == m['from'] or not tags(m['text'], k):
                 continue
@@ -2002,15 +2060,17 @@ MCP_TOOLS = [
     {'name': 'research', 'description': 'The research kernel, by role: view (what your role needs), expand (one record), evaluate '
                                         '(desc; kind, idea, of, seed), propose-idea (json), propose-evidence (text, source), curate, '
                                         'direction (json), conclude (id=worker, gate, trigger, text), verdict (phase, outcome, json), '
-                                        'revoke (id, reason), status.',
+                                        'revoke (id, reason), hold (minutes, reason: the GPU outside the runs), release, '
+                                        'allow-fix (id=worker, reason), status.',
      'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
          'action': {'type': 'string', 'enum': ['evaluate', 'status', 'view', 'expand', 'propose-idea', 'propose-evidence', 'curate',
-                                               'direction', 'conclude', 'verdict', 'revoke', 'reanchor']},
+                                               'direction', 'conclude', 'verdict', 'revoke', 'reanchor', 'hold', 'release',
+                                               'allow-fix']},
          'desc': {'type': 'string'}, 'id': {'type': 'string', 'description': 'expand/revoke: the record; conclude: the worker'},
          'idea': {'type': 'string'}, 'kind': {'type': 'string'}, 'of': {'type': 'string'}, 'seed': {'type': 'string'},
          'text': {'type': 'string'}, 'source': {'type': 'string'}, 'accept': {'type': 'string'}, 'reject': {'type': 'string'},
          'drop': {'type': 'string'}, 'gate': {'type': 'string'}, 'trigger': {'type': 'string'}, 'reason': {'type': 'string'},
-         'phase': {'type': 'integer'}, 'outcome': {'type': 'string'}, 'next_intent': {'type': 'string'},
+         'phase': {'type': 'integer'}, 'outcome': {'type': 'string'}, 'next_intent': {'type': 'string'}, 'minutes': {'type': 'number'},
          'json': {'description': 'propose-idea, direction, verdict: the object'}}}},
     {'name': 'notebook', 'description': 'Your own notes, which survive a compacted context: with text adds a line, without reads them.',
      'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}},
@@ -2054,6 +2114,10 @@ def mcp_call(room, name, tool, args, cancel=None, wait_cap=None):
     name = str(args.get('as') or name or '').strip()
     if room is None or not name:
         return 'say where and who: pass "room" (the room folder) and "as" (your name) in the call', True
+    try:
+        name = resolve_name(room, name)
+    except ValueError as exc:
+        return f'error: {exc}', True
     ns = argparse.Namespace(name=name, room=str(room.dir), status=False, idle=False, finding=False, reply=None, image=None,
                             focus=True, pairs=[], deps=None, files=None, proof=None, force=False, note=None, all=False,
                             timeout=100, common=False, file=None, scope=None, done_when=None)
@@ -2110,7 +2174,7 @@ def mcp_call(room, name, tool, args, cancel=None, wait_cap=None):
                 ns.pairs, ns.desc = [str(args.get('action', 'status'))], args.get('desc')
                 act = ns.pairs[0]
                 if act not in ('evaluate', 'status', 'view', 'expand', 'propose-idea', 'propose-evidence', 'curate', 'direction',
-                               'conclude', 'verdict', 'revoke', 'reanchor'):
+                               'conclude', 'verdict', 'revoke', 'reanchor', 'hold', 'release', 'allow-fix'):
                     return 'research: the lead starts, assigns, seals and moves phases from the shell', True
                 if name in room.user_names():
                     return ('research through MCP is for the agents; the lead and the user use the shell (chat.py research ... '
@@ -2118,7 +2182,7 @@ def mcp_call(room, name, tool, args, cancel=None, wait_cap=None):
                 if args.get('id'):
                     ns.pairs.append(str(args['id']))
                 for k in ('idea', 'kind', 'of', 'seed', 'text', 'source', 'accept', 'reject', 'drop', 'gate', 'trigger', 'reason',
-                          'outcome', 'next_intent'):
+                          'outcome', 'next_intent', 'minutes'):
                     setattr(ns, k, args.get(k))
                 ns.phase = args.get('phase')
                 ns.json = json.dumps(args['json']) if isinstance(args.get('json'), (dict, list)) else args.get('json')
@@ -2544,7 +2608,7 @@ def cmd_brief(room, a):
         data[key] = value.strip()
     if a.pairs:
         room.locked(lambda: write_atomic(room.dir / 'brief.json', json.dumps(data, indent=2, ensure_ascii=False)))
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    print(('brief saved: ' if a.pairs else 'brief: ') + json.dumps(data, ensure_ascii=False))
 
 
 def fill_prompt(room, name, template='agent_prompt.md'):
@@ -2559,7 +2623,8 @@ def fill_prompt(room, name, template='agent_prompt.md'):
         raise ValueError(f'no template {template!r} in the plugin templates')
     dossier = room.dir / 'DOSSIER.md'
     values = {
-        'NAME': name, 'OTHERS': ', '.join(n for n in config['participants'] if n != name) or '-',
+        'NAME': name, 'AS': name + (f'~{generation(room, name)}' if generation(room, name) else ''),
+        'OTHERS': ', '.join(n for n in config['participants'] if n != name) or '-',
         'LANGUAGE': LANGUAGE_NAME[lang], 'ROOM': str(room.dir.resolve()).replace('\\', '/'),
         'CHAT': str(Path(__file__).resolve()).replace('\\', '/'), 'HEARTBEAT': str(room.heartbeat()),
         'ROLE': config.get('profiles', {}).get(name, {}).get('role') or '-', 'TOPIC': config.get('topic', ''),
@@ -2590,7 +2655,9 @@ def fill_prompt(room, name, template='agent_prompt.md'):
                                     if longest <= 600 else
                                     f"One evaluate call may last {longest} s (build, repeats), longer than one shell call may wait (600 s): start it in "
                                     f"the background (Bash tool with run_in_background in Claude Code, a background job elsewhere) "
-                                    f"and wait for it to end; research status shows it running"),
+                                    f"and wait for it to end; research status shows it running. On Windows a session may kill long "
+                                    f"background commands: for runs near an hour use a separate process (PowerShell Start-Process) "
+                                    f"and research status"),
                        'METRIC_SOURCE': ('a result file the sealed evaluator writes ($CHATROOM_RESULT): nothing your program prints counts'
                                          if c.get('metric_source') == 'file' else
                                          'its output, where it must appear exactly once: never print a line starting with '
@@ -2719,7 +2786,18 @@ def cmd_alerts(room, a):
     if not (room.dir / f'cursor_{name}.txt').exists():
         old = [m['n'] for m in room.messages() if time.time() - float(m.get('ts') or 0) > 600]
         room.set_cursor(name, max(old, default=0))
+    owner, me = room.dir / f'relay{name}.owner', f'{os.getpid()} {time.time()}'
+    if a.follow:
+        write_atomic(owner, me)                       # the newest relay owns the place in the chat
     while True:
+        if a.follow:
+            try:
+                mine = owner.read_text(encoding='utf-8') == me
+            except OSError:
+                mine = True
+            if not mine:
+                print('RELAY a newer relay of this lead took over: this one stops', flush=True)
+                return
         # the chat and the lend log are read again only when one of them changed: a long chat parsed every second
         # kept a CPU core 20% busy for each room watched
         sig = tuple(_stamp(f) for f in (room.chat, room.dir / 'common' / 'lend.jsonl'))
@@ -3679,7 +3757,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
                                         'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp',
-                                        'helpers', 'brief', 'prompt', 'research', 'guide'])
+                                        'helpers', 'brief', 'prompt', 'research', 'guide', 'retire'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -3726,11 +3804,13 @@ def main():
     p.add_argument('--build', help='research init/amend: a build command run before each measure, with its own time limit')
     p.add_argument('--build-min', dest='build_min', type=float, help='research init/amend: minutes a build may take')
     p.add_argument('--repeats', type=int, help='research init/amend: measures per run; the median counts')
+    p.add_argument('--guard', help='research init/amend: NAME:min|max:TOL,... secondary numbers the evaluator prints, median against the baseline')
+    p.add_argument('--minutes', type=float, help='research hold: how long the GPU is held')
     p.add_argument('--min-gain', dest='min_gain', help='research init/amend: how much a keep must beat the best by (a number or N%%)')
     p.add_argument('--idea', help='research assign/evaluate: the idea (I-number) a cycle or a run works on')
     p.add_argument('--parent', help='research assign: base, best or att-N: where the cycle starts')
     p.add_argument('--type', help='research assign: explorer (a fresh agent, one new idea) or optimizer (the same agent refines)')
-    p.add_argument('--kind', help='research evaluate: attempt, smoke, ablation, baseline, control or repeat')
+    p.add_argument('--kind', help='research evaluate: attempt, fix, smoke, ablation, baseline, control or repeat')
     p.add_argument('--of', help='research evaluate: what an ablation or baseline is measured against (att-N)')
     p.add_argument('--seed', help='research evaluate: a seed handed to the evaluator as CHATROOM_SEED')
     p.add_argument('--text', help='research propose-evidence/conclude: the text')
@@ -3783,6 +3863,8 @@ def main():
         sys.exit('no room: pass --room DIR or set CHATROOM_DIR')
     room = Room(a.room)
     try:
+        if getattr(a, 'name', None) and a.command != 'init':
+            a.name = resolve_name(room, a.name)
         if a.command == 'init':
             return cmd_init(room, a)
         if not room.dir.exists():
@@ -3791,7 +3873,7 @@ def main():
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
                     'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp,
                     'helpers': cmd_helpers, 'brief': cmd_brief, 'prompt': cmd_prompt,
-                    'research': cmd_research, 'guide': cmd_guide}
+                    'research': cmd_research, 'guide': cmd_guide, 'retire': cmd_retire}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

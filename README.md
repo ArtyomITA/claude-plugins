@@ -37,9 +37,10 @@ Enforced by `chat.py`, identical for every agent, Claude Code and Codex.
 | Self-testing tasks | `--verify CMD` (shell, lead/user): agent worktree, outside the lock, tree-killed at 110 s. `--merge-into BR`: refuses dirty tree, empty branch, conflicts (`git merge-tree`). |
 | Scope | `task amend` widens files nobody holds; otherwise lead `--force`. |
 | Handoff / loans | `handoff` with context; `help` lends a piece, `accept` within 10 min or it returns; `giveback`. |
-| Checks | Proof without artifact, closed with gaps, off-scope proof, no-to-yes without evidence, 100% without evidence, stalled/repeated status, unanswered tag, file in two statuses, undeclared files, 25-msg drift, all idle, early consensus, unaccepted loan, call budget. Once each, persisted. |
+| Checks | Proof without artifact, closed with gaps, off-scope proof, no-to-yes without evidence, 100% (first % of a status) without evidence, stalled/repeated status, unanswered tagged question, file in two statuses, undeclared files, 25-msg drift, all idle, early consensus, unaccepted loan, call budget (reset on a new agent, +10 per run in research). Once each, persisted. |
 | Call budget | Per-agent counter files, lockless; over `budget_calls` the relay reports. |
-| Relay | `alerts --follow --messages`: ALERT, WATCH (`VOTE-NO (LEAD REVIEW)`), CHECK, LEND. |
+| Relay | `alerts --follow --messages`: ALERT, WATCH (`VOTE-NO (LEAD REVIEW)`), CHECK, LEND; one owner per lead, a newer relay stops the older. |
+| Retire | `retire NAME`: generation bump, chat and research calls as `NAME` / older `NAME~G` refused, call count reset; prompt regenerated as `NAME~G`. |
 | Checkpoint | Every `brief max` messages the agent asks the lead whether to go on; not a stop. |
 | Generated prompts | `brief` + `prompt NAME`: deterministic template fill, byte-identical. |
 | Mode choice | `init --ask-mode`: one card, one choice (user/lead), guide sent to the lead. |
@@ -59,11 +60,16 @@ Kernel `chat.py research`: agents propose, the kernel checks, writes `state.json
 | Drafting | `init --draft`: evaluator written in phase 1, `--kind smoke` runs, auditor pass, `seal` hashes the drafted files. |
 | Roles | `research roles WORKER= PROPOSER= AUDITOR= REGISTRAR= SEARCHER=`; every command checks the caller's role; one prompt template per role. |
 | Workers | `assign W --parent base\|best\|att-N --type explorer\|optimizer --idea I`: own worktree and branch; parent must be a kept attempt; 5th cycle on one family refused. |
-| Keep rule | Against the worker's best, or the baseline if none; global best = best of all lines. |
+| Keep rule | Against the worker's best, or the baseline if none; global best = best of all lines. First run gets `CHATROOM_BASELINE=1`. |
+| Fix runs | `allow-fix W` (auditor/lead), then `evaluate --kind fix`: kept if not worse than the best by more than `--min-gain`; replaces the best it corrects. |
 | Evaluator lock | One run at a time (`eval.lock`); concurrent run refused, not queued; dead lock taken by one caller, its evaluator killed. |
+| GPU hold | `research hold --minutes M --reason` / `release`: GPU work outside the runs (agents up to 120 min, lead 720); only the holder may evaluate meanwhile. |
+| Prebuild | `research prebuild W`: build detached, no console (survives the session's reaper), log and exit code in `runs/`, shown in status; holds the GPU until it exits. |
 | Build and noise | `--build` + `--build-min`; `--repeats N` median with spread; `--min-gain X\|X%`. |
 | Metric source | `--result-file`: evaluator writes `NAME: value` to `$CHATROOM_RESULT`; else exactly one `NAME:` line in stdout. |
 | Protocol | `protocol: ...` lines fixed at the baseline; an attempt with a different protocol = crash. |
+| Guards | `--guard NAME:min\|max:TOL` (min = lower is better): `NAME: value` in the output or the result file, median of the repeats vs the baseline's; worse than TOL = crash; not applied to the final. |
+| Seals | Git blob ids; worktrees checked out with `core.autocrlf=false`, `core.eol=lf`: line endings never break a seal. |
 | Seal and scope | Refused: sealed file changed, other tracked file changed, new untracked file (except caches, `--keep`), program already run. |
 | Commit and clean | Kernel identity, no repo hooks, no signing; tag `research/<tag>/att-N`; `git clean -ffdx` except `--keep`, submodules too. |
 | Interrupted runs | Evaluator pid recorded; caller killed: crash at the next call, process tree killed, worktree reset; lost worktree: crash, pending cleared. |
@@ -73,7 +79,7 @@ Kernel `chat.py research`: agents propose, the kernel checks, writes `state.json
 | Revocation | `revoke att-N\|E-n`: descendants, evidence and citing conclusions withdrawn; best falls back (baseline last); worktrees reset; baseline and in-run revokes refused. |
 | Verdicts | Scores 0 / 1.5 / 3; pass/fail (1, 3, 5), answer_ready/search_more (2); bound to the current phase and to a state snapshot. |
 | Re-anchoring | `reanchor`: from current or a kept att-N, extend or redirect, with bottleneck and evidence. |
-| Circuit breakers | 3 crashes in a row pause the worker until `resume`; identical program refused. |
+| Circuit breakers | 3 crashes in a row pause the worker until `resume`, across assigns; identical program refused. |
 | Detectors | Cycling (re-added lines), tuning-only, 10-run plateau, narrowing ideas, paused worker, search-vs-final gap. |
 | Evidence runs | Phase 3 `--kind ablation\|baseline\|control\|repeat --of att-N --seed S` (`CHATROOM_SEED`); never replace the best. |
 | Final | `research final`: once, on the committed best, under the lock; a run without a number does not count. |
@@ -84,6 +90,7 @@ Kernel `chat.py research`: agents propose, the kernel checks, writes `state.json
 | MCP | `research` tool: agent actions only; lead actions shell-only; Codex refused when a run can outlast its timeout. |
 | Environment | Build and evaluator run without model-provider and code-host keys; worktrees init submodules. |
 | Migration | First-kernel state upgraded in place: attempts from `results.tsv`, baseline, best. |
+| Versions | Kernel version written in the state from 0.10.1; a kernel from 0.10.1 on refuses a state written by a newer one. |
 | Limits | Runs as the user: the seal is a check, not a wall; keep the room out of the repo or never `git clean -x` there. |
 
 ## Install in Claude Code

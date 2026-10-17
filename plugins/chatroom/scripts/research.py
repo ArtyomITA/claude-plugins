@@ -46,6 +46,7 @@ CURATED_MAX = 60          # committed evidence kept at once (the registrar drops
 SIMILAR = 0.5             # an idea this close to an earlier one (word trigrams, Jaccard) is refused
 VIEW_MAX = 3000           # characters of a role's view; research expand ID opens one record
 AUX_KINDS = ('ablation', 'baseline', 'control', 'repeat')
+KERNEL = (0, 10, 1)      # written into the state: an older kernel (another install, an MCP server not restarted) refuses it
 AUX_BASE, SMOKE_BASE = 100000, 200000   # numbers of evidence and smoke runs: never the same as an attempt's (at most 100000)
 NO_HOOKS = str(Path(__file__).resolve().parent / '.no-git-hooks')   # a folder that does not exist: git finds no hooks there
 SECRET_ENV = ('OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
@@ -58,7 +59,9 @@ def _dir(room):
 def _git(cwd, *args, check=True, ident=None):
     """git with file names unquoted (modèle.py stays modèle.py), none of the repository's hooks (pre-commit, post-commit,
     post-checkout...) and, for the kernel's commits, an identity of its own and no signing"""
-    pre = ['-c', 'core.quotepath=false', '-c', f'core.hooksPath={NO_HOOKS}']
+    pre = ['-c', 'core.quotepath=false', '-c', f'core.hooksPath={NO_HOOKS}', '-c', 'core.safecrlf=false']
+    if args[:1] and args[0] in ('worktree', 'reset', 'checkout', 'submodule'):   # files written byte for byte: no CRLF from core.autocrlf
+        pre += ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf']
     if ident:
         pre += ['-c', f'user.name={ident}', '-c', f'user.email={re.sub(r"[^A-Za-z0-9]", "", ident).lower() or "kernel"}@chatroom.invalid',
                 '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false']
@@ -74,6 +77,21 @@ def _git(cwd, *args, check=True, ident=None):
 
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _seal_holds(work, rel, want):
+    """a sealed file is unchanged: its git blob id matches the one sealed (as on disk, or after the line-ending
+    conversion git would apply); a 64-character seal is the SHA-256 of the bytes, from a contract before blob ids"""
+    path = Path(work) / rel
+    if not path.is_file():
+        return False
+    if len(want) == 64:
+        data = path.read_bytes()
+        lf = data.replace(b'\r\n', b'\n')
+        return want in (hashlib.sha256(data).hexdigest(), hashlib.sha256(lf).hexdigest(),
+                        hashlib.sha256(lf.replace(b'\n', b'\r\n')).hexdigest())
+    return want in (_git(work, 'hash-object', '--no-filters', '--', rel, check=False),
+                    _git(work, '-c', 'core.autocrlf=true', 'hash-object', '--', rel, check=False))
 
 
 def _load(room, name):
@@ -149,10 +167,26 @@ def _edit(room, fn):
     def run():
         c = _load(room, 'contract.json')
         st = _migrate(c, _load(room, 'state.json'))
+        if tuple(st.get('kernel') or (0,)) > KERNEL:
+            raise ValueError(f"this research is run by kernel {'.'.join(map(str, st['kernel']))}, newer than this one "
+                             f"({'.'.join(map(str, KERNEL))}, {Path(__file__).resolve()}): use the chat.py of the newer install "
+                             f"(an MCP server keeps its version until the session restarts)")
+        st['kernel'] = list(KERNEL)
         out = fn(c, st)
         _write(room, 'state.json', st)
         return out
     return room.locked(run)
+
+
+def _check_kernel(room):
+    """refuse before any git work when the state was written by a newer kernel"""
+    try:
+        k = tuple(_load(room, 'state.json').get('kernel') or (0,))
+    except ValueError:
+        return
+    if k > KERNEL:
+        raise ValueError(f"this research is run by kernel {'.'.join(map(str, k))}, newer than this one "
+                         f"({'.'.join(map(str, KERNEL))}, {Path(__file__).resolve()}): use the chat.py of the newer install")
 
 
 def _state(room):
@@ -182,6 +216,24 @@ def _submodules(work):
     return '' if 'fatal' not in out.lower() and 'error' not in out.lower() else f' (submodules: {out[:200]})'
 
 
+def parse_guards(text):
+    """--guard prefill_tps:max:3%,vram_mb:min:200 -> [{name, direction, tol}]: a secondary number the evaluator prints
+    ("NAME: value") on every measure; its median may not be worse than the baseline's by more than tol"""
+    out = []
+    for item in [x.strip() for x in (text or '').split(',') if x.strip()]:
+        m = re.fullmatch(r'([A-Za-z0-9_.-]+):(min|max):(\d+(?:\.\d+)?%?)', item)
+        if not m:
+            raise ValueError(f'--guard {item!r}: NAME:min|max:TOL (min = lower is better; TOL a number or N%)')
+        out.append({'name': m.group(1), 'direction': m.group(2), 'tol': m.group(3)})
+    return out
+
+
+def _guard_broken(g, value, base):
+    """value is worse than base by more than the guard's tolerance"""
+    tol = abs(base) * float(g['tol'][:-1]) / 100 if g['tol'].endswith('%') else float(g['tol'])
+    return value > base + tol if g['direction'] == 'min' else value < base - tol
+
+
 def _rel(top, f):
     p = Path(f)
     return (p if not p.is_absolute() else p.resolve().relative_to(top)).as_posix()
@@ -205,6 +257,13 @@ def _need(room, c, name, *roles):
         raise ValueError(f"{name} is {have or 'not given a research role'}: this is for {' or '.join(roles)}")
 
 
+def _not_worse(c, value, than):
+    """value is at most the contract's minimal gain worse than than (a fix keeps a correction that costs nothing)"""
+    gain = str(c.get('min_gain') or '0')
+    margin = abs(than) * float(gain[:-1]) / 100 if gain.endswith('%') else float(gain)
+    return value <= than + margin if c['direction'] == 'min' else value >= than - margin
+
+
 def _better(c, value, than):
     """value beats than by more than the contract's minimal gain (absolute, or relative when it ends with %)"""
     if than is None:
@@ -216,7 +275,7 @@ def _better(c, value, than):
 
 # ---------------------------------------------------------------------------------------------------------- contract
 def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, max_evals=100, repo='.', sealed=(), tag=None,
-         result_file=False, keep=(), draft=False, final=None, build=None, build_min=None, repeats=1, min_gain=None):
+         result_file=False, keep=(), draft=False, final=None, build=None, build_min=None, repeats=1, min_gain=None, guards=None):
     """the lead or the user writes the contract: which file changes, how it is built and evaluated, what is sealed, the
     budget, how noise is handled. --draft starts at phase 1 (the evaluator is still being written, sealed later)"""
     if by not in room.user_names():
@@ -237,6 +296,7 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
         raise ValueError('--min-gain: a number (absolute) or a percentage like 1.5%')
     if build_min is not None and not (0 < float(build_min) <= 1440):
         raise ValueError('--build-min: the minutes a build may take, more than 0 and at most 1440')
+    guards = parse_guards(guards)
     task = _dir(room) / 'task.md'
     if not task.is_file() or not task.read_text(encoding='utf-8', errors='replace').strip():
         raise ValueError(f'write the contract first, with the user, in {task} (phase 0; chat.py guide research has the template)')
@@ -251,10 +311,12 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
         rel = _rel(top, f)
         if rel == rel_prog:
             raise ValueError(f'{rel} is the program: it cannot also be sealed')
+        if not (top / rel).is_file():
+            raise ValueError(f'{rel} is not a file: seal each file (a folder of data goes in --keep, or outside the repository)')
         if not _git(top, 'ls-files', '--', rel):
             raise ValueError(f'sealed file {rel} is not tracked in {top}: only committed files can be sealed (the research '
                              f'worktree holds only them). Commit it, or keep it outside the repository, read-only')
-        seals[rel] = _sha(top / rel)
+        seals[rel] = _git(top, 'rev-parse', f'HEAD:{rel}')
     if not draft and not evaluate:
         raise ValueError('--evaluate is needed (or --draft, to write the evaluator in phase 1 and seal it later)')
     keep = [k.strip().replace('\\', '/').strip('/') + '/' for k in keep if k.strip().strip('/.')]
@@ -289,7 +351,7 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
                 'branch': branch, 'tag': tag, 'base_commit': base, 'sealed': seals, 'by': by,
                 'metric_source': 'file' if result_file else 'output', 'keep': keep, 'final': final or '',
                 'build': build or '', 'build_s': max(1, int(float(build_min) * 60)) if build_min else 0,
-                'repeats': int(repeats or 1), 'min_gain': str(min_gain) if min_gain is not None else '', 'roles': {},
+                'repeats': int(repeats or 1), 'min_gain': str(min_gain) if min_gain is not None else '', 'roles': {}, 'guards': guards,
                 'task_sha': _sha(task), 'created': time.strftime('%Y-%m-%d %H:%M:%S')}
     _save(room, 'contract.json', contract)
     st = _migrate(contract, {'evals': 0, 'best': None, 'head': base, 'pending': None, 'phase': 1 if draft else 2})
@@ -297,7 +359,8 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
     (d / 'results.tsv').write_text(TSV_HEAD, encoding='utf-8')
     _log(room, by, 'init', {'program': rel_prog, 'phase': st['phase'], 'task_sha': contract['task_sha'], 'contract': contract})
     noise = (f", median of {contract['repeats']} measures" if contract['repeats'] > 1 else '') + \
-            (f", a keep must beat the best by more than {contract['min_gain']}" if contract['min_gain'] else '')
+            (f", a keep must beat the best by more than {contract['min_gain']}" if contract['min_gain'] else '') + \
+            (f", guards {', '.join(g['name'] + ' ' + g['direction'] + ' ' + g['tol'] for g in guards)} (median vs baseline)" if guards else '')
     return (f"🔬 research {tag} open at phase {st['phase']} ({PHASES[st['phase']]}): only {rel_prog} changes, in {work} (branch "
             f"{branch}); " + (f"build `{build}`, " if build else '') + (f"evaluator `{evaluate}`, " if evaluate else 'evaluator to be written, ')
             + f"metric {metric} ({'lower' if direction == 'min' else 'higher'} is better) read from "
@@ -312,14 +375,14 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
 
 
 def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=None, build=None, build_min=None,
-          repeats=None, min_gain=None, final=None):
+          repeats=None, min_gain=None, final=None, guards=None):
     """the lead changes the contract: budgets at any time; what is measured and how only before a baseline is kept (a
     crashed baseline is fixed this way, not by starting over)"""
     if by not in room.user_names():
         raise ValueError('only the lead or the user changes the contract')
     c, st = _state(room)
     said = []
-    measured = any(x is not None for x in (evaluate, result_file, build, repeats, min_gain))
+    measured = any(x is not None for x in (evaluate, result_file, build, repeats, min_gain, guards))
     if measured and st['best'] is not None:
         raise ValueError('how runs are measured cannot change after a baseline is kept: the runs would not compare')
     for key, value, label in (('evaluate', evaluate, 'evaluator'), ('build', build, 'build'), ('final', final, 'final evaluator')):
@@ -334,6 +397,9 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
             raise ValueError('--repeats: 1 to 50')
         c['repeats'] = int(repeats)
         said.append(f'median of {repeats} measures')
+    if guards is not None:
+        c['guards'] = parse_guards(guards)
+        said.append('guards ' + (', '.join(g['name'] for g in c['guards']) or 'none'))
     if min_gain is not None:
         if not re.fullmatch(r'\d+(\.\d+)?%?', str(min_gain)):
             raise ValueError('--min-gain: a number or a percentage like 1.5%')
@@ -356,7 +422,7 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
         said.append(f'{max_evals} runs in all')
     if not said:
         raise ValueError('research amend: --evaluate, --build, --final, --result-file/--no-result-file, --repeats, '
-                         '--min-gain, --budget-min, --build-min or --max-evals')
+                         '--min-gain, --guard, --budget-min, --build-min or --max-evals')
     _save(room, 'contract.json', c)
     if measured:
         _edit(room, lambda c2, s2: s2.update(protocol=None))   # the next baseline (or smoke) records the protocol anew
@@ -434,6 +500,7 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
         raise ValueError('only the lead or the user assigns cycles')
     if kind not in ('explorer', 'optimizer'):
         raise ValueError('--type explorer or optimizer')
+    _check_kernel(room)
     c, st = _state(room)
     if st['phase'] != 2:
         raise ValueError(f"cycles are assigned in the investigation (phase 2); now phase {st['phase']} ({PHASES[st['phase']]})")
@@ -466,7 +533,8 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
     d = _dir(room)
     work = d / f'work-{worker}'
     branch = f"{c['branch']}-{worker.lower()}"
-    if work.exists():
+    fresh = not work.exists()
+    if not fresh:
         _check_work(c, {'work': str(work), 'branch': branch})
         _git(work, 'reset', '-q', '--hard', commit)
         _clean(work, c)
@@ -483,7 +551,8 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
             if a and a.get('metric') is not None and a['state'] != 'revoked':
                 best = {'n': n, 'commit': a['commit'], 'metric': a['metric']}
         st['workers'][worker] = {'work': str(work), 'branch': branch, 'head': commit, 'best': best,
-                                 'since_evidence': 0, 'crashes': 0, 'paused': False, 'programs': old.get('programs', []),
+                                 'since_evidence': 0, 'crashes': old.get('crashes', 0), 'paused': old.get('paused', False),
+                                 'programs': old.get('programs', []),
                                  'deleted': old.get('deleted', []), 'idea': idea, 'type': kind, 'parent': parent}
         st['assigns'].append({'worker': worker, 'parent': parent, 'family': family, 'type': kind, 'idea': idea,
                               'ts': time.time()})
@@ -494,8 +563,12 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
     _edit(room, apply)
     _log(room, by, 'assign', {'worker': worker, 'parent': parent, 'type': kind, 'idea': idea})
     keep = c.get('keep') or []
+    old = st['workers'].get(worker, {})
     return (f"🔬 cycle for {worker}: {kind} from {parent}" + (f" on idea {idea}" if idea else '') + f", worktree {work}" + subs
-            + (f"; its own copies of {', '.join(keep)} (data, build) start empty: fill or link them before the first run" if keep else ''))
+            + (f"; its own copies of {', '.join(keep)} (data, build) start empty: fill or link them before the first run"
+               if keep and fresh else '')
+            + (f"; {old.get('crashes')} crashes in a row so far" if old.get('crashes') else '')
+            + ('; still PAUSED: research resume ' + worker if old.get('paused') else ''))
 
 
 def _family(st, n):
@@ -590,7 +663,7 @@ def _measure(c, work, d, n, env, log, on_start=None):
         if code != 0:
             return None, (f"build over {c.get('build_s') or 2 * c['budget_s']} s: killed" if code is None else f'build exit {code}'), \
                 secs, '', [], text
-    values, protocol = [], []
+    values, protocol, gvals = [], [], {g['name']: [] for g in c.get('guards', [])}
     pattern = rf"^\s*{re.escape(c['metric'])}\s*:\s*{NUMBER}\s*$"
     for k in range(c.get('repeats', 1)):
         result = d / 'runs' / f'{n}.result'
@@ -622,8 +695,14 @@ def _measure(c, work, d, n, env, log, on_start=None):
         if v != v or abs(v) == float('inf'):
             return None, 'the metric is not a finite number', secs, '', protocol, text
         values.append(v)
+        for g in gvals:
+            got = re.findall(rf"^\s*{re.escape(g)}\s*:\s*{NUMBER}\s*$", source, re.MULTILINE)
+            if len(got) != 1:
+                return None, f'guard {g}: {len(got)} "{g}:" lines (exactly one per measure)', secs, '', protocol, text
+            gvals[g].append(float(got[0]))
     value = statistics.median(values)
     spread = f'{min(values):.6g}..{max(values):.6g}' if len(values) > 1 else ''
+    c['_guards'] = {g: statistics.median(v) for g, v in gvals.items()}   # read by the caller right after
     return value, '', secs, spread, protocol, text
 
 
@@ -643,9 +722,13 @@ def evaluate(room, name, desc, idea=None, kind='attempt', of=None, seed=None):
     chat. kind=attempt (phase 2) competes for the best; ablation, baseline, control, repeat (phase 3) only measure;
     smoke (phase 1) checks the evaluator runs"""
     c, st = _state(room)
-    if kind not in ('attempt', 'smoke', *AUX_KINDS):
-        raise ValueError(f'--kind attempt, smoke, {", ".join(AUX_KINDS)}')
+    if kind not in ('attempt', 'fix', 'smoke', *AUX_KINDS):
+        raise ValueError(f'--kind attempt, fix, smoke, {", ".join(AUX_KINDS)}')
     _need(room, c, name, 'WORKER')
+    held = _gpu_hold(room)
+    if held and held['by'] != name:
+        raise ValueError(f"the GPU is held by {held['by']} ({held['reason']}) until {time.strftime('%H:%M', time.localtime(held['until']))}"
+                         f"{' or its build ends' if held.get('pid') else ''}: try again then (research status shows it)")
     return _locked(room, c, name, lambda: _evaluate(room, name, desc, idea, kind, of, seed))
 
 
@@ -786,6 +869,8 @@ def _reconcile(room, c, st):
 def _evaluate(room, name, desc, idea, kind, of, seed):
     d = _dir(room)
     c, st = _state(room)
+    fix = kind == 'fix'                                   # an attempt kept at equal metric: a correction, not a gain
+    kind = 'attempt' if fix else kind
     if st.get('pending'):
         mine = st['pending'].get('worker') in (name, '_main') or (st['pending'].get('worker') not in st['workers'])
         line = _reconcile(room, c, st)
@@ -814,12 +899,17 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         if wk.get('paused'):
             raise ValueError(f'{name} is paused after {CRASH_MAX} crashes in a row: the lead looks at the logs and resumes it '
                              f'(research resume {name})')
+        if fix and not wk.get('fix_ok'):
+            raise ValueError('a fix run needs the AUDITOR (or the lead) to allow it first: research allow-fix '
+                             f'{name} --reason "what it corrects" (a fix is kept at equal metric, so it must be a real correction)')
+        if fix and not wk.get('best'):
+            raise ValueError('a fix corrects a kept state: your line has no keep yet')
         if wk.get('since_evidence', 0) >= S_MAX and c.get('roles'):
             raise ValueError(f'{S_MAX} attempts without any evidence proposed: propose what you learned (research '
                              f'propose-evidence --source att-N) or ask the lead for a redirect, then run again')
     if phase >= 2:
         for rel, sha in c['sealed'].items():
-            if not (work / rel).is_file() or _sha(work / rel) != sha:
+            if not _seal_holds(work, rel, sha):
                 raise ValueError(f'the sealed file {rel} changed: restore it (git checkout {wk["head"]} -- {rel}). Nothing ran.')
     tracked = [x for x in _git(work, 'diff', '--name-only', wk['head']).splitlines() if x.strip()]
     if phase >= 2:
@@ -880,7 +970,8 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     _edit(room, lambda c2, s2: s2.update(pending=dict(pending)))
     held = _clean(work, c)
     log = d / 'runs' / f'{n}.log'
-    env = _env(CHATROOM_RUN=n, CHATROOM_KIND=kind, **({'CHATROOM_SEED': seed} if seed is not None else {}))
+    env = _env(CHATROOM_RUN=n, CHATROOM_KIND=kind, **({'CHATROOM_SEED': seed} if seed is not None else {}),
+               **({'CHATROOM_BASELINE': 1} if first else {}))
 
     def started(pid):                                     # recorded: a caller killed now leaves a process the kernel can stop
         pending['child'], pending['child_ts'] = pid, time.time()
@@ -888,6 +979,14 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     room.append(name, f"🔬 att-{n} [{kind}] running ({c['budget_s']} s budget" + (f" x{c['repeats']}" if c.get('repeats', 1) > 1 else '')
                 + f"): {desc[:100]}", 'board')
     value, why, secs, spread, protocol, text = _measure(c, work, d, n, env, log, started)
+    guards = c.pop('_guards', {}) if value is not None else {}
+    base_g = (st.get('baseline') or {}).get('guards') or {}
+    if value is not None and kind == 'attempt' and not first:
+        for g in c.get('guards', []):
+            if g['name'] in base_g and _guard_broken(g, guards[g['name']], base_g[g['name']]):
+                value, why = None, (f"guard {g['name']} = {guards[g['name']]:.6g} (median), worse than the baseline's "
+                                    f"{base_g[g['name']]:.6g} by more than {g['tol']}")
+                break
     proto = ' | '.join(protocol)
     if value is not None and kind == 'attempt' and st.get('protocol') is not None and proto != st['protocol']:
         value, why = None, f"the evaluation protocol changed (protocol: {proto[:120]} instead of {st['protocol'][:120]})"
@@ -899,7 +998,14 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         status, why = kind, f'measured against {of}'
     else:
         best = wk.get('best') or st.get('baseline')     # a line without a keep yet competes with the baseline
-        if first or _better(c, value, best['metric'] if best else None):
+        if fix and best:
+            if _not_worse(c, value, best['metric']):
+                status, why = 'keep', f"fix: not worse than att-{best['n']} ({best['metric']:.6g})" + \
+                    (f" within {c['min_gain']}" if c.get('min_gain') else '')
+            else:
+                status, why = 'discard', f"fix: worse than att-{best['n']} ({best['metric']:.6g})" + \
+                    (f" by more than {c['min_gain']}" if c.get('min_gain') else '')
+        elif first or _better(c, value, best['metric'] if best else None):
             status = 'keep'
             why = 'baseline' if first else (f"better than att-{best['n']} ({best['metric']:.6g})" if best else 'first of this line')
         else:
@@ -920,7 +1026,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         rec = {'n': n, 'worker': key, 'commit': commit, 'metric': value, 'status': status, 'kind': kind, 'idea': idea,
                'state': 'committed', 'parent_n': (w.get('best') or {}).get('n'), 'desc': desc, 'lines': lines,
                'added': len(added), 'readded': readded, 'tuning': tuning, 'spread': spread, 'of': of, 'seed': seed,
-               'ts': time.time()}
+               'guards': guards, 'fix': fix, 'ts': time.time()}
         s2['attempts'].append(rec)
         if kind == 'attempt':
             s2['evals'] = n
@@ -929,11 +1035,16 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
             w['crashes'] = w.get('crashes', 0) + 1 if status == 'crash' else 0
             if w['crashes'] >= CRASH_MAX:
                 w['paused'] = True
+            if fix:
+                w['fix_ok'] = None                         # one allowed fix, one run
+            was_global = bool(s2['best'] and w.get('best') and s2['best']['n'] == w['best']['n'])
             if status == 'keep':
                 w['best'] = {'n': n, 'commit': commit, 'metric': value}
                 w['head'] = head_full
+                if fix and was_global:                     # the corrected code replaces the best it corrects
+                    s2['best'] = {'n': n, 'worker': key, 'commit': commit, 'metric': value}
                 if first:
-                    s2['baseline'] = {'n': n, 'commit': commit, 'metric': value}
+                    s2['baseline'] = {'n': n, 'commit': commit, 'metric': value, 'guards': guards}
                     s2['protocol'] = proto
                 if _better(c2, value, (s2['best'] or {}).get('metric')) or s2['best'] is None:
                     s2['best'] = {'n': n, 'worker': key, 'commit': commit, 'metric': value}
@@ -1165,12 +1276,22 @@ def direction(room, by, data):
         if k in data and not isinstance(data[k], list):
             raise ValueError(f'{k} is a list')
 
+    new = {k: data.get(k, [] if k in ('searchable', 'no_positive', 'completed') else '') for k in keys}
+    if new == st.get('direction'):
+        raise ValueError('the direction is the same as the last one: nothing to record')
+
     def apply(c2, s2):
-        s2['direction'] = {k: data.get(k, [] if k in ('searchable', 'no_positive', 'completed') else '') for k in keys}
+        s2['direction'] = new
         s2['history'].append({'ts': time.time(), 'by': by, **s2['direction']})
     _edit(room, apply)
     _log(room, by, 'direction', data)
-    return f"🧭 direction by {by}: {str(data['active'])[:120]} ({str(data['change_summary'])[:120]})"
+    return f"🧭 direction by {by}: {_words(data['active'], 200)} · change: {_words(data['change_summary'], 200)}"
+
+
+def _words(value, limit):
+    """a text cut at a word, with … when cut"""
+    text = ' '.join(str(value).split())
+    return text if len(text) <= limit else text[:limit].rsplit(' ', 1)[0].rstrip(',;:(') + ' …'
 
 
 def conclude(room, by, worker, gate, trigger, text):
@@ -1302,6 +1423,112 @@ def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, 
     return f"⚖️ verdict at phase {phase} by {by}: {outcome.upper()}{score}" + (f' · next: {next_intent[:160]}' if next_intent else '')
 
 
+def allow_fix(room, by, worker, reason):
+    """the auditor (or the lead) lets a worker's next run be a fix: kept if not worse than its best by more than the
+    minimal gain, because it corrects something (safety, a race, a wrong result) rather than gaining speed"""
+    c, st = _state(room)
+    _need(room, c, by, 'AUDITOR')
+    if not reason:
+        raise ValueError('say what it corrects: --reason "..."')
+    key, wk = _worker(st, worker)
+    _edit(room, lambda c2, s2: s2['workers'][key].update(fix_ok={'by': by, 'reason': reason, 'ts': time.time()}))
+    _log(room, by, 'allow-fix', {'worker': key, 'reason': reason})
+    return f"🩹 {by} allows one fix run for {worker}: {reason[:160]} (research evaluate --kind fix)"
+
+
+# ---------------------------------------------------------------------------------------------------------- the GPU
+def _gpu_hold(room):
+    """the GPU hold in force: by, reason, until (and the pid of a prebuild, which ends it when it exits), or None"""
+    try:
+        h = json.loads((_dir(room) / 'gpu.hold').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if time.time() > float(h.get('until', 0)):
+        return None
+    if h.get('pid'):
+        from chat import pid_alive
+        if not pid_alive(int(h['pid'])):
+            return None
+    return h
+
+
+def hold(room, by, minutes, reason):
+    """anyone takes the GPU for work outside the runs (a profile, a microbenchmark, the auditor's check, a build): no
+    evaluate starts while it holds, except the holder's own. It ends at release or after the minutes"""
+    c, st = _state(room)
+    if not by:
+        raise ValueError('--as NAME: who holds the GPU')
+    if not reason:
+        raise ValueError('say what for: --reason "..."')
+    minutes = float(minutes or 0)
+    top = 720 if by in room.user_names() else 120
+    if not (0 < minutes <= top):
+        raise ValueError(f'--minutes: how long, more than 0 and at most {top}')
+    other = _gpu_hold(room)
+    if other and other['by'] != by:
+        raise ValueError(f"the GPU is already held by {other['by']} ({other['reason']})")
+    if _run_alive(room):
+        raise ValueError('a run is in progress: hold the GPU when it ends (research status)')
+    h = {'by': by, 'reason': reason, 'until': time.time() + minutes * 60, 'pid': None}
+    from chat import write_atomic
+    write_atomic(_dir(room) / 'gpu.hold', json.dumps(h))
+    _log(room, by, 'hold', h)
+    return f"⏸️ GPU held by {by} for {minutes:g} min: {reason[:160]} (research release when done)"
+
+
+def release(room, by):
+    h = _gpu_hold(room)
+    if not h:
+        (_dir(room) / 'gpu.hold').unlink(missing_ok=True)
+        return 'the GPU is free'
+    if h['by'] != by and by not in room.user_names():
+        raise ValueError(f"the GPU is held by {h['by']}: only they or the lead release it")
+    (_dir(room) / 'gpu.hold').unlink(missing_ok=True)
+    _log(room, by, 'release', {'held_by': h['by']})
+    return f"▶️ GPU released by {by} (held by {h['by']}: {h['reason'][:120]})"
+
+
+def prebuild(room, by, worker):
+    """the lead builds a worker's worktree before its first run, outside the run budget: the build runs detached (a
+    session's background reaper cannot kill it), logs to runs/prebuild-WORKER.log, and holds the GPU until it exits"""
+    if by not in room.user_names():
+        raise ValueError('only the lead or the user starts a prebuild')
+    c, st = _state(room)
+    if not c.get('build'):
+        raise ValueError('the contract has no build (research amend --build "CMD")')
+    key, wk = _worker(st, worker)
+    work = _check_work(c, wk)
+    other = _gpu_hold(room)
+    if other:
+        raise ValueError(f"the GPU is held by {other['by']} ({other['reason']}): one thing at a time")
+    if _run_alive(room):
+        raise ValueError('a run is in progress: start the prebuild when it ends')
+    log = _dir(room) / 'runs' / f'prebuild-{key}.log'
+    done = _dir(room) / 'runs' / f'prebuild-{key}.exit'
+    done.unlink(missing_ok=True)
+    wrap = ('import subprocess, sys, time\n'
+            'with open(sys.argv[2], "wb") as out:\n'
+            '    code = subprocess.call(sys.argv[1], shell=True, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)\n'
+            'open(sys.argv[3], "w").write(str(code))\n')
+    argv = [sys.executable, '-c', wrap, c['build'], str(log), str(done)]
+    kw = dict(cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_env(CHATROOM_KIND='prebuild'))
+    if os.name == 'nt':
+        flags = 0x08000000 | 0x00000200                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: no console to close by mistake
+        try:
+            proc = subprocess.Popen(argv, creationflags=flags | 0x01000000, **kw)   # out of the caller's job, where allowed
+        except OSError:
+            proc = subprocess.Popen(argv, creationflags=flags, **kw)
+    else:
+        proc = subprocess.Popen(argv, start_new_session=True, **kw)
+    limit = (c.get('build_s') or 2 * c['budget_s']) * 3 + 600   # a reused pid cannot hold the GPU past this
+    h = {'by': by, 'reason': f'prebuild of {key}', 'until': time.time() + limit, 'pid': proc.pid, 'log': str(log), 'exit': str(done)}
+    from chat import write_atomic
+    write_atomic(_dir(room) / 'gpu.hold', json.dumps(h))
+    _log(room, by, 'prebuild', h)
+    return (f"🔨 prebuild of {key} started (pid {proc.pid}, log {log}): no evaluate starts until it exits; the build output "
+            f"must be in a --keep folder to survive the runs' cleaning")
+
+
 # ---------------------------------------------------------------------------------------------------------- phases
 def _last_verdict(st, phase):
     return next((v for v in reversed(st['verdicts']) if v['phase'] == phase), None)
@@ -1368,14 +1595,14 @@ def _seal(room, by, sealed):
     for rel in c['sealed']:                               # the drafted evaluator is what gets sealed, not the empty start
         if not (work / rel).is_file():
             raise ValueError(f'sealed file {rel} is not in the smoke-run commit')
-        seals[rel] = _sha(work / rel)
+        seals[rel] = _git(work, 'rev-parse', f'{commit}:{rel}')
     for f in sealed:
         rel = _rel(Path(c['repo']), f) if Path(f).is_absolute() else Path(f).as_posix()
         if rel == c['program']:
             raise ValueError(f'{rel} is the program: it cannot also be sealed')
         if not (work / rel).is_file() or not _git(work, 'ls-files', '--', rel):
             raise ValueError(f'sealed file {rel} is not committed in the research worktree')
-        seals[rel] = _sha(work / rel)
+        seals[rel] = _git(work, 'rev-parse', f'{commit}:{rel}')
     c['sealed'], c['base_commit'] = seals, commit
     _save(room, 'contract.json', c)
 
@@ -1451,10 +1678,14 @@ def final(room, by):
         raise ValueError('the contract has no final evaluator (research amend --final "cmd"); without it, move on with phase next')
     if not st['best']:
         raise ValueError('no best program to evaluate')
+    held = _gpu_hold(room)
+    if held and held['by'] != by:
+        raise ValueError(f"the GPU is held by {held['by']} ({held['reason']}): run the final when it is released")
     return _locked(room, c, by, lambda: _final(room, by))
 
 
 def _final(room, by):
+    _check_kernel(room)
     c, st = _state(room)
     if st.get('pending'):                                 # under the lock: a pending run was cut off, record it first
         _reconcile(room, c, st)
@@ -1470,7 +1701,7 @@ def _final(room, by):
     _clean(work, c)
     log = _dir(room) / 'runs' / 'final.log'
     env = _env(CHATROOM_RUN='final', CHATROOM_KIND='final')
-    fc = dict(c, evaluate=c['final'], repeats=c.get('repeats', 1))
+    fc = dict(c, evaluate=c['final'], repeats=c.get('repeats', 1), guards=[])
     try:
         value, why, secs, spread, _, text = _measure(fc, work, _dir(room), 'final', env, log,
                                                      lambda pid: _edit(room, lambda c2, s2: s2.update(final_child=[pid, time.time()])))
@@ -1673,10 +1904,19 @@ def status(room):
             + (f"best att-{best['n']} {best['metric']:.6g} ({best['commit']}, {best.get('worker', '')})" if best else 'no baseline yet')
             + (f" · att-{st['pending']['n']} in progress or cut off" if st.get('pending') else '')
             + (' · DEGRADED: phase 3 closed without evidence runs' if st.get('degraded') else ''))
+    for f in sorted((_dir(room) / 'runs').glob('prebuild-*.exit')):
+        code = f.read_text(errors='replace').strip()
+        head += f"\nprebuild of {f.stem[9:]}: " + ('done (exit 0)' if code == '0' else f'FAILED (exit {code}), log {f.with_suffix(".log")}')
+    held = _gpu_hold(room)
+    if held:
+        head += (f"\nGPU held by {held['by']}: {held['reason']}" + (f" (pid {held['pid']}, log {held.get('log')})" if held.get('pid')
+                 else f" until {time.strftime('%H:%M', time.localtime(held['until']))}"))
     lines = [head]
     if len(st['workers']) > 1 or '_main' not in st['workers']:
         lines.append('workers: ' + '; '.join(f"{k} " + (f"best att-{w['best']['n']} {w['best']['metric']:.6g}" if w.get('best') else 'no best')
                                              + f" ({w.get('type')} from {w.get('parent')})" + (' PAUSED' if w.get('paused') else '')
+                                             + (f" {w['crashes']} crashes in a row" if w.get('crashes') else '')
+                                             + (' fix allowed' if w.get('fix_ok') else '')
                                              for k, w in st['workers'].items() if k != '_main'))
     if st['ideas']:
         lines.append(f"ideas: {len(st['ideas'])} (next: {st['next_mode']}) · evidence: "
@@ -1747,6 +1987,8 @@ def cmd(room, a):
         return _cmd(room, a)
     except ValueError as exc:
         act = a.pairs[0] if a.pairs else 'status'
+        if act == 'assign':
+            room.append(a.name or 'LEAD', f"⛔ assign {' '.join(a.pairs[1:2])} refused: {str(exc)[:300]}", 'board')
         if act not in ('status', 'view', 'expand', 'checklist') and (act != 'phase' or a.pairs[1:2] == ['next']) and (_dir(room) / 'log.jsonl').parent.is_dir():
             _log(room, a.name, act, {'refused': str(exc)[:400], 'args': a.pairs[1:]}, ok=False)
         raise
@@ -1761,18 +2003,27 @@ def _cmd(room, a):
         if not (a.program and a.metric and (a.evaluate or getattr(a, 'draft', False))):
             sys.exit('research init --program FILE --metric NAME (--evaluate "CMD" | --draft) [--direction min|max] [--budget-min 5] '
                      '[--max-evals 100] [--repo DIR] [--sealed a.py,b.py] [--tag NAME] [--result-file] [--keep data/] '
-                     '[--build "CMD" --build-min M] [--repeats N] [--min-gain X|X%] [--final "CMD"] --as LEAD')
+                     '[--build "CMD" --build-min M] [--repeats N] [--min-gain X|X%] [--guard NAME:min|max:TOL,...] [--final "CMD"] --as LEAD')
         return post(init(room, a.name, a.program, a.evaluate, a.metric, a.direction or 'min',
                          5 if a.budget_min is None else a.budget_min, 100 if a.max_evals is None else a.max_evals,
                          a.repo or '.', split(a.sealed), a.tag, bool(a.result_file), split(getattr(a, 'keep', None)),
                          bool(getattr(a, 'draft', False)), getattr(a, 'final', None), getattr(a, 'build', None),
-                         getattr(a, 'build_min', None), getattr(a, 'repeats', None) or 1, getattr(a, 'min_gain', None)))
+                         getattr(a, 'build_min', None), getattr(a, 'repeats', None) or 1, getattr(a, 'min_gain', None),
+                         getattr(a, 'guard', None)))
     if act == 'amend':
         return post(amend(room, a.name, a.evaluate, a.budget_min, a.max_evals, a.result_file, getattr(a, 'build', None),
                           getattr(a, 'build_min', None), getattr(a, 'repeats', None), getattr(a, 'min_gain', None),
-                          getattr(a, 'final', None)))
+                          getattr(a, 'final', None), getattr(a, 'guard', None)))
     if act == 'roles':
         return post(roles(room, a.name, rest))
+    if act == 'allow-fix' and rest:
+        return post(allow_fix(room, a.name, rest[0], getattr(a, 'reason', None)))
+    if act == 'hold':
+        return post(hold(room, a.name, getattr(a, 'minutes', None), getattr(a, 'reason', None)))
+    if act == 'release':
+        return post(release(room, a.name))
+    if act == 'prebuild' and rest:
+        return post(prebuild(room, a.name, rest[0]))
     if act == 'assign' and rest:
         return post(assign(room, a.name, rest[0], getattr(a, 'idea', None), getattr(a, 'parent', None) or 'best',
                            getattr(a, 'type', None) or 'explorer', a.force))
@@ -1822,6 +2073,7 @@ def _cmd(room, a):
         return post(panel(room, a.name or 'LEAD', q, a.out))
     if act == 'status':
         return print(status(room))
-    sys.exit('research: init | amend | roles | assign WORKER | evaluate | resume WORKER | propose-idea | propose-evidence | curate '
+    sys.exit('research: init | amend | roles | assign WORKER | prebuild WORKER | hold | release | allow-fix WORKER | evaluate '
+             '| resume WORKER | propose-idea | propose-evidence | curate '
              '| direction | conclude WORKER | revoke ID | verdict | reanchor | seal | phase [next] | final | checklist | view | expand ID '
              '| panel | status')
