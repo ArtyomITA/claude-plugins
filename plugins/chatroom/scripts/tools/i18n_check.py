@@ -96,10 +96,20 @@ def check_catalogs(root, errors, notes):
 
 def check_code(root, en, errors):
     for f in sorted((root / 'scripts').glob('*.py')):
+        if f.name == 'i18n.py':                                       # the library itself
+            continue
         for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
-            if not (isinstance(n, ast.Call) and getattr(n.func, 'id', getattr(n.func, 'attr', None)) == 'tr' and len(n.args) >= 1):
+            fname = getattr(n.func, 'id', getattr(n.func, 'attr', None)) if isinstance(n, ast.Call) else None
+            if fname not in ('tr', 'say') or not n.args:
                 continue
+            if fname == 'say':                                         # say(key, ...): the key first
+                n = ast.Call(func=n.func, args=[ast.Constant(value=None)] + n.args, keywords=n.keywords, lineno=n.lineno)
             where = f'{f.name}:{n.lineno}'
+            if len(n.args) >= 2 and isinstance(n.args[1], ast.JoinedStr):   # f'cmd.{key}.name': a family, checked by its shape
+                shape = ''.join(re.escape(v.value) if isinstance(v, ast.Constant) else r'[\w.]+' for v in n.args[1].values)
+                if not any(re.fullmatch(shape, k) for k in en):
+                    errors.append(f'{where}: no key of {FALLBACK}.json has the shape {shape}')
+                continue
             if len(n.args) < 2 or not (isinstance(n.args[1], ast.Constant) and isinstance(n.args[1].value, str)):
                 errors.append(f'{where}: tr() with a key that is not a literal (it cannot be checked)')
                 continue

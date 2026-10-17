@@ -10,6 +10,7 @@ recognise them by their form; each group lists the forms the code accepts."""
 import json
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,9 +19,29 @@ LANGS = ('en', 'it')
 FALLBACK = 'en'
 PROTOCOL = (('PLAN', 'PIANO'), ('VOTE', 'VOTO'), ('CLOSED', 'CHIUSO'), ('ALERT',), ('WATCH',), ('CHECK',), ('LEND',),
             ('RELAY',), ('error:',), ('KEEP',), ('DISCARD',), ('CRASH',), ('SMOKE',), ('DEGRADED',), ('INTERRUPTED',),
-            ('protocol:',), ('answer_ready',), ('search_more',))
+            ('protocol:',), ('answer_ready',), ('search_more',), ('TIMER',), ('WAKE-UP',), ('CHECKPOINT',), ('IDLE',))
 FIELD = re.compile(r'\{(\w+)\}')
 _cache, _warned = {}, set()
+_current = {'lang': FALLBACK}
+_local = threading.local()
+
+
+def use(lang, here=False):
+    """the language of what this process says from now on (main sets it from the room); here: only this thread (each
+    MCP call names its own room)"""
+    if here:
+        _local.lang = lang_of({'lang': lang})
+    else:
+        _current['lang'] = lang_of({'lang': lang})
+
+
+def current():
+    return getattr(_local, 'lang', None) or _current['lang']
+
+
+def say(key, **fields):
+    """tr() in the current language"""
+    return tr(current(), key, **fields)
 
 
 def catalog(lang):
