@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from i18n import FALLBACK, FIELD, LANGS, PROTOCOL  # noqa: E402
 
-KEY = re.compile(r'(_meta|[a-z][a-z0-9_]*)(\.[a-z0-9_]+)+')
+KEY = re.compile(r'(_meta|[a-z][A-Za-z0-9_]*)(\.[A-Za-z0-9_]+)+')     # area.name, name as the code calls it (camelCase)
 WORDS = re.compile(r"[A-Za-zÀ-ÿ]{2,}(?:[\s'’][A-Za-zÀ-ÿ]{2,})+")
 JS_CALL = re.compile(r"""\bI18N\.(?:t|text)\(\s*(['"`])([^'"`]*)\1\s*(?:,\s*\{([^}]*)\})?""")
 
@@ -111,13 +111,32 @@ def check_code(root, en, errors):
                 if given != fields_of(en[key]):
                     errors.append(f'{where}: {key} given fields {sorted(given)}, the text has {sorted(fields_of(en[key]))}')
     for f in sorted((root / 'scripts').glob('*.js')) + sorted((root / 'scripts').glob('*.html')):
+        if f.name == 'i18n.js':                                       # the library itself
+            continue
         src = re.sub(r'(?ms)/\*.*?\*/|^\s*//.*?$', '', f.read_text(encoding='utf-8'))
+        table = re.search(r"I18N\.tables?\('(\w+)'(?:,\s*(\{[^}]*\}|\w+))?(?:,\s*(\w+))?", src)
+        if table:                                                     # old-style objects: L.key, t().key, T().key
+            prefix, extra_name = table.group(1), table.group(3)
+            extra = set()
+            if extra_name:
+                block = re.search(re.escape(extra_name) + r'\s*=\s*tx\s*=>\s*\(\{(.*?)\}\);', src, re.S)
+                extra = set(re.findall(r'(\w+):\s*\(?[\w, ]*\)?\s*=>', block.group(1))) if block else set()
+                for k in re.findall(r"\btx\('([\w.]+)'", block.group(1) if block else ''):   # the keys the logic reads
+                    full = f'{prefix}.{k}'
+                    if not (full in en or (k.endswith('.') and any(x.startswith(full) for x in en))):
+                        errors.append(f'{f.name}: {extra_name} reads {full}, missing from {FALLBACK}.json')
+            names = {k[len(prefix) + 1:].split('.')[0] for k in en if k.startswith(prefix + '.')} | extra
+            for name in sorted(set(re.findall(r'\b(?:L|(?:L|T|t)\(\))\.([A-Za-z_]\w*)', src)) - names):
+                errors.append(f'{f.name}: uses {prefix}.{name} (through its table), missing from {FALLBACK}.json')
         for m in re.finditer(r'\bI18N\.(?:t|text)\(\s*(?![\'"`])', src):
             errors.append(f'{f.name}: I18N call with a key that is not a literal (it cannot be checked)')
         for m in JS_CALL.finditer(src):
             key, args = m.group(2), m.group(3)
             if m.group(1) == '`' and '${' in key:
                 errors.append(f'{f.name}: I18N key {key} is built at run time (it cannot be checked)')
+            elif key.endswith('.'):                                    # 'edit.names.' + type: a family of keys
+                if not any(k.startswith(key) for k in en):
+                    errors.append(f'{f.name}: no key starts with {key} in {FALLBACK}.json')
             elif key not in en:
                 errors.append(f'{f.name}: uses {key}, missing from {FALLBACK}.json')
             elif args is not None and '...' not in args:

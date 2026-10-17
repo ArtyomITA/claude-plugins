@@ -11,10 +11,8 @@ import {boxGeo} from './office-guns.js';
 import {floorPlan} from './office-layout.js';
 
 /** the words of the lift and of the arena (the viewer's strings are in office-ui.js; these are few and live with the arena) */
-export const ARENA_TEXT = {
-  it: {name: 'Arena', hintLift: "sali all'arena", hintExit: 'torna in ufficio', paintball: 'Paintball', zombie: 'Zombie', title: 'Sali in arena'},
-  en: {name: 'Arena', hintLift: 'go up to the arena', hintExit: 'back to the office', paintball: 'Paintball', zombie: 'Zombies', title: 'Go up to the arena'},
-};
+// the texts are in locales/<lang>.json (arena.*)
+export const ARENA_TEXT = I18N.tables('arena');
 
 /** the floor of the arena, above the floor of the office (the office ceiling is at 3 m) */
 export const ARENA_Y = 4.0;

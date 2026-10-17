@@ -11,20 +11,8 @@ import {createLockstep, delayFor} from './office-arcade-net.js';
 /** where the cabinet stands: in the north-west corner of the common room, against the wall and away from its doors (north wall x 3.4-4.6, west wall z 6.6-7.6, and the bridge door in the south wall), facing into the room (hw, hd: half its width and depth, for the floor plan) */
 export const ARCADE_AT = {x: 1.2, z: 5.52, rot: 0, hw: 0.42, hd: 0.38};
 
-const S = {
-  en: {title: '9999 IN 1', menu: 'Menu', close: 'Close', ownGame: 'Play a .nes of your own', ownGameTip: 'the file stays on this computer', loading: 'Loading…', noList: 'The game list could not be read.',
-       keys: 'Arrows move · X = A · Z = B · Enter = Start · Shift = Select · Esc = menu', saveScore: 'Save my score', scorePlaceholder: 'score', saved: 'Score saved', players: n => n > 1 ? `${n} players` : '1 player',
-       crashed: 'This game stopped (the emulator hit something it cannot run).', badRom: 'This is not a NES game file (.nes).', pressStart: 'PRESS START', free: 'FREE GAMES · NO COIN NEEDED', hint: 'use the arcade',
-       sha: 'this copy differs from the one in the plugin: scores may not match',
-       playWith: n => `Play with ${n}`, waitingFor: n => `Waiting for ${n} to join…`, cancel: 'Cancel', invites: (n, g) => `${n} invites you to play ${g}`, join: 'Join', friendLeft: 'Your friend left the game.',
-       desync: 'The two games went out of step. Leave and start again.', vs: n => `with ${n}`, waitingInputs: n => `Waiting for ${n}…`},
-  it: {title: '9999 IN 1', menu: 'Menu', close: 'Chiudi', ownGame: 'Gioca un tuo .nes', ownGameTip: 'il file resta su questo computer', loading: 'Carico…', noList: 'Non riesco a leggere la lista dei giochi.',
-       keys: 'Frecce muovi · X = A · Z = B · Invio = Start · Maiusc = Select · Esc = menu', saveScore: 'Salva il mio punteggio', scorePlaceholder: 'punti', saved: 'Punteggio salvato', players: n => n > 1 ? `${n} giocatori` : '1 giocatore',
-       crashed: 'Il gioco si e fermato (l\'emulatore ha trovato qualcosa che non sa eseguire).', badRom: 'Questo non e un file di gioco NES (.nes).', pressStart: 'PREMI START', free: 'GIOCHI LIBERI · NIENTE GETTONI', hint: 'usa il videogioco',
-       sha: 'questa copia e diversa da quella del plugin: i punteggi potrebbero non combaciare',
-       playWith: n => `Gioca con ${n}`, waitingFor: n => `Aspetto che ${n} entri…`, cancel: 'Annulla', invites: (n, g) => `${n} ti invita a giocare a ${g}`, join: 'Entra', friendLeft: 'Il tuo amico ha lasciato la partita.',
-       desync: 'Le due partite non sono piu allineate. Esci e ricomincia.', vs: n => `con ${n}`, waitingInputs: n => `Aspetto ${n}…`},
-};
+// the texts are in locales/<lang>.json (arcade.*)
+const S = I18N.tables('arcade', {playWith: ['n'], waitingFor: ['n'], invites: ['n', 'g'], vs: ['n'], waitingInputs: ['n'], players: ['n']});
 
 const CSS = `
 .o-arc-ov { position: absolute; inset: 0; z-index: 9; background: #05050cdd; display: flex; align-items: center; justify-content: center; font-family: "Courier New", monospace; color: #e8eaf6; }

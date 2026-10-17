@@ -25,33 +25,9 @@ const CSS = `
 #office .o-edit .o-primary { background: #f5b400; color: #222; }
 `;
 
-const NAMES = {
-  bossDesk: ['Scrivania del boss', "Boss's desk"], bossChair: ['Poltrona del boss', "Boss's chair"], laptop: ['Portatile', 'Laptop'],
-  shelf: ['Libreria', 'Bookshelf'], smallDesk: ['Scrivanietta', 'Small desk'], chair: ['Sedia da ufficio', 'Office chair'],
-  confTable: ['Tavolo riunioni', 'Meeting table'], meetChair: ['Sedia riunioni', 'Meeting chair'], kitchen: ['Cucina', 'Kitchen run'],
-  upperCabinets: ['Pensili', 'Wall cabinets'], fridge: ['Frigo', 'Fridge'], waterCooler: ["Distributore d'acqua", 'Water cooler'],
-  barTable: ['Tavolo alto', 'High table'], barStool: ['Sgabello', 'Bar stool'], sofa: ['Divano voxel', 'Voxel sofa'], armchair: ['Poltrona', 'Armchair'],
-  coffeeTable: ['Tavolino', 'Coffee table'], rack: ['Server rack', 'Server rack'], printer: ['Stampante', 'Printer'], planter: ['Pianta in vaso', 'Potted plant'],
-  floorLamp: ['Lampada', 'Floor lamp'], foosball: ['Biliardino', 'Table football'], deskChair: ['Sedia girevole', 'Swivel chair'],
-  execChair: ['Poltrona direzionale', 'Executive chair'], sideChair: ['Sedia', 'Chair'], couch: ['Divano', 'Couch'], lowTable: ['Tavolino basso', 'Low table'],
-  table: ['Tavolo', 'Table'], cabinet: ['Schedario', 'Filing cabinet'], plantTall: ['Pianta alta', 'Tall plant'], plantPot: ['Pianta piccola', 'Small plant'],
-  trash: ['Cestino', 'Bin'], recycle: ['Differenziata', 'Recycling bin'], tvWall: ['TV a parete', 'Wall TV'], tvStand: ['TV su mobile', 'TV on a stand'],
-  console: ['Console', 'Console'], espresso: ['Macchina espresso', 'Espresso machine'], coffeeMaker: ['Macchina del caffè', 'Coffee maker'],
-  corkboard: ['Bacheca', 'Corkboard'], wallGraph: ['Grafico', 'Wall chart'], cafeTable: ['Tavolino bar', 'Café table'], cafeChair: ['Sedia bar', 'Café chair'],
-  barCounter: ['Bancone', 'Bar counter'], vending: ['Distributore bibite', 'Vending machine'], lockers: ['Armadietti', 'Lockers'],
-  pingPong: ['Ping-pong', 'Table tennis'], beanBag: ['Pouf', 'Bean bag'], reception: ['Reception', 'Reception desk'],
-  binders: ['Libreria raccoglitori', 'Binder shelf'], copier: ['Fotocopiatrice', 'Copier'],
-};
-const T = {
-  it: {title: '🛠 Arreda il tuo ufficio', help: 'trascina un oggetto per spostarlo (Maiusc: senza griglia) · R ruota · C duplica · Canc elimina · Esc',
-       none: 'Clicca un oggetto per sceglierlo.', label: 'Etichetta', color: 'Colore', hue: 'Tinta', original: 'originale', height: 'Altezza',
-       turn: 'Ruota', dup: 'Duplica', del: 'Elimina', add: 'Aggiungi', search: 'cerca un oggetto…', ours: 'nostro', pack: 'pacchetto',
-       save: 'Salva e ricarica', discard: 'Annulla modifiche', reset: 'Ufficio di default', saved: 'Salvato', unsaved: 'modifiche non salvate'},
-  en: {title: '🛠 Furnish your office', help: 'drag a piece to move it (Shift: no grid) · R turn · C duplicate · Del remove · Esc',
-       none: 'Click a piece to pick it.', label: 'Label', color: 'Colour', hue: 'Hue', original: 'original', height: 'Height',
-       turn: 'Turn', dup: 'Duplicate', del: 'Remove', add: 'Add', search: 'search a piece…', ours: 'ours', pack: 'pack',
-       save: 'Save and reload', discard: 'Discard changes', reset: 'Default office', saved: 'Saved', unsaved: 'unsaved changes'},
-};
+// the names of the pieces are in locales/<lang>.json (edit.names.<type>)
+// the texts are in locales/<lang>.json (edit.*)
+const T = I18N.tables('edit');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const packLabel = name => name.split('/').pop().replace(/^Office_(Misc_)?/, '').replace('Traschcan', 'Trashcan').replace(/_/g, ' ');
 
@@ -61,7 +37,7 @@ export function createEditor({scene, camera, controls, renderer, root, layout, m
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   const panel = document.createElement('div'); panel.className = 'o-edit'; root.appendChild(panel);
   const items = (layout.items || []).map(it => ({...it}));          // the working copy; a removed piece becomes null
-  const t = () => T[lang()] || T.en, nm = type => (NAMES[type] || [type, type])[lang() === 'en' ? 1 : 0];
+  const t = () => T[lang()] || T.en, nm = type => (I18N.has('edit.names.' + type) ? I18N.text('edit.names.' + type, {}, lang()) : type);
   const helper = new THREE.BoxHelper(new THREE.Object3D(), 0xffd54f); helper.visible = false; scene.add(helper);
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
   let on = false, sel = null, drag = null, dirty = false, query = '';

@@ -3287,7 +3287,11 @@ def cmd_serve(room, a):
             if path in ('/', '/index.html'):
                 return self.send(200, viewer.read_bytes(), 'text/html; charset=utf-8')
             if re.fullmatch(r'/(office(-[a-z]+)*|i18n)\.js', path):
-                return self.send(200, (HERE / path[1:]).read_bytes(), 'text/javascript; charset=utf-8')
+                body = (HERE / path[1:]).read_bytes()
+                if path == '/i18n.js':                 # English inside the loader: the page has its texts in the same request
+                    en = (HERE.parent / 'locales' / 'en.json').read_text(encoding='utf-8-sig')
+                    body += ('\nI18N.seed("en", ' + en + ');\n').encode('utf-8')
+                return self.send(200, body, 'text/javascript; charset=utf-8')
             m = re.fullmatch(r'/locales/([a-z]{2})\.json', path)
             if m:                                      # the translations of the viewer and the office
                 f = HERE.parent / 'locales' / f'{m[1]}.json'

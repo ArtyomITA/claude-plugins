@@ -3,14 +3,8 @@
 // well), and the start of its command beside it. A click opens a panel with the commands and, for a process Claude Code keeps the output of, the last lines. The data
 // is what the viewer reads from the agents' transcripts (activity.py: nothing is asked of the agents); the commands and the lines are for this computer only.
 
-const S = {
-  en: {title: 'processes', none: 'nothing running in the background', kind: {shell: 'shell', monitor: 'monitor', agent: 'agent'}, ago: n => `${n} ago`, since: 'started', code: n => `exit code ${n}`,
-       state: {running: 'running', quiet: 'quiet for a while', done: 'finished', failed: 'failed', killed: 'stopped'}, lines: 'last lines (only on this computer)', noLines: 'no output saved for this one: only the command, the state and the exit code',
-       pick: 'pick a process to see its last lines', close: 'Close'},
-  it: {title: 'processi', none: 'niente in esecuzione in background', kind: {shell: 'shell', monitor: 'monitor', agent: 'agente'}, ago: n => `${n} fa`, since: 'partito', code: n => `codice di uscita ${n}`,
-       state: {running: 'in corso', quiet: 'fermo da un po', done: 'finito', failed: 'fallito', killed: 'fermato'}, lines: 'ultime righe (solo su questo computer)', noLines: 'di questo non c\'e output salvato: solo comando, stato e codice di uscita',
-       pick: 'scegli un processo per vederne le ultime righe', close: 'Chiudi'},
-};
+// the texts are in locales/<lang>.json (rack.*)
+const S = I18N.tables('rack', {ago: ['n'], code: ['n']});
 const CSS = `
 .o-rk-ov { position: absolute; inset: 0; z-index: 8; background: #05070fdd; display: flex; align-items: center; justify-content: center; }
 .o-rk { width: min(96%, 760px); max-height: 90%; overflow: auto; background: #0d1226; border: 3px solid #4fc3f7; border-radius: 14px; box-shadow: 0 0 36px #4fc3f744, 0 14px 44px #000; padding: 12px 16px 16px; color: #e8ecff; font-family: "Segoe UI", sans-serif; }

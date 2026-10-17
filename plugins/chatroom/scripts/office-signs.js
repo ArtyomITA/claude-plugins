@@ -2,10 +2,7 @@
 // small guide on an easel at the entrance for whoever comes in the first time. They are data (LAYOUT.signs, in office-layout.js: text in both languages, where,
 // how big, which colour), so a sign can be moved or renamed without touching this file. Drawn once per language.
 
-const GUIDE = {
-  it: ['BENVENUTO', 'WASD cammina · mouse guarda', 'E: parla, siediti, gioca', 'Spazio salta · Maiusc corri', '/ comandi rapidi', 'Altro ▾ giochi, GitHub, volumi'],
-  en: ['WELCOME', 'WASD walk · mouse look', 'E: talk, sit, play', 'Space jump · Shift run', '/ quick commands', 'More ▾ games, GitHub, volume'],
-};
+// the guide's lines are in locales/<lang>.json (signs.guide.N)
 const COLORS = {cyan: ['#e0ffff', '#00e5ff'], magenta: ['#ffe0fa', '#ff2bd6'], amber: ['#fff4d6', '#ffab00'], green: ['#eaffea', '#39e75f'], white: ['#ffffff', '#9fb3ff']};
 
 function neon(text, w, h, tone) {
@@ -59,7 +56,7 @@ export function buildSigns({THREE, scene, V, signs = [], lang = () => 'en'}) {
     if (lg === drawn) return; drawn = lg;
     for (const {s, tex} of items) {
       const text = typeof s.text === 'string' ? s.text : (s.text[lg] || s.text.en);
-      tex.image = s.kind === 'guide' ? guide(GUIDE[lg]) : neon(text, s.w || 1.4, s.h || 0.4, s.tone); tex.needsUpdate = true;
+      tex.image = s.kind === 'guide' ? guide(I18N.table('signs', {}, null, lg).guide) : neon(text, s.w || 1.4, s.h || 0.4, s.tone); tex.needsUpdate = true;
     }
   }
   return {redraw, count: items.length, group};                       // drawn by the office's first drawBoards(), when the language is known

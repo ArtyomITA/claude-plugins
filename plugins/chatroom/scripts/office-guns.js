@@ -27,12 +27,12 @@ export function boxGeo(THREE, boxes) {
  * pvp: the share of the damage that counts against a friend. area/areaDamage: the burst of the launcher (metres, damage at the centre).
  * zoom: how many times the sniper magnifies. spin: the share of the spin-up the minigun needs before it fires. */
 export const WEAPONS = [
-  {id: 'pistol',  it: 'Pistola',        en: 'Pistol',           tracer: '#ffe14d', pellets: 1, damage: 20, spread: 0.004, range: 80,  cooldown: 0.32,  speed: 75,  kick: 0.5,  mag: 12,  reload: 1.1, trail: 0.7},
-  {id: 'smg',     it: 'Mitra',          en: 'SMG',              tracer: '#ff9a1f', pellets: 1, damage: 8,  spread: 0.022, range: 70,  cooldown: 0.085, speed: 70,  kick: 0.28, mag: 36,  reload: 1.5, trail: 0.6, auto: true},
-  {id: 'shotgun', it: 'Fucile a pompa', en: 'Shotgun',          tracer: '#ffffff', pellets: 7, damage: 10, spread: 0.1,   range: 10,  cooldown: 0.95,  speed: 50,  kick: 1.0,  mag: 6,   reload: 2.0, trail: 0.5},
-  {id: 'sniper',  it: 'Cecchino',       en: 'Sniper',           tracer: '#4dd2ff', pellets: 1, damage: 80, spread: 0.035, range: 160, cooldown: 1.25,  speed: 150, kick: 1.5,  mag: 5,   reload: 2.2, trail: 2.2, tw: 1.7, zoom: 3.2, pvp: 0.5},
-  {id: 'grenade', it: 'Lanciagranate',  en: 'Grenade launcher', tracer: '#9cff3a', pellets: 1, damage: 30, spread: 0.01,  range: 34,  cooldown: 1.1,   speed: 26,  kick: 1.3,  mag: 4,   reload: 2.3, trail: 0.5, size: 2.6, lob: true, area: 2.6, areaDamage: 48, pvp: 0.6},
-  {id: 'minigun', it: 'Minigun',        en: 'Minigun',          tracer: '#ff4d5e', pellets: 1, damage: 5,  spread: 0.05,  range: 60,  cooldown: 0.055, speed: 75,  kick: 0.16, mag: 160, reload: 3.0, trail: 0.6, auto: true, spin: 0.55, pvp: 0.6},
+  {id: 'pistol',  tracer: '#ffe14d', pellets: 1, damage: 20, spread: 0.004, range: 80,  cooldown: 0.32,  speed: 75,  kick: 0.5,  mag: 12,  reload: 1.1, trail: 0.7},
+  {id: 'smg',     tracer: '#ff9a1f', pellets: 1, damage: 8,  spread: 0.022, range: 70,  cooldown: 0.085, speed: 70,  kick: 0.28, mag: 36,  reload: 1.5, trail: 0.6, auto: true},
+  {id: 'shotgun', tracer: '#ffffff', pellets: 7, damage: 10, spread: 0.1,   range: 10,  cooldown: 0.95,  speed: 50,  kick: 1.0,  mag: 6,   reload: 2.0, trail: 0.5},
+  {id: 'sniper',  tracer: '#4dd2ff', pellets: 1, damage: 80, spread: 0.035, range: 160, cooldown: 1.25,  speed: 150, kick: 1.5,  mag: 5,   reload: 2.2, trail: 2.2, tw: 1.7, zoom: 3.2, pvp: 0.5},
+  {id: 'grenade', tracer: '#9cff3a', pellets: 1, damage: 30, spread: 0.01,  range: 34,  cooldown: 1.1,   speed: 26,  kick: 1.3,  mag: 4,   reload: 2.3, trail: 0.5, size: 2.6, lob: true, area: 2.6, areaDamage: 48, pvp: 0.6},
+  {id: 'minigun', tracer: '#ff4d5e', pellets: 1, damage: 5,  spread: 0.05,  range: 60,  cooldown: 0.055, speed: 75,  kick: 0.16, mag: 160, reload: 3.0, trail: 0.6, auto: true, spin: 0.55, pvp: 0.6},
 ];
 
 // ------------------------------------------------------------------ the models

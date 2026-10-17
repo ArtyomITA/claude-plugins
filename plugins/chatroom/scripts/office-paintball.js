@@ -25,12 +25,8 @@ export const MOOD = {ambient: 0.55, sun: 0.33, lamps: 0.72, exposure: 0.93, fog:
 const MAXZ = 16;
 const COLORS = ['#ff1744', '#ffea00', '#00e5ff', '#76ff03', '#e040fb', '#ff9100', '#2979ff', '#f50057'];
 const TOXIC = '#7cff3a', SHOCK = '#ffb74d';
-const TEXT = {
-  it: {zon: '🧟 Zombie: sopravvivi alle ondate', lock: 'Spegni il paintball per uscire dalla prima persona', zoff: 'Zombie spenti', over: (w, k) => `Eliminato: ondata ${w}, zombie ${k}`, on: '🔫 Paintball acceso: clic per sparare, 1-6 o rotella per le armi, R ricarica, tasto destro o Z zoom del cecchino', off: 'Paintball spento: le macchie sono sparite',
-       hit: n => `Colpito da ${n}`, out: n => `Eliminato: rinasci tra ${n} s`, pov: 'Entra in prima persona (POV) per sparare', hp: 'HP', wave: 'ONDATA', kills: 'UCCISI', left: 'ZOMBIE', next: n => `Ondata ${n}`, coop: 'in squadra', reload: 'RICARICA', free: '∞', askTitle: n => `${n} ha avviato la modalità Zombie`, join: 'Partecipa in POV', watch: 'Guarda dall\'alto', watching: '👁 Guardi dall\'alto: nessuna interazione', stop: 'Partecipa', boss: 'BOSS', bossIn: 'Il BOSS è arrivato!'},
-  en: {zon: '🧟 Zombies: survive the waves', lock: 'Switch paintball off to leave first person', zoff: 'Zombies off', over: (w, k) => `You are out: wave ${w}, ${k} zombies`, on: '🔫 Paintball on: click to shoot, 1-6 or the wheel for weapons, R reloads, right button or Z zooms the sniper', off: 'Paintball off: the paint is gone',
-       hit: n => `Hit by ${n}`, out: n => `You are out: back in ${n} s`, pov: 'Go first person (POV) to shoot', hp: 'HP', wave: 'WAVE', kills: 'KILLS', left: 'ZOMBIES', next: n => `Wave ${n}`, coop: 'as a team', reload: 'RELOAD', free: '∞', askTitle: n => `${n} started Zombie mode`, join: 'Join in first person', watch: 'Watch from above', watching: '👁 Watching from above: no interaction', stop: 'Join', boss: 'BOSS', bossIn: 'The BOSS is here!'},
-};
+// the texts are in locales/<lang>.json (paintball.*)
+const TEXT = I18N.tables('paintball', {over: ['w', 'k'], hit: ['n'], out: ['n'], next: ['n'], askTitle: ['n']});
 const CSS = `
 .o-pnt { position: absolute; inset: 0; pointer-events: none; z-index: 24; font: 700 14px "Segoe UI", system-ui, sans-serif; color: #fff; text-shadow: 0 1px 3px #000c; }
 .o-pnt svg { display: block; shape-rendering: crispEdges; filter: drop-shadow(0 2px 2px #000a); }
@@ -622,7 +618,7 @@ export function createPaintball({THREE, scene, camera, canvas, root, pov, me, pl
     if (hudFor !== weapon + L) {                                                            // the slots and the big icon only change with the weapon (not with every shot)
       hudFor = weapon + L;
       el.slots.innerHTML = WEAPONS.map((x, i) => `<div class="o-pnt-slot${i === weapon ? ' o-on' : ''}"><b>${i + 1}</b>${pix(ICONS[x.id], 2)}</div>`).join('');
-      el.gicon.innerHTML = pix(ICONS[w.id], 5); el.gname.textContent = w[L] || w.it;
+      el.gicon.innerHTML = pix(ICONS[w.id], 5); el.gname.textContent = I18N.text('guns.' + w.id, {}, L);
     }
     el.ammo.classList.toggle('o-empty', reloading || ammo[weapon] === 0);
     { const h = reloading ? `<small>${T().reload}</small>` : `${ammo[weapon]}<small>/ ${T().free}</small>`; if (h !== ammoHtml) { ammoHtml = h; el.ammo.innerHTML = h; } }

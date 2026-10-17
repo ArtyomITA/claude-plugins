@@ -62,6 +62,12 @@ Il codice e gli agenti le riconoscono per forma, quindi restano fisse in tutte l
 - Lingua di riserva: `en`. Una chiave che manca (o è vuota) in `it` esce in inglese, mai vuota. Una chiave che manca
   anche in `en` è un errore di `i18n_check`; a run time mostra la chiave e avvisa una volta, senza fermare il comando.
   Un campo non passato resta scritto com'è (`{file}`), uguale in Python e JS.
+- Eccezione: i nomi delle stanze e le insegne dell'ufficio (`office-layout.js`, `rooms` e `signs`) restano dati con
+  `it`/`en` dentro il record, perché il layout si salva in `~/.claude/chatroom/office.json` e l'utente può cambiarli; la
+  guida all'ingresso, i nomi dei mobili dell'editor e delle armi invece sono nel catalogo.
+- Passo 2 (fatto): viewer (`viewer.*`) e ufficio (`office.*`, `arena.*`, `arcade.*`, `edit.*`, `github.*`,
+  `paintball.*`, `rack.*`, `signs.*`, `guns.*`) leggono il catalogo con `I18N.table()` / `I18N.tables()`, che danno
+  la stessa forma delle tabelle di prima (`L.chiave`, `L.funzione(a, b)`), così i punti di chiamata non cambiano.
 - JS: `I18N.t()` fa l'escape HTML dei campi (risultato sicuro per `innerHTML`), `I18N.text()` no (per `textContent`).
 
 ### Codice

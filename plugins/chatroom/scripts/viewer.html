@@ -235,7 +235,7 @@
   <div id="pending"></div>
   <div class="compose">
     <button id="cmdBtn" title="">⚡</button>
-    <button id="attach" title="Allega foto · Attach pictures (anche incolla / trascina · paste or drop)">📎</button>
+    <button id="attach" title="Attach pictures">📎</button>
     <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
     <textarea id="box" rows="1"></textarea>
     <button id="send">➤</button>
@@ -271,36 +271,11 @@
 </aside>
 <div id="scrim"></div>
 
+<script src="i18n.js"></script>
 <script>
-const T = {
-  en: { empty: 'No messages yet.', newer: n => `↓ ${n} new`, placeholder: u => `Write to everyone as ${u}… (Enter sends, Shift+Enter new line)`,
-        hint: 'Type @ to tag a participant (it wakes up and gets the alert), / or ⚡ for the quick commands.',
-        cmds: 'Quick commands: they post a ready message to everyone', tagsHead: 'Tag: the participant wakes up and gets the alert',
-        everyone: 'everyone', both: 'Both rooms', allRooms: 'All rooms',
-        idle: 'idle', idleSince: (time, n) => `idle since ${time} (#${n}), wakes up on a tag`,
-        messages: n => `${n} messages`, members: n => `${n} participants`, notYet: 'has not written yet',
-        ago: s => s < 60 ? `${Math.round(s)} s ago` : `${Math.round(s / 60)} min ago`, lastMsg: 'last message',
-        doing: 'is on:', quiet: 'waiting for the next message', search: 'Search', sound: 'Sound on new messages',
-        settings: 'Settings', fTitle: 'Title', fSubtitle: 'Subtitle / goal', fIcon: 'Icon (emoji)', fAccent: 'Accent colour',
-        fTheme: 'Theme', fWall: 'Background', fLang: 'Language', people: 'Participants', view: 'View',
-        optStatus: 'Show statuses', optCompact: 'Compact messages', save: 'Save', cancel: 'Cancel', saved: 'Saved for everyone.',
-        themes: ['Automatic', 'Light', 'Dark'], walls: ['Dots', 'Grid', 'Plain'], role: 'role', notSent: 'Not sent: ',
-        unreachable: 'the viewer server is not reachable.', closed: 'Chat closed' },
-  it: { empty: 'Ancora nessun messaggio.', newer: n => `↓ ${n} nuovi`, placeholder: u => `Scrivi a tutti come ${u}… (Invio manda, Maiusc+Invio a capo)`,
-        hint: 'Scrivi @ per taggare un partecipante (si sveglia e riceve l\'alert), / o ⚡ per i comandi rapidi.',
-        cmds: 'Comandi rapidi: mandano a tutti un messaggio pronto', tagsHead: 'Tag: il partecipante si sveglia e riceve l\'alert',
-        everyone: 'tutti', both: 'Tutte e due', allRooms: 'Tutte',
-
-        idle: 'in attesa', idleSince: (time, n) => `in attesa dalle ${time} (#${n}), si sveglia con un tag`,
-        messages: n => `${n} messaggi`, members: n => `${n} partecipanti`, notYet: 'non ha ancora scritto',
-        ago: s => s < 60 ? `${Math.round(s)} s fa` : `${Math.round(s / 60)} min fa`, lastMsg: 'ultimo messaggio',
-        doing: 'sta su:', quiet: 'in attesa del prossimo messaggio', search: 'Cerca', sound: 'Suono ai nuovi messaggi',
-        settings: 'Impostazioni', fTitle: 'Titolo', fSubtitle: 'Sottotitolo / obiettivo', fIcon: 'Icona (emoji)', fAccent: 'Colore',
-        fTheme: 'Tema', fWall: 'Sfondo', fLang: 'Lingua', people: 'Partecipanti', view: 'Vista',
-        optStatus: 'Mostra gli stati', optCompact: 'Messaggi compatti', save: 'Salva', cancel: 'Annulla', saved: 'Salvato per tutti.',
-        themes: ['Automatico', 'Chiaro', 'Scuro'], walls: ['Puntini', 'Griglia', 'Tinta unita'], role: 'ruolo', notSent: 'Non inviato: ',
-        unreachable: 'il server della chat non risponde.', closed: 'Chat chiusa' },
-};
+// the texts are in locales/<lang>.json (viewer.*): the functions' fields in call order, and the one that holds logic
+const VIEW_ARGS = {newer: ['n'], placeholder: ['u'], idleSince: ['time', 'n'], messages: ['n'], members: ['n']};
+const VIEW_EXTRA = tx => ({ago: s => s < 60 ? tx('ago_s', {s: Math.round(s)}) : tx('ago_min', {m: Math.round(s / 60)})});
 const PALETTE = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085', '#b7950b', '#6c5ce7', '#e84393', '#0984e3'];
 const $ = id => document.getElementById(id);
 const feed = $('feed');
@@ -309,7 +284,7 @@ let config = {heartbeat: 120, user_name: 'USER', self_names: [], participants: [
 const FRIEND = new URLSearchParams(location.search).has('visit')
   ? fetch('friendroom/config.json', {cache: 'no-store'}).then(r => r.ok ? 'friendroom/' : '').catch(() => '') : Promise.resolve('');
 let SELF = new Set(['USER']), USERS = new Set(['USER']), shown = 0, lastFrom = null, all = [], unseen = 0, sound = false, query = '';
-const t = () => T[config.lang] || T.en;
+const t = () => I18N.table('viewer', VIEW_ARGS, VIEW_EXTRA, config.lang);
 
 function pref(key, fallback) { try { const v = localStorage.getItem('chatroom.' + key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
 function setPref(key, value) { try { localStorage.setItem('chatroom.' + key, JSON.stringify(value)); } catch (e) {} }
@@ -438,9 +413,8 @@ function build(m) {
     el = document.createElement('div');
     el.className = 'pill choice';
     el.innerHTML = `${inline(m.text)} <span class="num">#${m.n} ${esc(m.time || '')}</span><div class="choices"></div>`;
-    const it = config.lang === 'it', open = config.mode === 'choose' && !m._room;
-    for (const [key, icon, name, label] of [['normal', '💬', it ? 'Normale' : 'Normal', it ? 'il lead prepara la stanza con te' : 'the lead sets the room up with you'],
-                                            ['research', '🔬', 'Research', it ? 'contratto, valutatore sigillato, ruoli fissi' : 'contract, sealed evaluator, fixed roles']]) {
+    const L = t(), open = config.mode === 'choose' && !m._room;
+    for (const [key, icon, name, label] of [['normal', '💬', L.modeNormal, L.modeNormalTip], ['research', '🔬', 'Research', L.modeResearchTip]]) {
       const b = document.createElement('button');
       b.textContent = `${icon} ${name}`; b.title = label;
       b.disabled = !open; if (config.mode === key) b.classList.add('on');
@@ -578,7 +552,7 @@ function applyLook() {
   const L = t();
   $('box').placeholder = L.placeholder(config.user_name || 'USER');
   $('hint').textContent = L.hint;
-  $('cmdBtn').title = L.cmds;
+  $('cmdBtn').title = L.cmds; $('attach').title = L.attach;
   if (COMMANDS.length && COMMANDS._lang !== config.lang) loadCommands().then(() => { COMMANDS._lang = config.lang; });
   $('search').placeholder = L.search;
   $('searchBtn').title = L.search; $('soundBtn').title = L.sound; $('gear').title = L.settings;
@@ -599,7 +573,7 @@ async function loadConfig(force) {
       const changed = text !== configText;
       configText = text;
       config = Object.assign({}, config, JSON.parse(text));
-      if (changed || force) { applyLook(); rerender(); window.dispatchEvent(new CustomEvent('chatroom:data', {detail: {all, config}})); }
+      if (changed || force) { await I18N.load(config.lang); applyLook(); rerender(); window.dispatchEvent(new CustomEvent('chatroom:data', {detail: {all, config}})); }
     }
   } catch (e) {}
 }
@@ -875,7 +849,7 @@ async function savePanel() {
   try {
     const r = await fetch('config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     if (!r.ok) { $('saved').textContent = t().notSent + await r.text(); return; }
-    config = Object.assign({}, config, await r.json()); applyLook(); rerender(); header();
+    config = Object.assign({}, config, await r.json()); await I18N.load(config.lang); applyLook(); rerender(); header();
     $('saved').textContent = t().saved;
     setTimeout(closePanel, 600);
   } catch (e) { $('saved').textContent = t().notSent + t().unreachable; }
@@ -893,14 +867,16 @@ $('optStatus').checked = pref('statuses', true);
 $('optCompact').checked = pref('compact', false);
 if ($('optCompact').checked) document.body.style.fontSize = '13px';
 setSound(pref('sound', false));
-applyLook();
+// the texts first, both languages (the office draws signs once per language): everything below renders with them
+window.I18N_READY = Promise.all(I18N.LANGS.map(l => I18N.fetchLang(l))).then(() => I18N.load(config.lang));
+I18N_READY.then(applyLook);
 loadCommands().then(() => { COMMANDS._lang = config.lang; });
 /* the 3D office (office.js) reads the chat through these */
 window.chatroom = {
   jumpTo, snapshot: () => ({all, config}),
   tag(name) { box.value = (box.value && !/\s$/.test(box.value) ? box.value + ' ' : box.value) + '@' + name + ' '; box.focus(); },
 };
-loadConfig(true).then(() => { poll(); setInterval(poll, 1500); setInterval(() => loadConfig(false), 5000); setInterval(header, 5000); });
+I18N_READY.then(() => loadConfig(true)).then(() => { poll(); setInterval(poll, 1500); setInterval(() => loadConfig(false), 5000); setInterval(header, 5000); });
 </script>
 <script type="module" src="office.js"></script>
 </body>

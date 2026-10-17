@@ -22,6 +22,7 @@ import {createPaintball} from './office-paintball.js';
 import {createArena, createElevator, ARENA_Y, ELEVATOR_AT, ARENA_TEXT} from './office-arena.js';
 import {mergeStatic} from './office-merge.js';
 import {createUI, replayGames, EMOJI, unlockAudio, chime, notify, unnotify, badge} from './office-ui.js';
+await window.I18N_READY;          // the texts (locales/<lang>.json) before anything is built
 
 const pref = (k, d) => { try { const v = localStorage.getItem('chatroom.office.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem('chatroom.office.' + k, JSON.stringify(v)); } catch (e) {} };
@@ -1253,7 +1254,7 @@ function drawBoards() {
     const {g, canvas: k} = tv; g.fillStyle = '#0d1018'; g.fillRect(0, 0, k.lw, k.lh);
     g.fillStyle = '#4fc3f7'; g.font = '700 22px sans-serif'; g.fillText('● LIVE', 14, 30);
     const msgs = liveMsgs; let y = 62;
-    if (visiting && !msgs.length) { g.fillStyle = '#6b7280'; g.font = '16px sans-serif'; g.fillText(c.lang === 'en' ? 'the chat is not shared' : 'chat non condivisa', 14, 62); }
+    if (visiting && !msgs.length) { g.fillStyle = '#6b7280'; g.font = '16px sans-serif'; g.fillText(I18N.text('office.chatNotShared', {}, c.lang), 14, 62); }
     g.font = '17px sans-serif';
     for (const m of msgs) {
       g.fillStyle = m.from === D.user ? '#ff80ab' : DATA.profile(m.from).color; g.font = '700 17px sans-serif'; g.fillText(`#${m.n} ${m.from}`, 14, y);
@@ -1306,7 +1307,7 @@ function drawBoards() {
   if (boardChanged('coffee', c.lang)) {
     const {g, canvas: k} = coffeeSign; g.fillStyle = '#2b2f36'; g.fillRect(0, 0, k.lw, k.lh);
     g.font = '700 46px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#f3e3c3';
-    g.fillText(DATA.config.lang === 'en' ? '☕ coffee' : '☕ caffè', k.lw / 2, k.lh / 2 + 3); g.textAlign = 'left';
+    g.fillText(I18N.text('office.coffeeSign', {}, DATA.config.lang), k.lw / 2, k.lh / 2 + 3); g.textAlign = 'left';
     coffeeSign.tex.needsUpdate = true;
   }
   if (boardChanged('nameplate', D.user)) {

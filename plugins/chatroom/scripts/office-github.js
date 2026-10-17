@@ -2,14 +2,8 @@
 // commits and the open issues; a click on it (or Altro > GitHub) opens a panel with every line as a link. The data comes from the viewer (/github.json: gh and git run in
 // the project folder, cached for a minute, local only: it never goes through the relay to friends). Without a project folder the screen is not there at all.
 
-const S = {
-  en: {title: 'GitHub', prs: 'PULL REQUESTS', runs: 'CI RUNS', commits: 'COMMITS', issues: 'ISSUES', none: 'nothing open', noneRuns: 'no runs yet', detached: 'detached copy', ago: n => `${n} ago`, loading: 'loading…', panel: 'GitHub',
-       missing: 'gh is not installed (cli.github.com)', login: 'gh is not logged in: run  gh auth login', err: 'gh did not answer', draft: 'draft', updated: s => `updated ${s} ago`, stale: ' (old data)',
-       checks: {success: 'checks passed', failure: 'checks failed', pending: 'checks running', none: 'no checks'}, close: 'Close', open: 'open on GitHub'},
-  it: {title: 'GitHub', prs: 'PULL REQUEST', runs: 'ESECUZIONI CI', commits: 'COMMIT', issues: 'ISSUE', none: 'niente di aperto', noneRuns: 'nessuna esecuzione', detached: 'copia staccata', ago: n => `${n} fa`, loading: 'carico…', panel: 'GitHub',
-       missing: 'gh non e installato (cli.github.com)', login: 'gh non e collegato: esegui  gh auth login', err: 'gh non risponde', draft: 'bozza', updated: s => `aggiornato ${s} fa`, stale: ' (dati vecchi)',
-       checks: {success: 'controlli ok', failure: 'controlli falliti', pending: 'controlli in corso', none: 'nessun controllo'}, close: 'Chiudi', open: 'apri su GitHub'},
-};
+// the texts are in locales/<lang>.json (github.*)
+const S = I18N.tables('github', {ago: ['n'], updated: ['s']});
 const CSS = `
 .o-gh-ov { position: absolute; inset: 0; z-index: 8; background: #05070fdd; display: flex; align-items: center; justify-content: center; }
 .o-gh { width: min(96%, 900px); max-height: 92%; overflow: auto; background: #0e1428; border: 3px solid #d4a640; border-radius: 14px; box-shadow: 0 0 40px #d4a64044, 0 14px 44px #000; padding: 12px 16px 16px; color: #e8ecff; font-family: "Segoe UI", sans-serif; }
