@@ -89,70 +89,76 @@ The lead (your session) gets a guide for each kind of room, and the room hands i
 - `python chat.py guide research`: is it a research task, the contract template, opening, the worker, what the kernel
   does at every run, the lead's part, the limits to tell the user, the end.
 
-## The harness, point by point
+## Harness, point by point
 
-Everything here is done by `chat.py`, the same way for every agent, in Claude Code and Codex alike.
+Enforced by `chat.py`, identical for every agent, Claude Code and Codex.
 
-| Point | What it does |
+| Point | Mechanism |
 |---|---|
-| Shared chat | Append-only JSON lines under a lock directory that records its owner (pid and token): a stale lock is broken only when its owner is dead (after 60 s anyway), by one waiter, and a holder never removes a lock it no longer owns. |
-| Alerts | After each message `post` prints whom to ping: the tagged agents (`@NAME`, `--reply`), everyone for the user, the lead, `@all`/`@tutti`, a PLAN, a VOTE or a CLOSED. An untagged message pings nobody; a tag to the lead is read through the relay. |
-| Focused reading | `read --focus` and `wait --focus` show in full only what concerns the agent; the rest becomes one digest line per author from its JSON status (pct, step, done, risks, evidence, next, needs) with message numbers; a focused wait still delivers it after 20 messages or 3 heartbeats. |
-| Ranges | `read --range A-B` opens a few messages without moving anyone's place. |
-| Silence timer | Nobody stays silent past the heartbeat (120 s by default); a status must carry a percentage; the lead and the user are not on the timer. |
-| Idle | One `--idle` status, then waits of up to 540 s that only a tag, the user, the lead, a PLAN, a VOTE or a CLOSED interrupt; a second idle and an idle with unread messages are refused. |
-| Structured statuses | JSON statuses (`task`, `step`, `pct`, `files`, `next`, `needs`, `done`, `evidence`, `risks`, `free_min`) rendered as cards and used by the digest and the checks. |
-| Plans, votes, closings | Read as headings at a line start, also in a reply, in bold or after an emoji (`PLAN v2: ...`, `PLAN v2 (draft): ...`, `CLOSED` in capitals); a sentence about a plan is not a plan; a vote is the first line of its own message; quoted lines are ignored; `post` warns when a plan lacks its colon or a vote is not on the first line. |
-| Closing gate | A participant's `CLOSED vN` is refused until every active participant except the plan's author voted yes with what they checked; a no is a split the lead reviews and decides; after `PLAN v3` only the lead and the user post a new version; `closing_gate=0` turns it off for other closing rules. |
-| Evidence rules | An artifact is an exit code, tests passed, file:line, a path or source file, `#n`, a hash, a link, a measured time or size; "e.g." or a bare percentage is not. Agents change position only on new evidence and write their first position before reading the others'. |
-| Task board | Tasks with dependencies and declared files (folders included; Windows ignores case); taking a task whose files another task holds is refused; facts and a decision log. |
-| Leases | A taken task whose owner is silent (not idle) for 5 heartbeats can be taken by another; `task next` takes the first free task. |
-| Proof of done | `task done` wants a proof naming an artifact; `--gaps` records what is not done, `--touched` posts a finding about changed interfaces; only the lead closes without an artifact. |
-| Tasks that test themselves | `--verify "CMD"` (lead or user, from the shell only) runs in the closing agent's worktree outside the room's lock, killed with its children past its limit (110 s, `--verify-timeout`); `--merge-into BRANCH` refuses uncommitted work, a branch without commits of its own and conflicts (`git merge-tree`), and reports undeclared changed files. |
-| Scope changes | `task amend` widens a task's files when no other task declares them; the lead decides otherwise (`--force`). |
-| Handoff and help | `handoff` passes a task with its context; `help` lends a piece to a waiting agent, who must `accept` it within 10 minutes or it goes back; `giveback` returns it; a lapsed lent piece goes back only to its lender. |
-| Checks | Proof without artifact, task closed with gaps, a proof not naming the task's files, a no turned yes without evidence, 100% without evidence, a stalled or repeated status, an unanswered tag, one file in two statuses, undeclared files changed, drift (25 messages without a board change), everyone idle, premature consensus, a lent piece not accepted, a call budget passed. Each is printed once, also across relay restarts. |
-| Call budget | Every post, read and wait is counted per agent (one small file each, no lock); past `budget_calls` the relay reports it. |
-| Relay | `alerts --follow --messages` prints the pings for the user's messages (ALERT), one line per real message (WATCH, with `VOTE-NO (LEAD REVIEW)`), the checks (CHECK) and the lending requests (LEND). |
-| Generated prompts | `brief` stores the room's goal, style, material, constraints and closing rule; `prompt NAME` fills the template from it, byte for byte the same each time. |
-| Mode choice | `init --ask-mode` posts a card with two buttons; only the user or the lead chooses, once; the choice reaches only the lead, with its guide. |
-| MCP server | The same tools over stdio (chat_read, chat_post, chat_wait, board, task, notebook, check, research); calls run in threads; a cancelled wait consumes nothing; child processes never inherit the server's input; a Codex wait stays under its tool timeout (`CHATROOM_TOOL_TIMEOUT`); commands that decide how a task closes are refused through MCP. |
-| Notebooks | Per-agent notes that survive a compacted context, with message numbers and file:line instead of summaries. |
-| Room files | Every room gets an `AGENTS.md` with its rules and commands, the file Claude Code and Codex read by themselves. |
+| Shared chat | Append-only JSONL under a lock dir owned by `{pid, token}`; broken only if the owner is dead or after 60 s, by one waiter. |
+| Alerts | `post` returns whom to ping: `@NAME`, `--reply`, user to all, lead, `@all`, PLAN/VOTE/CLOSED. Untagged pings nobody. |
+| Focused reading | `read/wait --focus`: full text only when relevant, else one digest line per author from its JSON status; flushed at 20 msgs or 3 heartbeats. |
+| Ranges | `read --range A-B`, cursor untouched. |
+| Silence timer | Heartbeat 120 s; a status needs `pct`; lead and user exempt. |
+| Idle | One `--idle`, then waits up to 540 s, broken only by tag, user, lead, PLAN, VOTE, CLOSED; double idle or idle with unread refused. |
+| Structured status | JSON `task step pct files next needs done evidence risks free_min`: cards, digest, checks. |
+| Plan / vote / close | Line-start headings (bold, emoji, reply ok); vote = first line; quoted lines ignored; malformed heading warned. |
+| Closing gate | `CLOSED vN` refused until every active non-author votes yes with evidence; a no is a split the lead decides; after `PLAN v3` lead/user only; `closing_gate=0` off. |
+| Evidence | Artifact = exit code, tests, `file:line`, path, `#n`, hash, link, measured time/size. Positions change only on new evidence. |
+| Task board | Tasks with deps and declared files (dirs, case-insensitive on Windows); overlapping files refused; facts, decision log. |
+| Leases | Owner silent (not idle) 5 heartbeats: task free; `task next` takes the first free. |
+| Proof of done | `task done` needs an artifact; `--gaps` left work, `--touched` interface finding; only the lead closes without. |
+| Self-testing tasks | `--verify CMD` (shell, lead/user): agent worktree, outside the lock, tree-killed at 110 s. `--merge-into BR`: refuses dirty tree, empty branch, conflicts (`git merge-tree`). |
+| Scope | `task amend` widens files nobody holds; otherwise lead `--force`. |
+| Handoff / loans | `handoff` with context; `help` lends a piece, `accept` within 10 min or it returns; `giveback`. |
+| Checks | Proof without artifact, closed with gaps, off-scope proof, no-to-yes without evidence, 100% without evidence, stalled/repeated status, unanswered tag, file in two statuses, undeclared files, 25-msg drift, all idle, early consensus, unaccepted loan, call budget. Once each, persisted. |
+| Call budget | Per-agent counter files, lockless; over `budget_calls` the relay reports. |
+| Relay | `alerts --follow --messages`: ALERT, WATCH (`VOTE-NO (LEAD REVIEW)`), CHECK, LEND. |
+| Checkpoint | Every `brief max` messages the agent asks the lead whether to go on; not a stop. |
+| Generated prompts | `brief` + `prompt NAME`: deterministic template fill, byte-identical. |
+| Mode choice | `init --ask-mode`: one card, one choice (user/lead), guide sent to the lead. |
+| Lead guides | `chat.py guide normal\|research`, handed out on init and mode choice. |
+| MCP | stdio: `chat_read chat_post chat_wait board task notebook check research`; threaded; cancelled wait costs nothing; children get `stdin=DEVNULL`; Codex wait capped by `CHATROOM_TOOL_TIMEOUT`; closing commands shell-only. |
+| Notebooks | Per-agent notes surviving compaction, with `#n` and `file:line`. |
+| Room files | `AGENTS.md` per room, read natively by Claude Code and Codex. |
 
 ## Research mode, point by point
 
-| Point | What it does |
+Kernel `chat.py research`: agents propose, the kernel checks, writes `state.json` and logs.
+
+| Point | Mechanism |
 |---|---|
-| Contract | `ROOM/research/task.md`, written with the user before `research init` (which refuses to start without it and logs its hash): goal, repository, the one program file, build, evaluator, final evaluator, metric and direction, its source, noise handling, protocol line, sealed files, kept data folders, time per run, runs in all. |
-| Phases and gates | 0 contract, 1 drafting, 2 investigation, 3 evidence, 4 final, 5 report, 6 closed. `research phase next` moves only when the gate holds: the auditor's verdicts, evidence runs, the final evaluation, a filled report; never while a run is in progress. |
-| Drafting | `research init --draft`: the evaluator is written in phase 1, smoke-run (`--kind smoke`), passed by the auditor, then sealed (`research seal`) with the hashes of the drafted files. |
-| Roles | `research roles WORKER=... PROPOSER=... AUDITOR=... REGISTRAR=... SEARCHER=...`; each command checks its caller's role (lead and user excepted). Prompts are generated from one template per role. |
-| Workers and cycles | `research assign W --parent base\|best\|att-N --type explorer\|optimizer --idea I`: each worker gets its own git worktree and branch; the lead chooses the parent (a kept attempt), never the idea; a fifth cycle in a row on one family is refused. Each worker keeps against its own best, or the baseline while its line has none; the global best is the best of all. |
-| One evaluator | One run at a time on one evaluation lock (one GPU): a second run is refused at once and tried again later; a dead or overdue lock is taken over atomically and its evaluator process stopped. |
-| Build and noise | `--build` runs before each measure with its own time limit; `--repeats N` measures N times and keeps the median (the spread is recorded); `--min-gain` (absolute or %) asks a keep to beat the best by more than the noise. |
-| Metric source | `--result-file`: the sealed evaluator writes `NAME: value` to `$CHATROOM_RESULT`, outside the worktree. Otherwise it must appear once per measure in the output. |
-| Protocol line | Lines `protocol: ...` printed by the evaluator are recorded at the baseline; a run whose protocol differs is a crash. |
-| Seal and scope | A run is refused if a sealed file changed, another tracked file changed, a new file appeared (caches and `--keep` folders excepted) or the exact program already ran. |
-| Commit, tag, clean | Each run is committed with the kernel's identity (none of the repository's git hooks, no signing), tagged `research/<tag>/att-N`, and runs on a tree cleaned of every untracked or ignored file except `--keep` folders. |
-| Interrupted runs | The evaluator's process id is recorded: a run whose caller was killed is recorded as a crash at the next call, its process tree stopped, and the worktree goes back to its best; an attempt never committed is dropped without counting. |
-| Ideas | `research propose-idea`: a bundle (title, hypothesis, plan, metric and implementation rubrics, question or method, prior work) in turn "gap" and "analogy"; refused when too close to an earlier idea (word trigrams) or the fourth in a row changing only the method. |
-| Evidence | `research propose-evidence --source att-N\|E-n\|link`: tentative until the registrar's `curate` accepts it (at most 60 committed); with roles assigned, after 5 runs without evidence a worker must report before running again. |
-| Direction and conclusions | The registrar's map (active, searchable, gave nothing, completed) and per-worker conclusions of at most 300 words with a gate (updated, kept, skipped) and a trigger. |
-| Revocation | `research revoke att-N\|E-n` (auditor or lead): attempts built on it and evidence resting on it are withdrawn, conclusions citing it are quarantined, a revoked best gives way to the best still standing (or the baseline) and the worktrees move to it; never the baseline, never during a run. |
-| Verdicts | The auditor scores the items that matter 0, 1.5 or 3 and decides: pass or fail (drafting, evidence, report), answer_ready or search_more with one next intent (investigation), with the coverage of each requirement. A verdict is on the current phase and holds only for the state it saw (smoke run, best, evidence runs, report). |
-| Re-anchoring | `research reanchor`: a worker restarts its line from its current state or an earlier kept attempt, extending or redirecting, with the bottleneck and the evidence. |
-| Circuit breakers | Three crashes in a row pause a worker until the lead resumes it; an identical program is refused. |
-| Detectors | Lines put back after being deleted (cycling), attempts that only change numbers (tuning), plateaus, ideas narrowing, a paused worker, the gap between search and final. |
-| Evidence runs | `--kind ablation\|baseline\|control\|repeat --of att-N --seed S` in phase 3: they measure and never replace the best; the seed reaches the evaluator as `CHATROOM_SEED`. |
-| Final | `research final`: the final evaluator once, on the committed best, under the evaluation lock, with the gap to the search number; a final that gives no number does not use up its run. |
-| Report | `research checklist` writes the skeleton (the gate refuses it until every part is filled; a degraded phase 3 adds a line to explain): result, change, evidence, failures, limits, and a disclosure of interventions, code, traces, novelty check, selection, baseline, reviewer independence, pre-registration. |
-| Views | `research view`: what each role needs, bounded; `research expand ID` opens one record. |
-| Panel | `research panel` (lead, auditor, proposer): every free OpenRouter model at once, biggest and stealth first, for the final critique or a brainstorm; the key stays in the environment, the question goes to third parties, answers are saved as they come. |
-| Log | `ROOM/research/log.jsonl`: every change, every run and every refused action, with who and why; `results.tsv` has one row per run with kind, idea and spread. |
-| MCP | The `research` tool: view, expand, evaluate, propose-idea, propose-evidence, curate, direction, conclude, verdict, revoke, reanchor; lead actions stay in the shell; a Codex client is refused when a run could outlast its tool timeout. |
-| Environment | Builds and evaluators run without the keys of model providers and code hosts in their environment; worktrees get the repository's submodules. |
-| Limits | The kernel runs as you: an agent that edits the research files by hand can bypass it, so the seal is a check, not a wall. Keep the room outside the repository or never `git clean -x` there. |
+| Contract | `ROOM/research/task.md` required by `research init`; its hash logged (pre-registration). |
+| Phases | 0 contract, 1 drafting, 2 investigation, 3 evidence, 4 final, 5 report, 6 closed; `phase next` only through the gate, never during a run. |
+| Drafting | `init --draft`: evaluator written in phase 1, `--kind smoke` runs, auditor pass, `seal` hashes the drafted files. |
+| Roles | `research roles WORKER= PROPOSER= AUDITOR= REGISTRAR= SEARCHER=`; every command checks the caller's role; one prompt template per role. |
+| Workers | `assign W --parent base\|best\|att-N --type explorer\|optimizer --idea I`: own worktree and branch; parent must be a kept attempt; 5th cycle on one family refused. |
+| Keep rule | Against the worker's best, or the baseline if none; global best = best of all lines. |
+| Evaluator lock | One run at a time (`eval.lock`); concurrent run refused, not queued; dead lock taken by one caller, its evaluator killed. |
+| Build and noise | `--build` + `--build-min`; `--repeats N` median with spread; `--min-gain X\|X%`. |
+| Metric source | `--result-file`: evaluator writes `NAME: value` to `$CHATROOM_RESULT`; else exactly one `NAME:` line in stdout. |
+| Protocol | `protocol: ...` lines fixed at the baseline; an attempt with a different protocol = crash. |
+| Seal and scope | Refused: sealed file changed, other tracked file changed, new untracked file (except caches, `--keep`), program already run. |
+| Commit and clean | Kernel identity, no repo hooks, no signing; tag `research/<tag>/att-N`; `git clean -ffdx` except `--keep`, submodules too. |
+| Interrupted runs | Evaluator pid recorded; caller killed: crash at the next call, process tree killed, worktree reset; lost worktree: crash, pending cleared. |
+| Ideas | `propose-idea`: full bundle, modes alternate gap/analogy; trigram Jaccard > 0.5 refused; 4th method-only refused. |
+| Evidence | `propose-evidence --source att-N\|E-n\|URL`, tentative until `curate` (max 60 committed); with roles, 5 runs without evidence blocks the worker. |
+| Direction | Registrar map (active, searchable, no positive, completed) and per-worker conclusions, max 300 words, gate + trigger. |
+| Revocation | `revoke att-N\|E-n`: descendants, evidence and citing conclusions withdrawn; best falls back (baseline last); worktrees reset; baseline and in-run revokes refused. |
+| Verdicts | Scores 0 / 1.5 / 3; pass/fail (1, 3, 5), answer_ready/search_more (2); bound to the current phase and to a state snapshot. |
+| Re-anchoring | `reanchor`: from current or a kept att-N, extend or redirect, with bottleneck and evidence. |
+| Circuit breakers | 3 crashes in a row pause the worker until `resume`; identical program refused. |
+| Detectors | Cycling (re-added lines), tuning-only, 10-run plateau, narrowing ideas, paused worker, search-vs-final gap. |
+| Evidence runs | Phase 3 `--kind ablation\|baseline\|control\|repeat --of att-N --seed S` (`CHATROOM_SEED`); never replace the best. |
+| Final | `research final`: once, on the committed best, under the lock; a run without a number does not count. |
+| Report | `checklist` skeleton; gate refuses unfilled `<...>` parts and a degraded research without its DEGRADED line. |
+| Views | `research view` bounded per role; `expand ID` opens one record. |
+| Panel | `research panel`: free OpenRouter models in parallel, key from env only, answers written as they arrive. |
+| Log | `log.jsonl`: every change, run and refusal; `results.tsv` one row per run (kind, idea, spread). |
+| MCP | `research` tool: agent actions only; lead actions shell-only; Codex refused when a run can outlast its timeout. |
+| Environment | Build and evaluator run without model-provider and code-host keys; worktrees init submodules. |
+| Migration | First-kernel state upgraded in place: attempts from `results.tsv`, baseline, best. |
+| Limits | Runs as the user: the seal is a check, not a wall; keep the room out of the repo or never `git clean -x` there. |
 
 ## The viewer
 
