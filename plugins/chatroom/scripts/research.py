@@ -55,6 +55,11 @@ NO_HOOKS = str(Path(__file__).resolve().parent / '.no-git-hooks')   # a folder t
 SECRET_ENV = ('OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
 
 
+def phase_name(i):
+    """the name of phase i in the room's language"""
+    return say(f'kernel.phase.{PHASES[i]}')
+
+
 def _dir(room):
     return (room.dir / 'research').resolve()          # absolute: git commands run in other folders
 
@@ -213,7 +218,7 @@ def _submodules(work):
     if not (Path(work) / '.gitmodules').is_file():
         return ''
     out = _git(work, 'submodule', 'update', '--init', '--recursive', check=False)
-    return '' if 'fatal' not in out.lower() and 'error' not in out.lower() else f' (submodules: {out[:200]})'
+    return '' if 'fatal' not in out.lower() and 'error' not in out.lower() else say('kernel.word.submodules', out=out[:200])
 
 
 def parse_guards(text):
@@ -254,7 +259,7 @@ def _need(room, c, name, *roles):
         return
     have = _role_of(c, name)
     if have not in roles:
-        raise ValueError(say('kernel._need.is_this_is_for', name=name, v2=have or 'not given a research role', roles=' or '.join(roles)))
+        raise ValueError(say('kernel._need.is_this_is_for', name=name, v2=have or say('kernel.word.no_role'), roles=say('kernel.word.or').join(roles)))
 
 
 def _not_worse(c, value, than):
@@ -360,8 +365,8 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
     noise = (say('kernel.init.median_of_measures', repeats=contract['repeats']) if contract['repeats'] > 1 else '') + \
             (say('kernel.init.a_keep_must_beat', min_gain=contract['min_gain']) if contract['min_gain'] else '') + \
             (say('kernel.init.guards_median_vs_baseline', v1=', '.join(g['name'] + ' ' + g['direction'] + ' ' + g['tol'] for g in guards)) if guards else '')
-    return (say('kernel.init.research_open_at_phase', tag=tag, phase=st['phase'], PHASES=PHASES[st['phase']], rel_prog=rel_prog, work=work, branch=branch) + (say('kernel.init.build', build=build) if build else '') + (say('kernel.init.evaluator', evaluate=evaluate) if evaluate else say('kernel.init.evaluator_to_be_written'))
-            + say('kernel.init.metric_is_better_read', metric=metric, v2='lower' if direction == 'min' else 'higher', v3='the result file $CHATROOM_RESULT' if result_file else 'the output (exactly one line per measure)', noise=noise, budget_s=contract['budget_s'], max_evals=max_evals) + (say('kernel.init.sealed', seals=', '.join(seals)) if seals else '')
+    return (say('kernel.init.research_open_at_phase', tag=tag, phase=st['phase'], PHASES=phase_name(st['phase']), rel_prog=rel_prog, work=work, branch=branch) + (say('kernel.init.build', build=build) if build else '') + (say('kernel.init.evaluator', evaluate=evaluate) if evaluate else say('kernel.init.evaluator_to_be_written'))
+            + say('kernel.init.metric_is_better_read', metric=metric, v2=say('prompt.lower') if direction == 'min' else say('prompt.higher'), v3=say('kernel.word.from_result_file') if result_file else say('kernel.word.from_output_once'), noise=noise, budget_s=contract['budget_s'], max_evals=max_evals) + (say('kernel.init.sealed', seals=', '.join(seals)) if seals else '')
             + (say('kernel.init.kept_untouched_data', keep=', '.join(keep)) if keep else '')
             + (say('kernel.init.a_build_may_take', v1=contract['build_s'] or 2 * contract['budget_s']) if build else '')
             + (say('kernel.init.warning_the_build_output')
@@ -381,7 +386,7 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
     measured = any(x is not None for x in (evaluate, result_file, build, repeats, min_gain, guards))
     if measured and st['best'] is not None:
         raise ValueError(say('kernel.amend.how_runs_are_measured'))
-    for key, value, label in (('evaluate', evaluate, 'evaluator'), ('build', build, 'build'), ('final', final, 'final evaluator')):
+    for key, value, label in (('evaluate', evaluate, say('kernel.word.evaluator')), ('build', build, say('kernel.word.build')), ('final', final, say('kernel.word.final_evaluator'))):
         if value is not None:
             c[key] = value
             said.append(f'{label} `{value}`')
@@ -395,7 +400,7 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
         said.append(say('kernel.amend.median_of_measures', repeats=repeats))
     if guards is not None:
         c['guards'] = parse_guards(guards)
-        said.append('guards ' + (', '.join(g['name'] for g in c['guards']) or 'none'))
+        said.append(say('kernel.word.guards', names=', '.join(g['name'] for g in c['guards']) or say('kernel.word.none')))
     if min_gain is not None:
         if not re.fullmatch(r'\d+(\.\d+)?%?', str(min_gain)):
             raise ValueError(say('kernel.amend.min_gain_a_number'))
@@ -458,7 +463,7 @@ def _check_work(c, wk):
         raise ValueError(say('kernel._check_work.the_research_worktree_is', work=work))
     top = _git(work, 'rev-parse', '--show-toplevel', check=False)
     if not top or Path(top).resolve() != work.resolve():
-        raise ValueError(say('kernel._check_work.is_not_the_research', work=work, v2=top or "nothing"))
+        raise ValueError(say('kernel._check_work.is_not_the_research', work=work, v2=top or say('kernel.word.nothing')))
     branch = _git(work, 'rev-parse', '--abbrev-ref', 'HEAD', check=False)
     if branch != wk['branch']:
         raise ValueError(say('kernel._check_work.the_research_worktree_is2', branch=branch, branch_=wk['branch']))
@@ -498,7 +503,7 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
     _check_kernel(room)
     c, st = _state(room)
     if st['phase'] != 2:
-        raise ValueError(say('kernel.assign.cycles_are_assigned_in', phase=st['phase'], PHASES=PHASES[st['phase']]))
+        raise ValueError(say('kernel.assign.cycles_are_assigned_in', phase=st['phase'], PHASES=phase_name(st['phase'])))
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', worker or ''):
         raise ValueError(say('kernel.assign.a_worker_name_letters'))
     if c.get('roles') and _role_of(c, worker) != 'WORKER':
@@ -675,16 +680,16 @@ def _measure(c, work, d, n, env, log, on_start=None):
             if line not in protocol:                          # the same protocol in every repeat counts once
                 protocol.append(line)
         if code is None:
-            return None, f"over {2 * c['budget_s']} s: killed", secs, '', protocol, text
+            return None, say('kernel.word.killed_over', s=2 * c['budget_s']), secs, '', protocol, text
         if code != 0:
-            return None, f'exit {code}', secs, '', protocol, text
+            return None, say('kernel.word.exit_code', code=code), secs, '', protocol, text
         source = (result.read_text(encoding='utf-8', errors='replace') if result.is_file() else '') if c.get('metric_source') == 'file' else out
         found = re.findall(pattern, source, re.MULTILINE)
         if len(found) > 1:
             return None, say('kernel._measure.lines_ambiguous_only_the', len_found=len(found), metric=c['metric']), secs, '', protocol, text
         if not found:
             return None, (say('kernel._measure.no_value_in_the', metric=c['metric']) if c.get('metric_source') == 'file'
-                          else f"no \"{c['metric']}:\" line"), secs, '', protocol, text
+                          else say('kernel.word.no_metric_line', metric=c['metric'])), secs, '', protocol, text
         v = float(found[0])
         if v != v or abs(v) == float('inf'):
             return None, say('kernel._measure.the_metric_is_not'), secs, '', protocol, text
@@ -721,7 +726,7 @@ def evaluate(room, name, desc, idea=None, kind='attempt', of=None, seed=None):
     _need(room, c, name, 'WORKER')
     held = _gpu_hold(room)
     if held and held['by'] != name:
-        raise ValueError(say('kernel.evaluate.the_gpu_is_held', by=held['by'], reason=held['reason'], strftime=time.strftime('%H:%M', time.localtime(held['until'])), v4=' or its build ends' if held.get('pid') else ''))
+        raise ValueError(say('kernel.evaluate.the_gpu_is_held', by=held['by'], reason=held['reason'], strftime=time.strftime('%H:%M', time.localtime(held['until'])), v4=say('kernel.word.or_build_ends') if held.get('pid') else ''))
     return _locked(room, c, name, lambda: _evaluate(room, name, desc, idea, kind, of, seed))
 
 
@@ -870,10 +875,10 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         c, st = _state(room)                             # another worker's cut-off run: recorded, and this run goes on
     phase = st['phase']
     if kind == 'attempt' and phase != 2:
-        raise ValueError(say('kernel._evaluate.attempts_run_in_the', phase=phase, PHASES=PHASES[phase])
-                         + ('; in phase 1 use --kind smoke' if phase == 1 else '; in phase 3 use --kind ablation|baseline|control|repeat' if phase == 3 else ''))
+        raise ValueError(say('kernel._evaluate.attempts_run_in_the', phase=phase, PHASES=phase_name(phase))
+                         + (say('kernel.word.in_phase1_smoke') if phase == 1 else say('kernel.word.in_phase3_kinds') if phase == 3 else ''))
     if kind in AUX_KINDS and phase != 3:
-        raise ValueError(say('kernel._evaluate.runs_belong_to_the', kind=kind, phase=phase, PHASES=PHASES[phase]))
+        raise ValueError(say('kernel._evaluate.runs_belong_to_the', kind=kind, phase=phase, PHASES=phase_name(phase)))
     if kind == 'smoke' and phase != 1:
         raise ValueError(say('kernel._evaluate.smoke_runs_belong_to'))
     if not c.get('evaluate'):
@@ -984,7 +989,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         if fix and best:
             if _not_worse(c, value, best['metric']):
                 status, why = 'keep', say('kernel._evaluate.fix_not_worse_than', n=best['n'], v2=format(best['metric'], '.6g')) + \
-                    (f" within {c['min_gain']}" if c.get('min_gain') else '')
+                    (say('kernel.word.within', min_gain=c['min_gain']) if c.get('min_gain') else '')
             else:
                 status, why = 'discard', say('kernel._evaluate.fix_worse_than_att', n=best['n'], v2=format(best['metric'], '.6g')) + \
                     (say('kernel._evaluate.by_more_than', min_gain=c['min_gain']) if c.get('min_gain') else '')
@@ -1059,7 +1064,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     nudge = ''
     if kind == 'attempt' and s3['workers'][key].get('paused'):
         nudge = say('kernel._evaluate.is_now_paused_after', name=name, CRASH_MAX=CRASH_MAX)
-    return line + (say('kernel._evaluate.log_last_lines', log=log, tail=tail) if tail else f'\nlog: {log}') + warn + nudge
+    return line + (say('kernel._evaluate.log_last_lines', log=log, tail=tail) if tail else say('kernel.word.log', log=log)) + warn + nudge
 
 
 def resume(room, by, worker):
@@ -1254,7 +1259,7 @@ def direction(room, by, data):
         raise ValueError(say('kernel.direction.a_direction_is_json'))
     for k in ('searchable', 'no_positive', 'completed'):
         if k in data and not isinstance(data[k], list):
-            raise ValueError(f'{k} is a list')
+            raise ValueError(say('kernel.word.is_a_list', k=k))
 
     new = {k: data.get(k, [] if k in ('searchable', 'no_positive', 'completed') else '') for k in keys}
     if new == st.get('direction'):
@@ -1370,7 +1375,7 @@ def _revoke(room, by, target, reason):
         _clean(work, c)
         _edit(room, lambda c2, s2, k=key, f=full: s2['workers'][k].update(head=f))
     _log(room, by, 'revoke', {'target': target, 'reason': reason, 'cascade': gone})
-    return say('kernel._revoke.revoked_by_also_withdrawn', target=target, by=by, reason=reason[:120], v4=', '.join(x for x in gone if x != target) or 'nothing')
+    return say('kernel._revoke.revoked_by_also_withdrawn', target=target, by=by, reason=reason[:120], v4=', '.join(x for x in gone if x != target) or say('kernel.word.nothing'))
 
 
 def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, next_intent=None, notes=''):
@@ -1382,7 +1387,7 @@ def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, 
     if int(phase) not in allowed or outcome not in allowed[int(phase)]:
         raise ValueError(say('kernel.verdict.verdicts_phase_pass_fail'))
     if int(phase) != st['phase']:
-        raise ValueError(say('kernel.verdict.the_research_is_in', phase=st['phase'], PHASES=PHASES[st['phase']]))
+        raise ValueError(say('kernel.verdict.the_research_is_in', phase=st['phase'], PHASES=phase_name(st['phase'])))
     scores = scores or {}
     if not isinstance(scores, dict) or any(v not in (0, 1.5, 3, '0', '1.5', '3') for v in scores.values()):
         raise ValueError(say('kernel.verdict.scores_item_missing_or'))
@@ -1398,8 +1403,8 @@ def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, 
             s2['gaps'].append({'text': next_intent, 'by': by, 'ts': time.time()})
     _edit(room, apply)
     _log(room, by, 'verdict', rec)
-    score = f" · score {sum(rec['scores'].values()):.1f}/{3 * len(rec['scores'])}" if rec['scores'] else ''
-    return say('kernel.verdict.verdict_at_phase_by', phase=phase, by=by, upper=outcome.upper(), score=score) + (f' · next: {next_intent[:160]}' if next_intent else '')
+    score = say('kernel.word.score', got=f"{sum(rec['scores'].values()):.1f}", of=3 * len(rec['scores'])) if rec['scores'] else ''
+    return say('kernel.verdict.verdict_at_phase_by', phase=phase, by=by, upper=outcome.upper(), score=score) + (say('kernel.word.next', next=next_intent[:160]) if next_intent else '')
 
 
 def allow_fix(room, by, worker, reason):
@@ -1591,7 +1596,7 @@ def _seal(room, by, sealed):
         s2['protocol'] = s2.get('protocol')
     _edit(room, apply)
     _log(room, by, 'seal', {'commit': commit, 'sealed': list(seals)})
-    return say('kernel._seal.sealed_by_at_phase', by=by, commit=commit[:7], v3=', '.join(seals) or 'no files')
+    return say('kernel._seal.sealed_by_at_phase', by=by, commit=commit[:7], v3=', '.join(seals) or say('kernel.word.no_files'))
 
 
 def phase_next(room, by, force=''):
@@ -1635,11 +1640,11 @@ def _phase_next(room, by, force):
     else:
         why = say('kernel._phase_next.the_research_is_closed')
     if why:
-        raise ValueError(say('kernel._phase_next.phase_cannot_end_yet', p=p, PHASES=PHASES[p], why=why))
+        raise ValueError(say('kernel._phase_next.phase_cannot_end_yet', p=p, PHASES=phase_name(p), why=why))
     skipped = p == 3 and force == 'degraded' and (not aux or (auditor and not _verdict_holds(room, st, 3, 'pass')))
     _edit(room, lambda c2, s2: s2.update(phase=p + 1, degraded=skipped or s2.get('degraded', False)))
     _log(room, by, 'phase', {'from': p, 'to': p + 1, 'force': force})
-    return say('kernel._phase_next.research_phase', v1=p + 1, PHASES=PHASES[p + 1]) + (say('kernel._phase_next.degraded_evidence_not_run') if skipped else '')
+    return say('kernel._phase_next.research_phase', v1=p + 1, PHASES=phase_name(p + 1)) + (say('kernel._phase_next.degraded_evidence_not_run') if skipped else '')
 
 
 def final(room, by):
@@ -1689,14 +1694,14 @@ def _final(room, by):
     if value is None:                                     # no number came out: nothing was seen, the one run is still there
         _edit(room, lambda c2, s2: s2.update(final_child=None))
         _log(room, by, 'final', rec, ok=False)
-        line = f"🏁 final evaluation did not give a number ({why}): fix the final evaluator (research amend --final) and run it again; log {log}"
+        line = say('kernel.word.final_no_number', why=why, log=log)
         room.append(by, line, 'board')
         return line
     _edit(room, lambda c2, s2: s2.update(final=rec, final_child=None))
     _log(room, by, 'final', rec)
     gap = ''
     if value is not None:
-        gap = f" · search {st['best']['metric']:.6g} → final {value:.6g} (Δ {value - st['best']['metric']:+.6g})"
+        gap = say('kernel.word.final_gap', search=f"{st['best']['metric']:.6g}", final=f'{value:.6g}', delta=f"{value - st['best']['metric']:+.6g}")
     line = say('kernel._final.final_evaluation_of_att', n=st['best']['n'], metric=c['metric'], v3='—' if value is None else f'{value:.6g}') + \
            (f' ({why})' if why else '') + gap
     room.append(by, line, 'board')
@@ -1755,8 +1760,8 @@ def view(room, name):
     c, st = _state(room)
     role = _role_of(c, name) or ('LEAD' if name in room.user_names() else 'WORKER')
     att = st['attempts']
-    head = (say('kernel.view.research_phase_runs_best', tag=c['tag'], phase=st['phase'], PHASES=PHASES[st['phase']], evals=st['evals'], max_evals=c['max_evals'])
-            + (f"att-{st['best']['n']} {st['best']['metric']:.6g} ({st['best'].get('worker', '?')})" if st['best'] else 'none')
+    head = (say('kernel.view.research_phase_runs_best', tag=c['tag'], phase=st['phase'], PHASES=phase_name(st['phase']), evals=st['evals'], max_evals=c['max_evals'])
+            + (f"att-{st['best']['n']} {st['best']['metric']:.6g} ({st['best'].get('worker', '?')})" if st['best'] else say('kernel.word.none'))
             + (say('kernel.view.degraded_no_evidence_runs') if st.get('degraded') else '') + say('kernel.view.you', role=role))
     out = [head]
     tried = lambda xs: '; '.join(f"att-{a['n']} {a['desc'][:50]} → {a['status']}" for a in xs)
@@ -1765,8 +1770,8 @@ def view(room, name):
         try:
             key, wk = _worker(st, name)
             out.append(say('kernel.view.your_worktree_from_as', work=wk['work'], get=wk.get('parent'), get_=wk.get('type'))
-                       + (f"att-{wk['best']['n']} {wk['best']['metric']:.6g}" if wk.get('best') else 'none')
-                       + (f" · idea {wk['idea']}" if wk.get('idea') else '') + (' · PAUSED' if wk.get('paused') else ''))
+                       + (f"att-{wk['best']['n']} {wk['best']['metric']:.6g}" if wk.get('best') else say('kernel.word.none'))
+                       + (say('kernel.word.idea', idea=wk['idea']) if wk.get('idea') else '') + (' · PAUSED' if wk.get('paused') else ''))
             if wk.get('idea'):
                 i = next((x for x in st['ideas'] if x['id'] == wk['idea']), None)
                 if i:
@@ -1796,29 +1801,29 @@ def view(room, name):
     elif role == 'REGISTRAR':
         tent = [e for e in st['evidence'] if e['state'] == 'tentative']
         live = [e for e in st['evidence'] if e['state'] == 'committed']
-        out.append(say('kernel.view.committed_to_curate', len_live=len(live), CURATED_MAX=CURATED_MAX) + ('; '.join(f"{e['id']} ({','.join(e['source'])}) {e['text'][:100]}" for e in tent) or 'none'))
+        out.append(say('kernel.view.committed_to_curate', len_live=len(live), CURATED_MAX=CURATED_MAX) + ('; '.join(f"{e['id']} ({','.join(e['source'])}) {e['text'][:100]}" for e in tent) or say('kernel.word.none')))
         out.append(say('kernel.view.latest_runs') + tried(att[-8:]))
-        out.append('direction: ' + json.dumps(st['direction'], ensure_ascii=False)[:500])
-        out.append('conclusions: ' + ('; '.join(f"{k} ({cc['gate']}, {cc['state']}) {cc['text'][:120]}" for k, cc in st['conclusions'].items()) or 'none'))
+        out.append(say('kernel.word.direction') + json.dumps(st['direction'], ensure_ascii=False)[:500])
+        out.append(say('kernel.word.conclusions') + ('; '.join(f"{k} ({cc['gate']}, {cc['state']}) {cc['text'][:120]}" for k, cc in st['conclusions'].items()) or say('kernel.word.none')))
         idle = [k for k, w in st['workers'].items() if w.get('since_evidence', 0) >= S_MAX - 1]
         if idle:
             out.append(say('kernel.view.workers_near_the_evidence') + ', '.join(idle))
     elif role in ('AUDITOR', 'LEAD'):
         keeps = [a for a in att if a['status'] == 'keep' and a['state'] != 'revoked'][-6:]
-        out.append(say('kernel.view.keeps_to_check_git') + ('; '.join(f"att-{a['n']} {c['branch']}/att-{a['n']} {a['desc'][:60]}" for a in keeps) or 'none'))
+        out.append(say('kernel.view.keeps_to_check_git') + ('; '.join(f"att-{a['n']} {c['branch']}/att-{a['n']} {a['desc'][:60]}" for a in keeps) or say('kernel.word.none')))
         flags = detectors(c, st)
         if flags:
-            out.append('detectors: ' + ' | '.join(flags))
+            out.append(say('kernel.word.detectors') + ' | '.join(flags))
         quar = [k for k, cc in st['conclusions'].items() if cc['state'] == 'quarantined']
         if quar:
             out.append(say('kernel.view.quarantined_conclusions_they_cite') + ', '.join(quar))
         last = st['verdicts'][-1] if st['verdicts'] else None
         if last:
             out.append(say('kernel.view.last_verdict_phase', phase=last['phase'], outcome=last['outcome']))
-        out.append(say('kernel.view.live_evidence') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] == 'committed')[:900] or 'none'))
+        out.append(say('kernel.view.live_evidence') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] == 'committed')[:900] or say('kernel.word.none')))
     elif role == 'SEARCHER':
         out.append(say('kernel.view.task_metric_direction', program=c['program'], metric=c['metric'], get=st['direction'].get('active', '-')))
-        out.append(say('kernel.view.evidence_so_far') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] in ('tentative', 'committed'))[:1200] or 'none'))
+        out.append(say('kernel.view.evidence_so_far') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] in ('tentative', 'committed'))[:1200] or say('kernel.word.none')))
         if st['gaps']:
             out.append(say('kernel.view.open_questions') + '; '.join(g['text'][:120] for g in st['gaps'][-4:]))
     return _cut('\n'.join(out))
@@ -1873,7 +1878,7 @@ def status(room):
     rows = (_dir(room) / 'results.tsv').read_text(encoding='utf-8').splitlines()[1:]
     counts = {k: sum(1 for r in rows if r.split('\t')[3] == k) for k in ('keep', 'discard', 'crash')}
     best = st['best']
-    head = (say('kernel.status.research_phase_metric_from', tag=c['tag'], phase=st['phase'], PHASES=PHASES[st['phase']], program=c['program'], metric=c['metric'], direction=c['direction'], v7=say('kernel.word.result_file') if c.get('metric_source') == 'file' else say('kernel.word.output_unsafe'))
+    head = (say('kernel.status.research_phase_metric_from', tag=c['tag'], phase=st['phase'], PHASES=phase_name(st['phase']), program=c['program'], metric=c['metric'], direction=c['direction'], v7=say('kernel.word.result_file') if c.get('metric_source') == 'file' else say('kernel.word.output_unsafe'))
             + (say('kernel.status.median_of', repeats=c['repeats']) if c.get('repeats', 1) > 1 else '') + (say('kernel.status.min_gain', min_gain=c['min_gain']) if c.get('min_gain') else '') + say('kernel.status.runs_of_s_keep', evals=st['evals'], max_evals=c['max_evals'], budget_s=c['budget_s'], keep=counts['keep'], discard=counts['discard'], crash=counts['crash'])
             + (say('kernel.status.best_att', n=best['n'], v2=format(best['metric'], '.6g'), commit=best['commit'], get=best.get('worker', '')) if best else say('kernel.status.no_baseline_yet'))
             + (say('kernel.status.att_in_progress_or', n=st['pending']['n']) if st.get('pending') else '')
@@ -1884,10 +1889,10 @@ def status(room):
     held = _gpu_hold(room)
     if held:
         head += (say('kernel.status.gpu_held_by', by=held['by'], reason=held['reason']) + (say('kernel.status.pid_log', pid=held['pid'], get=held.get('log')) if held.get('pid')
-                 else f" until {time.strftime('%H:%M', time.localtime(held['until']))}"))
+                 else say('kernel.word.until', time=time.strftime('%H:%M', time.localtime(held['until'])))))
     lines = [head]
     if len(st['workers']) > 1 or '_main' not in st['workers']:
-        lines.append('workers: ' + '; '.join(f"{k} " + (say('kernel.status.best_att2', n=w['best']['n'], v2=format(w['best']['metric'], '.6g')) if w.get('best') else say('kernel.status.no_best'))
+        lines.append(say('kernel.word.workers') + '; '.join(f"{k} " + (say('kernel.status.best_att2', n=w['best']['n'], v2=format(w['best']['metric'], '.6g')) if w.get('best') else say('kernel.status.no_best'))
                                              + say('kernel.status.from', get=w.get('type'), get_=w.get('parent')) + (' PAUSED' if w.get('paused') else '')
                                              + (say('kernel.status.crashes_in_a_row', crashes=w['crashes']) if w.get('crashes') else '')
                                              + (say('kernel.status.fix_allowed') if w.get('fix_ok') else '')
@@ -1896,7 +1901,7 @@ def status(room):
         lines.append(say('kernel.status.ideas_next_evidence_committed', len_ideas=len(st['ideas']), next_mode=st['next_mode'], sum=sum(1 for e in st['evidence'] if e['state'] == 'committed'), sum_=sum(1 for e in st['evidence'] if e['state'] == 'tentative')))
     flags = detectors(c, st)
     if flags:
-        lines.append('detectors: ' + ' | '.join(flags))
+        lines.append(say('kernel.word.detectors') + ' | '.join(flags))
     return '\n'.join(lines) + '\n' + TSV_HEAD.rstrip('\n') + '\n' + '\n'.join(rows[-12:])
 
 
@@ -2028,7 +2033,7 @@ def _cmd(room, a):
         if rest and rest[0] == 'next':
             return post(phase_next(room, a.name, 'degraded' if a.force else ''))
         c, st = _state(room)
-        return print(f"phase {st['phase']} ({PHASES[st['phase']]})")
+        return print(say('kernel.word.phase_line', phase=st['phase'], name=phase_name(st['phase'])))
     if act == 'final':
         return print(final(room, a.name))
     if act == 'checklist':

@@ -6,9 +6,9 @@ IL COMPITO: {{TOPIC}}. Obiettivo: {{GOAL}}. Materiale: {{MATERIALS}}.
 
 IL CONTRATTO (scritto dal lead e dall'utente; tu non lo cambi):
 - L'unico file che cambi è {{PROGRAM}}, dentro la tua cartella di ricerca {{WORK}} (un worktree git sul suo branch). Lavora solo lì.
-- Il valutatore: `{{EVALUATE}}`. La metrica {{METRIC}} ({{BETTER}} è meglio) viene da {{METRIC_SOURCE}}. Ogni corsa ha {{BUDGET_S}} s ed è interrotta al doppio di quel tempo.
+- Il valutatore: `{{EVALUATE}}`. La metrica {{METRIC}} ({{BETTER}} è meglio) viene {{METRIC_SOURCE}}. Ogni corsa ha {{BUDGET_S}} s ed è interrotta al doppio di quel tempo.
 - Sigillato (non toccare mai): {{SEALED}}, e tutto ciò che misura il risultato. Nessuna nuova dipendenza e nessun nuovo file: prima di ogni corsa il kernel rifiuta i file non tracciati e rimuove quelli ignorati, quindi gira solo {{PROGRAM}} come committato.
-- Stesura (fase 1, lo dice la vista di ricerca): il valutatore non esiste ancora. Lo scrivi tu con i file che il lead indica (valutatore, valutatore finale, caricatore dei dati) in {{WORK}}, e `research evaluate` fa una corsa di prova (smoke) su di essi: committa i file stesi e controlla che la metrica esca. Dopo una corsa di prova interrotta, `git checkout <its tag> -- .` riporta i file stesi. L'auditor approva la stesura e il lead la sigilla; da lì in poi valgono le regole sopra.
+- Stesura (fase 1, lo dice la vista di ricerca): il valutatore non esiste ancora. Lo scrivi tu con i file che il lead indica (valutatore, valutatore finale, caricatore dei dati) in {{WORK}}, e `research evaluate` fa una corsa di prova (smoke) su di essi: committa i file stesi e controlla che la metrica esca. Dopo una corsa di prova interrotta, `git checkout <il suo tag> -- .` riporta i file stesi. L'auditor approva la stesura e il lead la sigilla; da lì in poi valgono le regole sopra.
 - Budget: {{MAX_EVALS}} corse in tutto per l'intera ricerca, contate dal kernel, crash inclusi.
 
 IL CICLO (il kernel fa la contabilità: tu non committi, non tagghi, non fai reset e non scrivi tu i risultati):

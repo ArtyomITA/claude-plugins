@@ -14,7 +14,7 @@ e subprocess.
 | chat.py | 107 (1.236 parole) | 178 (1.860) | 18 (292) | 69 (774) | 78 (2.431: comandi rapidi, card della modalità, brief di default, timer) | inglese; le tabelle sono en/it |
 | research.py | 154 (1.874) | 135 (1.052) | (rilevatori dentro le righe) | (help in chat.py) | 0 | solo inglese |
 | share.py | 56 (361) | 7 (39) | – | – | 11 (41) | inglese, una tabella en/it |
-| activity.py | – | 21 (124) | – | – | 22 (126) | solo inglese (etichette delle attività) |
+| activity.py | – | 21 (124) | – | – | 22 (126) | nessun testo visibile: nomi di strumenti e stati, tradotti dal JS |
 | github_data.py | – | 12 (44) | – | – | – | solo inglese |
 
 Totale da portare in un catalogo: circa 1.000 stringhe, circa 11.000 parole. Le tabelle bilingui sono scritte dentro
@@ -130,6 +130,10 @@ terzo delle 3.400 parole) e 10.100 parole di template e guide (15.700 con le ski
     segnaposto `<...>` e la riga DEGRADED; tradurlo vuol dire uno scheletro e un controllo per lingua;
   - l'help della CLI (argparse) e le descrizioni degli strumenti MCP: sono il contratto con il client e la
     documentazione da terminale, uguali per tutte le stanze;
+  - le `instructions` del server MCP: un solo server per tutte le stanze, prima di sapere la stanza;
+  - i marcatori del relay e dello stato letti come forma: `VOTE-NO (LEAD REVIEW)`, `(vN > M: LEAD DECIDES)`, `[STATUS]`,
+    `PAUSED`, oltre alle parole di protocollo;
+  - il contenuto dei file di dati della ricerca (`results.tsv`, `findings-*.md`, `log.jsonl`): dati, non messaggi;
   - `activity.py` e `github_data.py`: nessun testo visibile (solo nomi di strumenti e stati che il JS traduce);
   - `hooks/register.ts`: è la mod di Claude Code, fuori dal processo della stanza;
   - le skill (decisione 2) e i nomi delle stanze e delle insegne dell'ufficio (dati salvati dall'utente).

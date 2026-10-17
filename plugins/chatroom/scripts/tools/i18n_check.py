@@ -110,6 +110,11 @@ def check_code(root, en, errors):
             if fname == 'say':                                         # say(key, ...): the key first
                 n = ast.Call(func=n.func, args=[ast.Constant(value=None)] + n.args, keywords=n.keywords, lineno=n.lineno)
             where = f'{f.name}:{n.lineno}'
+            if (len(n.args) >= 2 and isinstance(n.args[1], ast.BinOp) and isinstance(n.args[1].op, ast.Add)
+                    and isinstance(n.args[1].left, ast.Constant) and str(n.args[1].left.value).endswith('.')):
+                if not any(k.startswith(n.args[1].left.value) for k in en):   # 'chat.word.lbl.' + k: a family of keys
+                    errors.append(f'{where}: no key of {FALLBACK}.json starts with {n.args[1].left.value}')
+                continue
             if len(n.args) >= 2 and isinstance(n.args[1], ast.JoinedStr):   # f'cmd.{key}.name': a family, checked by its shape
                 shape = ''.join(re.escape(v.value) if isinstance(v, ast.Constant) else r'[\w.]+' for v in n.args[1].values)
                 if not any(re.fullmatch(shape, k) for k in en):

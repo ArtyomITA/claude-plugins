@@ -64,7 +64,7 @@ Inferenza e addestramento: i benchmark sono rumorosi, quindi usa `--repeats` (da
 dispersione che vedi sulla baseline. Metti warmup e timing dentro il valutatore sigillato, mai nel programma. Per
 l'addestramento, un budget fisso di tempo o di step dentro il valutatore e il seed da `CHATROOM_SEED`. I numeri
 secondari che non devono peggiorare (velocità di prefill, memoria, accuratezza) sono guardie: il valutatore scrive
-`NAME: value` a ogni misura (nel suo output, o in `$CHATROOM_RESULT` con `--result-file`), e `--guard NAME:min|max:TOL`
+`NOME: valore` a ogni misura (nel suo output, o in `$CHATROOM_RESULT` con `--result-file`), e `--guard NOME:min|max:TOL`
 confronta la loro mediana con quella della baseline (un singolo campione a freddo fa crash falsi). `min` vuol dire che
 più basso è meglio, come per `--direction`: una velocità è `max` (`--guard prefill_tps:max:3%`), una memoria `min`. Il
 valutatore finale non viene controllato dalle guardie.
@@ -78,15 +78,15 @@ un `.bat` committato con fine riga LF resta LF, e `cmd` lo interpreta male.
 ## 3. Aprire la stanza
 
 ```bash
-python CHAT research init --room ROOM --as LEAD --repo <repository> --program <file> --metric <NAME> --direction <min|max> \
-  --evaluate "<command>" [--build "<command>" --build-min <m>] [--final "<command>"] --budget-min <m> --max-evals <runs> \
-  --sealed <files> [--keep data/,build/] [--result-file] [--repeats N] [--min-gain X|X%] --tag <name>
+python CHAT research init --room ROOM --as LEAD --repo <percorso> --program <file> --metric <NOME> --direction <min|max> \
+  --evaluate "<comando>" [--build "<comando>" --build-min <m>] [--final "<comando>"] --budget-min <m> --max-evals <corse> \
+  --sealed <file> [--keep data/,build/] [--result-file] [--repeats N] [--min-gain X|X%] --tag <nome>
 ```
 
 `--draft` al posto di un valutatore finito fa partire dalla fase 1: i worker lo scrivono, lo fanno girare a vuoto
 (`research evaluate --kind smoke`), l'AUDITOR lo approva (`research verdict --phase 1 --outcome pass`), e tu lo sigilli
 (`research seal --sealed eval.py,...`; un pass dato prima dell'ultima corsa di prova non vale più). Poi
-`config --topic "..." --subtitle "<goal>"`.
+`config --topic "..." --subtitle "<obiettivo>"`.
 
 `init` stampa la durata massima di una chiamata evaluate (build + ripetizioni x 2 x budget + lavoro git) e avvisa
 quando una build non ha una cartella `--keep` (ricostruirebbe da zero a ogni corsa). Senza `--build-min` una build può

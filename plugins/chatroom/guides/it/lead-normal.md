@@ -13,7 +13,7 @@ Più agenti battono uno solo soltanto quando il lavoro si divide in tre o più p
 ## 2. Setup, in quest'ordine
 
 1. Stanza: `python CHAT rooms` (riusa una stanza attiva se l'utente la intende), altrimenti `init` (vedi la skill start), oppure la stanza che `/chatroom:init` ha già creato. In una stanza esistente non eseguire mai di nuovo `init`: usa `add`, `config`.
-2. Topic e obiettivo: `config --topic "..." --subtitle "<what the room must produce>"`.
+2. Topic e obiettivo: `config --topic "..." --subtitle "<cosa deve produrre la stanza>"`.
 3. Partecipanti: `add --participants A,B,C --profile "A|emoji|#color|role|model|effort"`. Ruoli distinti che si contraddicono in modo utile (un esperto, un builder, uno scettico). Nomi in maiuscolo.
 4. Materiale che gli agenti devono avere (non ereditano la tua conversazione): scrivilo in `ROOM/DOSSIER.md`.
 5. Brief, una volta sola: `brief goal="..." style="..." materials="ROOM/DOSSIER.md" constraints="..." closing="..." max=45`.
