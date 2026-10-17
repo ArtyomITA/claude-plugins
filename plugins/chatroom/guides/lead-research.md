@@ -51,6 +51,9 @@ Evaluator: <command>; Final evaluator (once, at the end, on held-out data): <com
 Metric: <NAME>, <lower|higher> is better; in the file $CHATROOM_RESULT (preferred) or printed once as "NAME: value"
 Noise: measures per run <N> (the median counts); minimal gain to keep: <number or %>
 Protocol line (optional): the evaluator prints "protocol: <seed, samples, batch, split...>"; if it ever changes, the run is a crash
+References (outputs of the base the evaluator compares against): written only when CHATROOM_BASELINE=1 (the first run), never in a phase 3 `--kind baseline` run
+Provenance: the build stamps CHATROOM_PROGRAM_SHA into what it builds and the evaluator prints "built: <it>" (`--provenance` makes it required and checks it; without it only a full 64-character one is checked)
+Environment (optional): the evaluator prints "env: <gpu clock, temperature, load...>": recorded with each run, never compared
 Sealed (committed, never touched): <evaluator, build script, data loader>
 Held-out data for the final evaluator: <a path OUTSIDE the repository: anything committed is readable from every worktree>
 Data folders kept between runs (not committed, not inside a submodule): <data/, build/> or none
@@ -201,7 +204,9 @@ the background; answers are written to the file as they come. Treat them as opin
 ## 7. Your part, and the user's
 
 - Answer checkpoints; decide splits (DECIDE); keep cycles moving; never suggest the idea itself to a worker.
-- Contract changes: `research amend` (how runs are measured only before a baseline is kept; budgets any time).
+- Contract changes: `research amend` (how runs are measured only before a baseline is kept; budgets any time; how they are
+  judged, `--guard` and `--min-gain`, also later with `--reason "..."`: recorded, shown by status, disclosed in the report).
+  One research per room: a new research opens a new room.
 - Tell the user plainly: the kernel runs as the user, the seal is a check, not a wall; without `--result-file` a
   program could print a false metric (a second line is a crash); the final gap and the ablations are the honest numbers.
 - Research actions over MCP are the agents'; you use the shell (`chat.py research ... --as LEAD`). A refused command

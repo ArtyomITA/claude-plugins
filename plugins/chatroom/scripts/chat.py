@@ -1077,6 +1077,12 @@ def cmd_post(room, a, text=None):
                 pass
         sys.exit(say('chat.err.cmd_post.error_you_already_said2', name=a.name, IDLE_WAIT_MAX=IDLE_WAIT_MAX))
     print(say('chat.say.posted', n=n) + (say('chat.say.posted_images', images=len(images)) if images else ''))
+    users = room.user_names()
+    missed = [m['n'] for m in room.messages() if room.cursor(a.name) < m['n'] < n and m['from'] != a.name and not m.get('kind')
+              and (tags(m.get('text', ''), a.name) or tags_everyone(m.get('text', ''))
+                   or (m['from'] in users and not re.search(r'(?<![\w.])@\w', m.get('text', ''))))]
+    if missed:
+        print(say('chat.say.unread_for_you', ns=', '.join(f'#{x}' for x in missed[:8]), name=a.name))
     if kind == IDLE:
         print(say('chat.say.cmd_post.you_are_now_idle', name=a.name, IDLE_WAIT_MAX=IDLE_WAIT_MAX))
         return
@@ -1177,7 +1183,8 @@ ARTIFACT = re.compile(r'\bexit(?:\s*code)?\s*[:=]?\s*-?\d{1,5}\b|\b\d{1,6}\s+(?:
                       r'|(?<![\w])(?:[\w.-]{1,80}[/\\]){1,12}[\w.-]{1,120}\.[A-Za-z0-9]{1,6}\b'
                       r'|\b[\w-]{1,120}\.(?:' + CODE_EXT + r')\b'
                       r'|(?<![\w&])#\d{1,7}\b|\b(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}\b|https?://\S{3,}'
-                      r'|\b\d{1,9}(?:[.,]\d{1,6})?\s?(?:ms|MB|GB|KB|MiB|GiB)\b|\b\d{1,9}(?:[.,]\d{1,6})?(?:s|x)\b', re.IGNORECASE)
+                      r'|\b\d{1,9}(?:[.,]\d{1,6})?\s?(?:ms|MB|GB|KB|MiB|GiB)\b|\b\d{1,9}(?:[.,]\d{1,6})?(?:s|x)\b'
+                      r'|\batt-\d{1,6}\b|(?<![\w-])(?-i:[EI])\d{1,5}\b', re.IGNORECASE)
 
 
 def has_artifact(text):
@@ -1748,8 +1755,8 @@ def failures(room, now=None):
                             or re.search(r"\b(?:the user|l'utente|dell'utente|all'utente|utente|committente)\b", i.get('text', ''), re.IGNORECASE))
                      for i in idles)                  # waiting for the user (or the lead, by name) is not a stall
     if len(active) > 1 and all(idles) and not waits_user and not taken and not (closed and closed > plan):
-        last = max(room.idle_entry(k, items)['n'] for k in active)
-        out.append((f"allidle:{last}", say('chat.check.everyone_is_idle_no')))
+        since = max((m['n'] for m in items if m.get('from') in active and m.get('kind') != IDLE), default=0)
+        out.append((f"allidle:{since}", say('chat.check.everyone_is_idle_no')))
     for m in items:                                   # a closing nobody ever disagreed with: was the plan really tested?
         is_closed, cv = closing(m.get('text', ''))
         if not is_closed or m.get('kind') or m['from'] in users:
@@ -1768,7 +1775,8 @@ def failures(room, now=None):
                 out.append((f"checkpoint:{k}:{mine // every}", say('chat.check.reached_messages_it_asks', k=k, v2=mine // every * every)))
     budget = int(config.get('budget_calls', BUDGET_CALLS))
     if research_room and budget:                      # the registrar and the auditor work per run: 10 calls more for each
-        budget += 10 * int(read_json(room.dir / 'research' / 'state.json', {}).get('evals', 0))
+        st_ = read_json(room.dir / 'research' / 'state.json', {})
+        budget += 20 * (int(st_.get('evals', 0)) + int(st_.get('aux', 0)))
     for k, v in room.counters().items():
         used = sum(v.values())
         if budget and used >= budget:
@@ -1794,7 +1802,8 @@ def failures(room, now=None):
                 continue
             after = [x for x in recent[i + 1:] if x['from'] == k and not x.get('kind')]   # real messages: working statuses are not an answer, but not a dodge either
             ref = re.compile(rf"#{m['n']}(?!\d)|(?<![\w@])@?{re.escape(m['from'])}(?![\w-])", re.IGNORECASE)   # #1 is not #12, ALFA is not ALFABETO
-            answered = any(ref.search(x['text']) for x in after)
+            acted = [x for x in recent[i + 1:] if x['from'] == k and x.get('kind') in ('status', 'board', IDLE)]
+            answered = any(ref.search(x['text']) for x in after) or bool(acted)
             if len(after) >= 2 and not answered:
                 out.append((f"tag:{m['n']}:{k}", say('chat.check.has_not_answered_from', k=k, n=m['n'], from_=m['from'], len_after=len(after))))
     for k in people:
@@ -2475,6 +2484,11 @@ def cmd_research(room, a):
     import research
     research.cmd(room, a)
     if (a.pairs or ['status'])[0] == 'init':
+        def mark(config):                     # a research room says so in its config, even when opened without the choice
+            if config.get('mode') in (None, 'choose'):
+                config['mode'] = 'research'
+            return config
+        room.edit_config(mark)
         print(guide_hint('research'))
 
 
@@ -3601,6 +3615,9 @@ def main():
     p.add_argument('--repeats', type=int, help='research init/amend: measures per run; the median counts')
     p.add_argument('--guard', help='research init/amend: NAME:min|max:TOL,... secondary numbers the evaluator prints, median against the baseline')
     p.add_argument('--minutes', type=float, help='research hold: how long the GPU is held')
+    p.add_argument('--provenance', dest='provenance', action='store_const', const=True, default=None,
+                   help='research init/amend: every measure must print "built: <CHATROOM_PROGRAM_SHA>" (the build of this run)')
+    p.add_argument('--no-provenance', dest='provenance', action='store_const', const=False)
     p.add_argument('--min-gain', dest='min_gain', help='research init/amend: how much a keep must beat the best by (a number or N%%)')
     p.add_argument('--idea', help='research assign/evaluate: the idea (I-number) a cycle or a run works on')
     p.add_argument('--parent', help='research assign: base, best or att-N: where the cycle starts')
@@ -3615,7 +3632,7 @@ def main():
     p.add_argument('--drop', help='research curate: committed evidence to drop')
     p.add_argument('--gate', help='research conclude: updated, kept or skipped')
     p.add_argument('--trigger', help='research conclude: a, b, c, d or none')
-    p.add_argument('--reason', help='research revoke: why')
+    p.add_argument('--reason', help='why: research revoke, hold, allow-fix, amend (judging after the baseline)')
     p.add_argument('--phase', type=int, help='research verdict: the phase judged')
     p.add_argument('--outcome', help='research verdict: pass, fail, answer_ready or search_more')
     p.add_argument('--next-intent', dest='next_intent', help='research verdict: the one next thing to search or try')

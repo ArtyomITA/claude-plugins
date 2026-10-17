@@ -13,6 +13,8 @@ THE CONTRACT (written by the lead and the user; you do not change it):
   (evaluator, final evaluator, data loader) in {{WORK}}, and `research evaluate` makes a smoke run of them (it commits the
   drafted files and checks that the metric comes out). After a cut-off smoke run, `git checkout <its tag> -- .` brings the
   drafted files back. The auditor passes the drafting and the lead seals it; from then on the rules above hold.
+  An evaluator writes its references only when CHATROOM_BASELINE=1, prints "built: <CHATROOM_PROGRAM_SHA>" when the build
+  can stamp it into what it builds (so a stale build is caught), and may print "env: <clock, temperature...>" lines.
 - Budget: {{MAX_EVALS}} runs in all for the whole research, counted by the kernel, crashes included.
 
 THE LOOP (the kernel does the bookkeeping: you never commit, tag, reset or write the results yourself):

@@ -49,7 +49,7 @@ CURATED_MAX = 60          # committed evidence kept at once (the registrar drops
 SIMILAR = 0.5             # an idea this close to an earlier one (word trigrams, Jaccard) is refused
 VIEW_MAX = 3000           # characters of a role's view; research expand ID opens one record
 AUX_KINDS = ('ablation', 'baseline', 'control', 'repeat')
-KERNEL = (0, 11, 0)      # written into the state: an older kernel (another install, an MCP server not restarted) refuses it
+KERNEL = (0, 11, 1)      # written into the state: an older kernel (another install, an MCP server not restarted) refuses it
 AUX_BASE, SMOKE_BASE = 100000, 200000   # numbers of evidence and smoke runs: never the same as an attempt's (at most 100000)
 NO_HOOKS = str(Path(__file__).resolve().parent / '.no-git-hooks')   # a folder that does not exist: git finds no hooks there
 SECRET_ENV = ('OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
@@ -85,6 +85,13 @@ def _git(cwd, *args, check=True, ident=None):
 
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _shas(path):
+    """the SHA-256 of a file as on disk, with LF and with CRLF endings: a stamp from any of them is this file"""
+    data = Path(path).read_bytes()
+    lf = data.replace(b'\r\n', b'\n')
+    return {hashlib.sha256(x).hexdigest() for x in (data, lf, lf.replace(b'\n', b'\r\n'))}
 
 
 def _seal_holds(work, rel, want):
@@ -280,7 +287,8 @@ def _better(c, value, than):
 
 # ---------------------------------------------------------------------------------------------------------- contract
 def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, max_evals=100, repo='.', sealed=(), tag=None,
-         result_file=False, keep=(), draft=False, final=None, build=None, build_min=None, repeats=1, min_gain=None, guards=None):
+         result_file=False, keep=(), draft=False, final=None, build=None, build_min=None, repeats=1, min_gain=None, guards=None,
+         provenance=False):
     """the lead or the user writes the contract: which file changes, how it is built and evaluated, what is sealed, the
     budget, how noise is handled. --draft starts at phase 1 (the evaluator is still being written, sealed later)"""
     if by not in room.user_names():
@@ -355,7 +363,7 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
                 'branch': branch, 'tag': tag, 'base_commit': base, 'sealed': seals, 'by': by,
                 'metric_source': 'file' if result_file else 'output', 'keep': keep, 'final': final or '',
                 'build': build or '', 'build_s': max(1, int(float(build_min) * 60)) if build_min else 0,
-                'repeats': int(repeats or 1), 'min_gain': str(min_gain) if min_gain is not None else '', 'roles': {}, 'guards': guards,
+                'repeats': int(repeats or 1), 'min_gain': str(min_gain) if min_gain is not None else '', 'roles': {}, 'guards': guards, 'provenance': bool(provenance),
                 'task_sha': _sha(task), 'created': time.strftime('%Y-%m-%d %H:%M:%S')}
     _save(room, 'contract.json', contract)
     st = _migrate(contract, {'evals': 0, 'best': None, 'head': base, 'pending': None, 'phase': 1 if draft else 2})
@@ -376,16 +384,24 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
 
 
 def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=None, build=None, build_min=None,
-          repeats=None, min_gain=None, final=None, guards=None):
+          repeats=None, min_gain=None, final=None, guards=None, reason=None, provenance=None):
     """the lead changes the contract: budgets at any time; what is measured and how only before a baseline is kept (a
     crashed baseline is fixed this way, not by starting over)"""
     if by not in room.user_names():
         raise ValueError(say('kernel.amend.only_the_lead_or'))
     c, st = _state(room)
     said = []
-    measured = any(x is not None for x in (evaluate, result_file, build, repeats, min_gain, guards))
+    measured = any(x is not None for x in (evaluate, result_file, build, repeats))
+    judged = any(x is not None for x in (min_gain, guards, provenance))   # how runs are judged: later only with a reason
     if measured and st['best'] is not None:
         raise ValueError(say('kernel.amend.how_runs_are_measured'))
+    if judged and st['best'] is not None and not (reason or '').strip():
+        raise ValueError(say('kernel.word.amend_needs_reason'))
+    if guards is not None and st['best'] is not None:
+        measured_g = (st.get('baseline') or {}).get('guards') or {}
+        new = [g['name'] for g in parse_guards(guards) if g['name'] not in measured_g]
+        if new:
+            raise ValueError(say('kernel.word.guard_not_in_baseline', names=', '.join(new)))
     for key, value, label in (('evaluate', evaluate, say('kernel.word.evaluator')), ('build', build, say('kernel.word.build')), ('final', final, say('kernel.word.final_evaluator'))):
         if value is not None:
             c[key] = value
@@ -421,12 +437,18 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
             raise ValueError(say('kernel.amend.max_evals_must_be', evals=st['evals']))
         c['max_evals'] = int(max_evals)
         said.append(say('kernel.amend.runs_in_all', max_evals=max_evals))
+    if provenance is not None:
+        c['provenance'] = bool(provenance)
+        said.append(say('kernel.word.provenance_on') if provenance else say('kernel.word.provenance_off'))
     if not said:
         raise ValueError(say('kernel.amend.research_amend_evaluate_build'))
     _save(room, 'contract.json', c)
+    if judged and st['best'] is not None:                  # the runs before were judged with the old rule: the report says so
+        rec = {'by': by, 'ts': time.strftime('%Y-%m-%d %H:%M'), 'after_run': st['evals'], 'what': ', '.join(said), 'reason': reason.strip()}
+        _edit(room, lambda c2, s2: s2.setdefault('amends', []).append(rec))
     if measured:
         _edit(room, lambda c2, s2: s2.update(protocol=None))   # the next baseline (or smoke) records the protocol anew
-    _log(room, by, 'amend', said)
+    _log(room, by, 'amend', {'changes': said, 'reason': reason})
     return say('kernel.amend.research_contract_changed_by', tag=c['tag'], by=by) + ', '.join(said)
 
 
@@ -655,6 +677,10 @@ def _measure(c, work, d, n, env, log, on_start=None):
     """build once (its own limit), then evaluate --repeats times; the median counts. Returns (value, why, secs, spread,
     protocol lines, all output)"""
     secs, text = 0.0, ''
+    try:                                                  # a copied file keeps its old mtime: make every build see it as new
+        os.utime(Path(work) / c['program'], None)
+    except OSError:
+        pass
     if c.get('build'):
         code, s = _run(c['build'], work, log, c.get('build_s') or 2 * c['budget_s'], env, on_start=on_start)
         secs += s
@@ -662,7 +688,9 @@ def _measure(c, work, d, n, env, log, on_start=None):
         if code != 0:
             return None, (say('kernel._measure.build_over_s_killed', v1=c.get('build_s') or 2 * c['budget_s']) if code is None else say('kernel._measure.build_exit', code=code)), \
                 secs, '', [], text
-    values, protocol, gvals = [], [], {g['name']: [] for g in c.get('guards', [])}
+    values, protocol, envs, proved, gvals = [], [], [], [], {g['name']: [] for g in c.get('guards', [])}
+    c['_env'] = envs                                      # filled as the repeats go: a crash keeps what was printed
+    wants = _shas(Path(work) / c['program']) if env.get('CHATROOM_PROGRAM_SHA') else set()
     pattern = rf"^\s*{re.escape(c['metric'])}\s*:\s*{NUMBER}\s*$"
     for k in range(c.get('repeats', 1)):
         result = d / 'runs' / f'{n}.result'
@@ -679,10 +707,20 @@ def _measure(c, work, d, n, env, log, on_start=None):
         for line in re.findall(r'^\s*protocol\s*:\s*(.+?)\s*$', out, re.MULTILINE | re.IGNORECASE):
             if line not in protocol:                          # the same protocol in every repeat counts once
                 protocol.append(line)
+        for line in re.findall(r'^[ \t]*env[ \t]*:[ \t]*(\S.*?)[ \t]*$', out, re.MULTILINE | re.IGNORECASE):
+            envs.append(line[:200])                           # clocks, temperature, load: recorded, never compared
         if code is None:
             return None, say('kernel.word.killed_over', s=2 * c['budget_s']), secs, '', protocol, text
         if code != 0:
             return None, say('kernel.word.exit_code', code=code), secs, '', protocol, text
+        built = re.findall(r'^[ \t]*built[ \t]*:[ \t]*([0-9a-fA-F]{8,64})[ \t]*$', out, re.MULTILINE | re.IGNORECASE)
+        want = env.get('CHATROOM_PROGRAM_SHA', '')
+        bad = [b for b in built if (c.get('provenance') or len(b) == 64) and not any(w.startswith(b.lower()) for w in wants)]
+        if want and bad:
+            return None, say('kernel.word.built_other', built=bad[0], want=want[:12]), secs, '', protocol, text
+        proved.append(bool(want and built))
+        if want and c.get('provenance') and not built:
+            return None, say('kernel.word.built_missing'), secs, '', protocol, text
         source = (result.read_text(encoding='utf-8', errors='replace') if result.is_file() else '') if c.get('metric_source') == 'file' else out
         found = re.findall(pattern, source, re.MULTILINE)
         if len(found) > 1:
@@ -702,6 +740,7 @@ def _measure(c, work, d, n, env, log, on_start=None):
     value = statistics.median(values)
     spread = f'{min(values):.6g}..{max(values):.6g}' if len(values) > 1 else ''
     c['_guards'] = {g: statistics.median(v) for g, v in gvals.items()}   # read by the caller right after
+    c['_built'] = bool(proved) and all(proved)
     return value, '', secs, spread, protocol, text
 
 
@@ -959,7 +998,8 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     _edit(room, lambda c2, s2: s2.update(pending=dict(pending)))
     held = _clean(work, c)
     log = d / 'runs' / f'{n}.log'
-    env = _env(CHATROOM_RUN=n, CHATROOM_KIND=kind, **({'CHATROOM_SEED': seed} if seed is not None else {}),
+    env = _env(CHATROOM_RUN=n, CHATROOM_KIND=kind, CHATROOM_PROGRAM_SHA=_sha(work / c['program']),
+               **({'CHATROOM_SEED': seed} if seed is not None else {}),
                **({'CHATROOM_BASELINE': 1} if first else {}))
 
     def started(pid):                                     # recorded: a caller killed now leaves a process the kernel can stop
@@ -969,6 +1009,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
                 + f"): {desc[:100]}", 'board')
     value, why, secs, spread, protocol, text = _measure(c, work, d, n, env, log, started)
     guards = c.pop('_guards', {}) if value is not None else {}
+    env_lines, built_ok = c.pop('_env', [])[:12], c.pop('_built', False)
     base_g = (st.get('baseline') or {}).get('guards') or {}
     if value is not None and kind == 'attempt' and not first:
         for g in c.get('guards', []):
@@ -1014,7 +1055,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         rec = {'n': n, 'worker': key, 'commit': commit, 'metric': value, 'status': status, 'kind': kind, 'idea': idea,
                'state': 'committed', 'parent_n': (w.get('best') or {}).get('n'), 'desc': desc, 'lines': lines,
                'added': len(added), 'readded': readded, 'tuning': tuning, 'spread': spread, 'of': of, 'seed': seed,
-               'guards': guards, 'fix': fix, 'ts': time.time()}
+               'guards': guards, 'fix': fix, 'env': env_lines, 'program_sha': env['CHATROOM_PROGRAM_SHA'], 'built': built_ok, 'ts': time.time()}
         s2['attempts'].append(rec)
         if kind == 'attempt':
             s2['evals'] = n
@@ -1495,7 +1536,8 @@ def prebuild(room, by, worker):
             '    code = subprocess.call(sys.argv[1], shell=True, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)\n'
             'open(sys.argv[3], "w").write(str(code))\n')
     argv = [sys.executable, '-c', wrap, c['build'], str(log), str(done)]
-    kw = dict(cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_env(CHATROOM_KIND='prebuild'))
+    kw = dict(cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_env(CHATROOM_KIND='prebuild',
+                CHATROOM_PROGRAM_SHA=_sha(work / c['program']) if (work / c['program']).is_file() else ''))
     if os.name == 'nt':
         flags = 0x08000000 | 0x00000200                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: no console to close by mistake
         try:
@@ -1635,6 +1677,9 @@ def _phase_next(room, by, force):
             why = say('kernel._phase_next.the_report_still_has', len_set=len(set(left)), sorted=sorted(set(left))[0][:60]) if left else ''
             if not why and st.get('degraded') and 'DEGRADED' not in text:
                 why = say('kernel._phase_next.the_research_is_degraded')
+            miss = [a for a in st.get('amends', []) if a['reason'][:40] not in text]
+            if not why and miss:
+                why = say('kernel.word.report_misses_amend', reason=miss[0]['reason'][:60])
         if not why and auditor and not _verdict_holds(room, st, 5, 'pass'):
             why = say('kernel._phase_next.the_auditor_has_not3')
     else:
@@ -1681,7 +1726,7 @@ def _final(room, by):
     _git(work, 'checkout', '-q', '--detach', commit)
     _clean(work, c)
     log = _dir(room) / 'runs' / 'final.log'
-    env = _env(CHATROOM_RUN='final', CHATROOM_KIND='final')
+    env = _env(CHATROOM_RUN='final', CHATROOM_KIND='final', CHATROOM_PROGRAM_SHA=_sha(work / c['program']))
     fc = dict(c, evaluate=c['final'], repeats=c.get('repeats', 1), guards=[])
     try:
         value, why, secs, spread, _, text = _measure(fc, work, _dir(room), 'final', env, log,
@@ -1736,6 +1781,7 @@ CHECKLIST = '''# Report
 - Baseline: <source and how much it was tuned>
 - Reviewer independence: <who audited, and that the evaluator decided the numbers>
 - Pre-registration: task.md and the idea bundles, timestamped in log.jsonl before their runs
+- Contract changes after the baseline: <each amend from research status, with its reason and the runs judged before it; or none>
 '''
 
 
@@ -1886,6 +1932,12 @@ def status(room):
     for f in sorted((_dir(room) / 'runs').glob('prebuild-*.exit')):
         code = f.read_text(errors='replace').strip()
         head += say('kernel.status.prebuild_of', stem=f.stem[9:]) + (say('kernel.status.done_exit') if code == '0' else say('kernel.status.failed_exit_log', code=code, with_suffix=f.with_suffix(".log")))
+    measured = [a for a in st['attempts'] if 'built' in a and a['status'] != 'crash']
+    if measured:
+        head += say('kernel.word.provenance_status', state='on' if c.get('provenance') else 'off',
+                    proved=sum(1 for a in measured if a['built']), runs=len(measured))
+    for a in st.get('amends', []):
+        head += say('kernel.word.amend_line', ts=a['ts'], by=a['by'], after_run=a['after_run'], what=a['what'], reason=a['reason'])
     held = _gpu_hold(room)
     if held:
         head += (say('kernel.status.gpu_held_by', by=held['by'], reason=held['reason']) + (say('kernel.status.pid_log', pid=held['pid'], get=held.get('log')) if held.get('pid')
@@ -1983,11 +2035,12 @@ def _cmd(room, a):
                          a.repo or '.', split(a.sealed), a.tag, bool(a.result_file), split(getattr(a, 'keep', None)),
                          bool(getattr(a, 'draft', False)), getattr(a, 'final', None), getattr(a, 'build', None),
                          getattr(a, 'build_min', None), getattr(a, 'repeats', None) or 1, getattr(a, 'min_gain', None),
-                         getattr(a, 'guard', None)))
+                         getattr(a, 'guard', None), getattr(a, 'provenance', None)))
     if act == 'amend':
         return post(amend(room, a.name, a.evaluate, a.budget_min, a.max_evals, a.result_file, getattr(a, 'build', None),
                           getattr(a, 'build_min', None), getattr(a, 'repeats', None), getattr(a, 'min_gain', None),
-                          getattr(a, 'final', None), getattr(a, 'guard', None)))
+                          getattr(a, 'final', None), getattr(a, 'guard', None), getattr(a, 'reason', None),
+                          getattr(a, 'provenance', None)))
     if act == 'roles':
         return post(roles(room, a.name, rest))
     if act == 'allow-fix' and rest:

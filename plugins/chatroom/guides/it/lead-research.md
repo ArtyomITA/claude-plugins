@@ -53,6 +53,9 @@ Valutatore: <comando>; valutatore finale (una volta sola, alla fine, su dati ris
 Metrica: <NOME>, <lower|higher> è meglio; nel file $CHATROOM_RESULT (preferito) oppure stampato una volta come "NOME: valore"
 Rumore: misure per corsa <N> (conta la mediana); guadagno minimo per tenere: <numero o %>
 Riga di protocollo (facoltativa): il valutatore stampa "protocol: <seed, campioni, batch, split...>"; se cambia, la corsa è un crash
+Riferimenti (output della base con cui il valutatore confronta): scritti solo con CHATROOM_BASELINE=1 (la prima corsa), mai in una corsa `--kind baseline` della fase 3
+Provenienza: la build imprime CHATROOM_PROGRAM_SHA in ciò che costruisce e il valutatore stampa "built: <quello>" (`--provenance` la rende obbligatoria e la controlla; senza, si controlla solo uno completo di 64 caratteri)
+Ambiente (facoltativo): il valutatore stampa "env: <clock della GPU, temperatura, carico...>": registrato a ogni corsa, mai confrontato
 Sigillato (committato, mai toccato): <valutatore, script di build, caricatore dei dati>
 Dati riservati per il valutatore finale: <un percorso FUORI dal repository: tutto ciò che è committato è leggibile da ogni worktree>
 Cartelle dati mantenute tra le corse (non committate, non dentro un submodule): <data/, build/> oppure none
@@ -213,7 +216,8 @@ contro le evidenze.
 
 - Rispondi ai checkpoint; decidi le divisioni (DECIDE); tieni in moto i cicli; non suggerire mai tu l'idea a un worker.
 - Modifiche al contratto: `research amend` (come si misurano le corse solo prima che una baseline sia tenuta; i budget
-  in qualsiasi momento).
+  in qualsiasi momento; come si giudicano, `--guard` e `--min-gain`, anche dopo con `--reason "..."`: registrato, mostrato
+  da status, dichiarato nel report). Una ricerca per stanza: una ricerca nuova apre una stanza nuova.
 - Di' all'utente in chiaro: il kernel gira come l'utente, il sigillo è un controllo e non un muro; senza `--result-file`
   un programma potrebbe stampare una metrica falsa (una seconda riga è un crash); il divario finale e le ablazioni sono
   i numeri onesti.
