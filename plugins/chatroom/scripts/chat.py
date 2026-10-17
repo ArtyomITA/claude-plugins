@@ -41,6 +41,11 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
   chat.py helpers [OTHER_ROOM ...]                          (for the lead: who is free and for how long, who works on
                                                             what, the pieces already lent, and pairs to consider)
   chat.py serve [--port 8765]                               (the live viewer, with a box to write as the user)
+  chat.py brief [key=value ...]                             (the room's brief for the prompts: goal, style, materials,
+                                                            constraints, closing, max)
+  chat.py prompt NAME [--template FILE] [--out FILE]        (the filled prompt of one participant: pass it unchanged)
+  chat.py research init|amend|evaluate|status               (the research kernel: one file changes, a sealed evaluator,
+                                                            keep if better or reset; see research.py)
 
 Look options (init) and config keys: --title, --subtitle, --icon (an emoji), --accent (#rrggbb), --theme
 (auto|light|dark), --wallpaper (dots|plain|grid), --lang (en|it), --heartbeat, --user-name, and --profile
@@ -73,7 +78,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 PALETTE = ['#1fa855', '#027eb5', '#d9730d', '#8e44ad', '#c0392b', '#16a085', '#b7950b', '#6c5ce7', '#e84393', '#0984e3']
 LOOK_KEYS = {'title': str, 'subtitle': str, 'icon': str, 'accent': str, 'theme': str, 'wallpaper': str, 'lang': str,
-             'heartbeat': int, 'user_name': str, 'topic': str}
+             'heartbeat': int, 'user_name': str, 'topic': str, 'budget_calls': int, 'closing_gate': int}
 CHOICES = {'theme': ('auto', 'light', 'dark'), 'wallpaper': ('dots', 'plain', 'grid'), 'lang': ('en', 'it')}
 COLOR = re.compile(r'#[0-9a-fA-F]{6}\Z')
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
@@ -84,11 +89,78 @@ STATUS_KINDS = ('status', 'stato', 'board', 'finding')   # 'stato' is how the fi
 STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str,
               'done': str, 'evidence': list, 'risks': str, 'free_min': int}
 IDLE = 'idle'
+SETUP_KINDS = ('choice', 'mode')   # the mode card of init --ask-mode and the choice made on it: for the lead only
 PERCENT = re.compile(r'\d[^\S\n]?%')
 # a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all
-BROADCAST = re.compile(r'^\s*(PLAN|PIANO)\s*v\d+|^\s*(CLOSED|CHIUSO)\b|\b(VOTE|VOTO)\s*v?\d+\s*:', re.IGNORECASE)
+# a PLAN or a CLOSED is a heading: after the word and its version comes anything but another word ("PLAN v2: ...",
+# "PLAN v1 (draft): ...", "CLOSED v1 (all agreed)", "CLOSED ✅"); "PLAN v1 also needs a test" is a sentence about the plan
+_END = r'[*_]*(?!\s*[^\W\d_])'
+PLAN_RE = re.compile(r'(?:PLAN|PIANO)\s*v(\d+)' + _END, re.IGNORECASE)
+VOTE_RE = re.compile(r'(?:VOTE|VOTO)\s*v?(\d+)\s*[*_]*\s*:\s*[*_]*\s*(yes|s[iì]|no)(?![^\W_])', re.IGNORECASE)
+CLOSED_RE = re.compile(r'(?:CLOSED|CHIUSO)(?:\s*[vV](\d+))?' + _END)   # in capitals: "Closed the first point" is a sentence
+# a line that quotes somebody: it opens (after a reply mark and tags) with >, a quotation mark, a backtick or a bracket
+QUOTED = re.compile(r'^\s*(?:↪\s*#\d+\s*)?(?:@[\w-]+[\s,:]*)*[>"“”«‘’\'`(]')
+# before the words: a reply mark, tags, a list number, and any symbols (markdown, emoji, brackets)
+LINE_HEAD = re.compile(r'^(?:\s*↪\s*#\d+|\s*@[\w-]+[\s,:]*|\s*\d{1,3}[.)]\s+|[^\w@↪]+|_+)+')
+
+
+def heads(text):
+    """the start of each line of a message, without a reply mark, leading tags, list numbers or symbols. A quoted line
+    (> or a quotation mark, a backtick, a bracket) is somebody else's words and is left out, and so is a line that is only
+    tags or symbols ("@A @B", "---"), so what follows it is the message's first line"""
+    out = []
+    for line in (text or '').splitlines():
+        if not line.strip() or QUOTED.match(line):
+            continue
+        h = LINE_HEAD.sub('', line)
+        if h.strip():
+            out.append(h)
+    return out
+
+
+LOOSE_HEAD = re.compile(r'(?:PLAN|PIANO|CLOSED|CHIUSO)\s*v\d+\s+[^\W\d_]', re.IGNORECASE)
+
+
+def loose_heading(text):
+    """a message that opens with "PLAN v2 something" (no colon) and tags nobody: meant as a plan, read as a sentence"""
+    first = (text or '').lstrip().splitlines()[:1]
+    return bool(first) and not first[0].lstrip().startswith(('@', '↪')) and bool(heads(text)) and LOOSE_HEAD.match(heads(text)[0]) is not None
+
+
+def late_vote(text):
+    """a VOTE that is not on the message's first line (it does not count): post tells its author to send it again"""
+    return any(VOTE_RE.match(h) for h in heads(text)[1:])
+
+
+def plan_version(text):
+    """N if the message opens with a PLAN vN / PIANO vN heading, else None"""
+    first = heads(text)[:1]
+    m = PLAN_RE.match(first[0]) if first else None
+    return int(m.group(1)) if m else None
+
+
+def closing(text):
+    """(True, N or None) if the message opens with a CLOSED / CHIUSO heading (capitals, optionally vN), else (False, None)"""
+    first = heads(text)[:1]
+    m = CLOSED_RE.match(first[0]) if first else None
+    return (True, int(m.group(1)) if m and m.group(1) else None) if m else (False, None)
+
+
+def votes_in(text):
+    """[(version, yes)] when the message opens with VOTE vN: yes|no (VOTO vN: sì|no): a vote is the first line of its own
+    message, so a vote reported or quoted further down ("A said:\nVOTE v1: no") is not the author's"""
+    first = heads(text)[:1]
+    m = VOTE_RE.match(first[0]) if first else None
+    return [(int(m.group(1)), m.group(2).lower() != 'no')] if m else []
+
+
+def broadcast(text):
+    """a plan, a vote or a closing concerns everyone: it wakes idle participants like a tag to all"""
+    return plan_version(text) is not None or closing(text)[0] or bool(votes_in(text))
+PLAN_MAX = 3              # after PLAN v3 only the lead (or the user) posts a new version: the lead reviews and decides
 EVERYONE = ('all', 'tutti', 'everyone')   # @all, @tutti, @everyone tag every participant
 WAIT_MAX, IDLE_WAIT_MAX = 110, 540
+DIGEST_EVERY = 20         # a focused wait returns anyway when this many messages for nobody in particular wait, or after 3 heartbeats
 
 # Quick commands: the user sends them from the viewer (type / in the box) or the lead with `chat.py command NAME`.
 # One prompt each, written from Anthropic's prompting guidance (proactive action, independent steps together,
@@ -210,20 +282,47 @@ COMMANDS = {
 }
 
 
+# the room's mode, chosen once in the viewer after `init --ask-mode`: the lead reads the choice and prepares the room
+MODES = {
+    'normal': {
+        'en': ('normal', '💬', 'Normal room: the lead sets it up with you',
+               '@LEAD MODE: NORMAL. Set up the room with me as usual: ask me the topic, the participants and the look, '
+               'and wait for my answer before you spawn anyone.'),
+        'it': ('normale', '💬', 'Stanza normale: il lead la prepara con te',
+               "@LEAD MODALITÀ: NORMALE. Prepara la stanza con me come sempre: chiedimi argomento, partecipanti e look, "
+               "e aspetta la mia risposta prima di evocare qualcuno.")},
+    'research': {
+        'en': ('research', '🔬', 'Research: contract, sealed evaluator, Propose, Commit, Audit',
+               '@LEAD MODE: RESEARCH. Open phase 0 (the contract): ask me the task, then we write task.md together '
+               '(goal, data, evaluation, budget, rubrics). Nothing is spawned before I approve the contract.'),
+        'it': ('research', '🔬', 'Ricerca: contratto, valutatore sigillato, proposta, registro, verifica',
+               "@LEAD MODALITÀ: RESEARCH. Apri la fase 0 (il contratto): chiedimi il compito, poi scriviamo insieme "
+               "task.md (obiettivo, dati, valutazione, budget, rubric). Nessuno viene evocato prima che io approvi il contratto.")},
+}
+MODE_ASK = {'en': 'Choose how this room works: tap a button, or type /normal or /research.',
+            'it': 'Scegli come lavora questa stanza: tocca un bottone, oppure scrivi /normale o /research.'}
+
+
 # the "less talk" command also lengthens the status timer a little (x1.5, at most 3600 s)
 TIMER_FACTOR = {'menoparole': 1.5}
 TIMER_NOTE = {'en': ' The status timer goes from {old} to {new} s.', 'it': ' Il timer degli status passa da {old} a {new} s.'}
 
 
-def command_list(lang):
-    """the quick commands in the room language: [{key, name, icon, label, text}]"""
+def command_list(lang, modes=False):
+    """the quick commands in the room language: [{key, name, icon, label, text}]; modes: also the two mode choices
+    (only while the room waits for one)"""
     lang = lang if lang in ('en', 'it') else 'en'
-    return [dict(zip(('name', 'icon', 'label', 'text'), c[lang]), key=key) for key, c in COMMANDS.items()]
+    table = {**COMMANDS, **MODES} if modes else COMMANDS
+    return [dict(zip(('name', 'icon', 'label', 'text'), c[lang]), key=key) for key, c in table.items()]
 
 
-def find_command(word, lang):
+def room_commands(config):
+    return command_list(config.get('lang', 'en'), config.get('mode') == 'choose')
+
+
+def find_command(word, lang, modes=False):
     word = word.lstrip('/').strip().lower()
-    for c in command_list(lang) + command_list('en' if lang == 'it' else 'it'):
+    for c in command_list(lang, modes) + command_list('en' if lang == 'it' else 'it', modes):
         if word in (c['key'], c['name']):
             return c
     return None
@@ -233,11 +332,23 @@ def run_command(room, word, author):
     """post a quick command as `author`, applying its effect; (n, text), or ValueError for an unknown command"""
     config = room.config()
     lang = config.get('lang', 'en')
-    c = find_command(word, lang)
+    choosing = config.get('mode') == 'choose'
+    c = find_command(word, lang, modes=True)
+    if c and c['key'] in MODES:
+        if author not in room.user_names():
+            raise ValueError('only the user (or the lead) chooses how the room works')
+        if 'mode' not in config:
+            raise ValueError('this room was opened without a mode choice (chat.py init --ask-mode asks for one)')
+        if not choosing:
+            raise ValueError(f"this room's mode is already chosen: {config['mode']}")
     if not c:
-        raise ValueError(f'unknown command {word!r}: ' + ', '.join('/' + x['name'] for x in command_list(lang)))
-    c = next(x for x in command_list(lang) if x['key'] == c['key'])      # always in the room language
+        raise ValueError(f'unknown command {word!r}: ' + ', '.join('/' + x['name'] for x in command_list(lang, choosing)))
+    c = next(x for x in command_list(lang, True) if x['key'] == c['key'])      # always in the room language
     text = c['text']
+    if c['key'] in MODES:                     # chosen once, under the lock: a second click finds it taken
+        if not room.set_mode(c['key']):
+            raise ValueError("this room's mode is already chosen")
+        return room.append(author, text, 'mode'), text
     factor = TIMER_FACTOR.get(c['key'])
     if factor:
         old = room.heartbeat()
@@ -245,6 +356,91 @@ def run_command(room, word, author):
         room.update_config({'heartbeat': new})
         text += TIMER_NOTE['it' if lang == 'it' else 'en'].format(old=old, new=new)
     return room.append(author, text), text
+
+
+def pid_alive(pid):
+    """True while process pid runs (or when it cannot be told: then the lock waits its 60 s)"""
+    if os.name == 'nt':
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return k.GetLastError() == 5                   # access denied: it exists
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return not ok or code.value == 259                 # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def lock_owner_alive(owner):
+    """the lock's owner (a file: pid, time, token) still runs; no owner file (an older chat.py): unknown, alive"""
+    try:
+        return pid_alive(int(owner.read_text().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return True
+
+
+def votes_on(room, v, items=None):
+    """the latest vote of each participant on PLAN vN, after that plan was posted: {name: (yes, message)}"""
+    items = room.messages() if items is None else items
+    start = max((m['n'] for m in items if not m.get('kind') and plan_version(m.get('text', '')) == v), default=0)
+    out = {}
+    for m in items:
+        if m['n'] <= start or m.get('kind'):
+            continue
+        for version, yes in votes_in(m.get('text', '')):
+            if version == v:
+                out[m['from']] = (yes, m)
+    return start, out
+
+
+def closing_refusal(room, name, text):
+    """why a participant may not post this CLOSED yet (None: it may). A closing needs every active participant's yes on
+    that version, each with what they checked (an artifact: file:line, an output, #n...); the lead and the user close
+    whenever they decide (they review a split)"""
+    is_closing, v = closing(text)
+    config = room.config()
+    if not is_closing or name in room.user_names() or not config.get('closing_gate', 1):
+        return None
+    items = room.messages()
+    v = v or max((plan_version(x.get('text', '')) or 0 for x in items if not x.get('kind')), default=0)
+    if not v:
+        return 'there is no PLAN vN to close: post the plan first'
+    start, votes = votes_on(room, v, items)
+    if not start:
+        return f'there is no PLAN v{v} in the chat'
+    author = next(x['from'] for x in items if x['n'] == start)
+    active = [k for k in config.get('participants', []) if k not in config.get('left', []) and k != author]
+    missing = [k for k in active if k not in votes]
+    no = [k for k in active if k in votes and not votes[k][0]]
+    bare = [k for k in active if k in votes and votes[k][0] and not has_artifact(votes[k][1]['text'])]
+    if not (missing or no or bare):
+        return None
+    why = ([f'no vote yet from {", ".join(missing)}'] if missing else []) + \
+          ([f'a no from {", ".join(no)}: a split is reviewed by the LEAD (tag @LEAD), who decides; a no that names no '
+            f'evidence still stops the closing, and the LEAD asks for it'] if no else []) + \
+          ([f'a yes without what was checked from {", ".join(bare)} (file:line, an output, #n: vote again with it)'] if bare else [])
+    return f'PLAN v{v} cannot be closed yet: ' + '; '.join(why)
+
+
+def digest_of(msgs):
+    """one author's latest messages in a few words: its latest structured state (pct, next, needs, done) if it has one,
+    else its latest line"""
+    st = next((m['state'] for m in reversed(msgs) if isinstance(m.get('state'), dict) and 'pct' in m['state']), None)
+    if st:
+        bits = [f"{st['pct']}%"] + [f'{k} {st[k][:60]}' for k in ('step', 'done', 'risks', 'next', 'needs') if st.get(k)]
+        if st.get('evidence'):
+            bits.append('evidence ' + '; '.join(st['evidence'])[:80])
+        return ' · '.join(bits)
+    lines = (msgs[-1].get('text') or '').strip().splitlines()
+    return lines[0][:90] if lines else ''
 
 
 def ping_tool(roster):
@@ -261,18 +457,25 @@ def print_alert(room, author, n, text, images=()):
     if not others:
         print('ALERT: the roster is not written yet; the others will see your message at their next read.')
         return
-    wakes_all = author in users or tags_everyone(text) or BROADCAST.search(text) is not None
-    ping, asleep = {}, {}
+    wakes_all = author in users or tags_everyone(text) or broadcast(text)
+    ping, asleep, untagged = {}, {}, []
     for k, v in others.items():
         idle = room.idle_entry(k, items)
-        if idle and not (wakes_all or tags(text, k)):
+        if wakes_all or tags(text, k):
+            ping[k] = v
+        elif idle:
             asleep[k] = idle
         else:
-            ping[k] = v
+            untagged.append(k)                # a message for nobody in particular: read at the next read, no interruption
     if ping:
         targets = '; '.join(f'{k} = {v}' for k, v in ping.items())
         print(f"ALERT: now send with {ping_tool(others)}, to each of ({targets}), the text: "
               f"CHAT #{n} from {author}: {first} ... -> read the chat and answer if it concerns you")
+    elif any(tags(text, k) for k in room.config().get('self_names', [])):
+        print('ALERT: no ping needed: the lead reads every message through its relay. The others read it at their next read.')
+    elif untagged:
+        print(f"ALERT: no ping: your message tags nobody, so {', '.join(untagged)} read it at their next read. To reach "
+              f"someone now, tag them (@NAME) or reply to their message (--reply N).")
     else:
         print('ALERT: nobody to ping, every other participant is idle and your message does not tag them.')
     if asleep:
@@ -292,6 +495,10 @@ def clean_look(key, value):
         raise ValueError(f'{key} must be one of {CHOICES[key]}')
     if key == 'accent' and not COLOR.match(value):
         raise ValueError('accent must be #rrggbb')
+    if key == 'closing_gate' and value not in (0, 1):
+        raise ValueError('closing_gate is 1 (CLOSED needs everyone\'s yes with evidence) or 0 (another closing rule)')
+    if key == 'budget_calls' and not 0 <= value <= 100000:
+        raise ValueError('budget_calls must be between 0 (no check) and 100000')
     if key == 'heartbeat' and not 30 <= value <= 3600:
         raise ValueError('heartbeat must be between 30 and 3600 seconds')
     return value
@@ -374,6 +581,15 @@ def tags(text, name):
     return re.search(r'(?<![\w@])@' + re.escape(name) + r'(?![\w-])', text or '', re.IGNORECASE) is not None
 
 
+def names(text, name):
+    """True if the text names `name` as a whole word (with or without @), as the room writes it (names are capitals): ARCH
+    is not in 'research', and A is not in 'fix a typo'. A name of one or two letters (A, B2) is too common a word ("Plan B",
+    "Option A"): only a tag @A counts for it"""
+    if len(name) > 2 and re.search(r'(?<![\w-])' + re.escape(name) + r'(?![\w-])', text or '') is not None:
+        return True
+    return tags(text, name)
+
+
 def tags_everyone(text):
     return any(tags(text, word) for word in EVERYONE)
 
@@ -431,16 +647,73 @@ class Room:
     def save_config(self, config):
         write_atomic(self.config_path, json.dumps(config, indent=2, ensure_ascii=False))
 
+    def edit_config(self, fn):
+        """read, change and write the config under the room's lock: fn(config) changes it in place and returns a value.
+        Every read-modify-write of config.json goes through here or update_config, so none loses another's change"""
+        def run():
+            config = self.config()
+            out = fn(config)
+            self.save_config(config)
+            return out
+        return self.locked(run)
+
     def update_config(self, settings=None, profiles=None, common=None):
-        config = self.config()
-        if common is not None:
-            config['common'] = clean_common(common)
-        for key, value in (settings or {}).items():
-            config[key] = clean_look(key, value)
-        for name, profile in (profiles or {}).items():
-            config.setdefault('profiles', {}).setdefault(name, {}).update(clean_profile(profile))
-        self.save_config(config)
-        return config
+        """change settings under the room's lock: a choice of mode written at the same moment is never lost"""
+        checked = {key: clean_look(key, value) for key, value in (settings or {}).items()}
+        clean = {name: clean_profile(profile) for name, profile in (profiles or {}).items()}
+        common = clean_common(common) if common is not None else None
+
+        def run():
+            config = self.config()
+            if common is not None:
+                config['common'] = common
+            config.update(checked)
+            for name, profile in clean.items():
+                config.setdefault('profiles', {}).setdefault(name, {}).update(profile)
+            self.save_config(config)
+            return config
+        return self.locked(run)
+
+    def count(self, name, what):
+        """one more call of `name` (post, read, wait): the counts the lead sees in status, and the BUDGET check. One file
+        per agent, written by that agent only, no lock: a broken file restarts from zero and never stops a read"""
+        if not name or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', name):
+            return
+        path = self.dir / 'counters' / f'{name}.json'
+        try:
+            try:
+                c = json.loads(path.read_text(encoding='utf-8'))
+                c = c if isinstance(c, dict) else {}
+            except (OSError, ValueError):
+                c = {}
+            c[what] = int(c.get(what, 0)) + 1
+            path.parent.mkdir(exist_ok=True)
+            write_atomic(path, json.dumps(c))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def counters(self):
+        """{name: {post, read, wait}} of every agent; an unreadable file counts as nothing"""
+        out = {}
+        for path in (self.dir / 'counters').glob('*.json'):
+            try:
+                c = json.loads(path.read_text(encoding='utf-8'))
+                out[path.stem] = {k: int(v) for k, v in c.items()} if isinstance(c, dict) else {}
+            except (OSError, ValueError, TypeError):
+                out[path.stem] = {}
+        return out
+
+    def set_mode(self, mode):
+        """the room's mode, from choose to normal or research, once: written by chat.py only, never by the viewer's
+        settings; False when it was already chosen"""
+        def run():
+            config = self.config()
+            if config.get('mode') != 'choose':
+                return False
+            config['mode'] = mode
+            self.save_config(config)
+            return True
+        return self.locked(run)
 
     def roster(self):
         return read_json(self.dir / 'roster.json', {})
@@ -493,21 +766,56 @@ class Room:
 
     # ------------------------------------------------------------------ writing
     def locked(self, fn):
-        for _ in range(400):
+        """run fn under the room's lock: a directory holding an `owner` file (pid, time, a random token). A lock older than
+        20 s is broken only when its owner is dead, and any lock after 60 s; breaking renames the directory away (only one
+        waiter can win it) and checks the token it took is the stale one, so two waiters never both hold the lock; and a
+        holder only removes the lock if it still carries its own token"""
+        import secrets
+        mine, start = f'{os.getpid()} {time.time():.0f} {secrets.token_hex(6)}', time.time()
+        owner = self.lock / 'owner'
+        while True:
             try:
                 os.mkdir(self.lock)
                 break
             except FileExistsError:
+                waited = time.time() - start
+                if waited > 20:
+                    try:
+                        seen = owner.read_text()
+                    except OSError:
+                        seen = ''
+                    if waited > 60 or (seen and not lock_owner_alive(owner)):
+                        tomb = self.lock.with_name(f'chat.lock.dead.{secrets.token_hex(4)}')
+                        try:
+                            os.rename(self.lock, tomb)
+                            try:
+                                took = (tomb / 'owner').read_text()
+                            except OSError:
+                                took = ''
+                            if took == seen or not took:
+                                shutil.rmtree(tomb, ignore_errors=True)
+                            elif not self.lock.exists():
+                                os.rename(tomb, self.lock)        # a fresh holder's lock: give it back
+                        except OSError:
+                            pass
+                        start = time.time()
+                        continue
                 time.sleep(0.05)
-        else:                             # a lock left behind by a killed process
-            os.rmdir(self.lock)
-            os.mkdir(self.lock)
+        try:
+            owner.write_text(mine)
+        except OSError:
+            pass
         try:
             return fn()
         finally:
-            os.rmdir(self.lock)
+            try:
+                if owner.read_text() == mine:
+                    owner.unlink()
+                    os.rmdir(self.lock)
+            except OSError:
+                pass
 
-    def append(self, name, text, status=False, images=None, doc=None, game=None, state=None):
+    def append(self, name, text, status=False, images=None, doc=None, game=None, state=None, flags=None):
         """status: False for a message, True (or 'status') for a status, 'idle' for an idle status, 'board' for a
         change of the task board; state: a structured status (STATE_KEYS)"""
         def write():
@@ -517,7 +825,7 @@ class Room:
             n = len(items) + 1
             entry = {'n': n, 'time': time.strftime('%H:%M:%S'), 'ts': time.time(), 'from': name, 'text': text}
             if status:
-                entry['kind'] = IDLE if status == IDLE else status if status in ('board', 'finding') else 'status'
+                entry['kind'] = IDLE if status == IDLE else status if status in ('board', 'finding', *SETUP_KINDS) else 'status'
             if state:
                 entry['state'] = state
             if images:
@@ -526,6 +834,8 @@ class Room:
                 entry['doc'] = doc
             if game:
                 entry['game'] = game
+            if flags:
+                entry.update(flags)
             with self.chat.open('a', encoding='utf-8') as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + '\n')
             return n
@@ -585,9 +895,11 @@ class Room:
         if m.get('from') == name:
             return False
         users = self.user_names() if users is None else users
+        if m.get('kind') in SETUP_KINDS:      # the mode card and the choice: the lead's business, nobody else's
+            return name in users
         text = m.get('text', '')
         return (m.get('from') in users or tags(text, name) or tags_everyone(text)
-                or (m.get('kind') not in (IDLE, *STATUS_KINDS) and BROADCAST.search(text) is not None))
+                or (m.get('kind') not in (IDLE, *STATUS_KINDS) and broadcast(text)))
 
     def show(self, items):
         users = self.user_names()
@@ -595,8 +907,10 @@ class Room:
         for m in items:
             kind = m.get('kind')
             tag = (' [IDLE]' if kind == IDLE else ' [BOARD]' if kind == 'board' else ' [FINDING]' if kind == 'finding'
-                   else ' [STATUS]' if kind in STATUS_KINDS else '')
-            if m['from'] in leads:  # the lead is not the user: own banner, same priority
+                   else ' [ROOM SETUP, for the lead]' if kind in SETUP_KINDS else ' [STATUS]' if kind in STATUS_KINDS else '')
+            if kind in SETUP_KINDS:
+                pass                          # no banner: it asks nothing of the agents
+            elif m['from'] in leads:  # the lead is not the user: own banner, same priority
                 print('!!! MESSAGE FROM THE LEAD: answer it before anything else !!!')
             elif m['from'] in users:
                 print('!!! MESSAGE FROM THE USER: answer it before anything else !!!')
@@ -613,8 +927,8 @@ class Room:
 
     def timer_warning(self, name, items=None):
         items = self.messages() if items is None else items
-        if self.idle_entry(name, items):
-            return                            # the timer does not apply to an idle participant
+        if self.idle_entry(name, items) or name in self.user_names():
+            return                            # the timer does not apply to an idle participant, nor to the lead or the user
         limit, age = self.heartbeat(), self.silence(name, items)
         if age is None or age > limit:
             since = 'you have not written yet' if age is None else f'your last message was {int(age)} s ago'
@@ -624,6 +938,23 @@ class Room:
                   f"to do until someone else acts, post ONE --idle instead (what you wait for and from whom, with "
                   f"your percentage) and wait to be tagged. ***\n", flush=True)
 
+    def concerns(self, m, name, users=None):
+        """message m is for `name` to read in full: tags, the user, the lead, plans and votes, findings, board lines and
+        needs that name it"""
+        users = self.user_names() if users is None else users
+        if m.get('kind') in SETUP_KINDS:
+            return m['from'] != name and name in users
+        return m['from'] != name and (self.wakes(m, name, users) or tags(m.get('text', ''), name)
+                or m.get('kind') == 'finding' or (m.get('kind') == 'board' and names(m.get('text', ''), name))
+                or names(str((m.get('state') or {}).get('needs', '')), name))
+
+    def read_range(self, first, last):
+        """messages first..last in full, the cursor untouched: what a digest line points to (#n), without the whole chat"""
+        items = [m for m in self.messages() if first <= m['n'] <= last]
+        if not items:
+            return print(f'(no messages #{first}-#{last})')
+        self.show(items)
+
     def read(self, name, focus=False):
         items = self.messages()
         self.timer_warning(name, items)
@@ -631,14 +962,15 @@ class Room:
         if not items:
             return print('(no new messages)')
         self.set_cursor(name, items[-1]['n'])
+        items = [m for m in items if m['from'] != name]    # your own messages are not news to you
+        if not items:
+            return print('(nothing new from the others)')
         if not focus:
             return self.show(items)
         # focus: in full only what concerns you (tags, the user, the lead, plans and votes, board lines and needs that
         # name you); the rest in one digest line per author with their latest state, so a busy agent reads less
         users = self.user_names()
-        mine = [m for m in items if m['from'] != name and (self.wakes(m, name, users) or tags(m.get('text', ''), name)
-                or m.get('kind') == 'finding' or (m.get('kind') == 'board' and name.lower() in m.get('text', '').lower())
-                or name.lower() in str(m.get('state', {}).get('needs', '')).lower())]
+        mine = [m for m in items if self.concerns(m, name, users)]
         self.show(mine)
         shown = {m['n'] for m in mine}
         rest = [m for m in items if m['n'] not in shown and m['from'] != name]
@@ -648,17 +980,20 @@ class Room:
             by = {}
             for m in rest:
                 by.setdefault(m['from'], []).append(m)
-            parts = [f"{k} {len(v)} (last #{v[-1]['n']}: {v[-1]['text'].splitlines()[0][:90]})" for k, v in by.items()]
+            parts = [f"{k} {len(v)} (#{v[0]['n']}-#{v[-1]['n']}, last: {digest_of(v)})" for k, v in by.items()]
             print(f"(+{len(rest)} other messages, not for you: " + '; '.join(parts)
-                  + ". If you need their details, read --all shows the whole chat.)", flush=True)
+                  + ". For details: read --range A-B with those numbers.)", flush=True)
 
-    def wait(self, name, timeout, focus=False):
-        """focus: what wakes it is shown as read --focus shows it (in full only what concerns you)"""
+    def wait(self, name, timeout, focus=False, cancel=None):
+        """focus: what wakes it is shown as read --focus shows it (in full only what concerns you); cancel: an Event the
+        MCP server sets when the client gives up on the call, so the messages are not consumed by an answer nobody reads"""
         items = self.messages()
         idle = self.idle_entry(name, items)
         timeout = max(1, min(timeout, IDLE_WAIT_MAX if idle else WAIT_MAX))
         start, limit, users = time.time(), self.heartbeat(), self.user_names()
         while True:
+            if cancel is not None and cancel.is_set():
+                return
             cursor = self.cursor(name)
             new = [m for m in items if m['n'] > cursor and m['from'] != name]
             idle = self.idle_entry(name, items)
@@ -672,14 +1007,18 @@ class Room:
                           flush=True)
                     return self.read(name, focus)
             else:
-                if new:
-                    return self.read(name, focus)
+                if new and (not focus or any(self.concerns(m, name, users) for m in new)
+                            or len(new) >= DIGEST_EVERY or time.time() - new[0].get('ts', time.time()) > 3 * limit):
+                    return self.read(name, focus)     # focus: what is not for you waits as a digest, until it piles up or ages
                 age = self.silence(name, items)
-                if age is None or age > limit:
-                    return self.read(name, focus)    # the timer interrupts the wait
+                if name not in users and (age is None or age > limit):
+                    return self.read(name, focus)    # the timer interrupts the wait (the lead and the user have none)
             if time.time() - start >= timeout:
                 break
-            time.sleep(2)
+            if cancel is not None and cancel.wait(2):
+                return                                # the client cancelled: nothing read, nothing consumed
+            if cancel is None:
+                time.sleep(2)
             items = self.messages()
         if idle:
             unread = len([m for m in items if m['n'] > self.cursor(name) and m['from'] != name])
@@ -687,7 +1026,9 @@ class Room:
                   + (f'; {unread} new message(s) not addressed to you stay unread' if unread else '')
                   + f'. This is not an empty wait (rule 8): call wait again with --timeout {IDLE_WAIT_MAX}.)')
         else:
-            print(f'(no new messages in {timeout} s)')
+            unread = len([m for m in items if m['n'] > self.cursor(name) and m['from'] != name])
+            print(f'(nothing for you in {timeout} s' + (f'; {unread} message(s) for nobody in particular wait as a digest at your next read' if unread else '')
+                  + ')' if focus else f'(no new messages in {timeout} s)')
 
 
 # ---------------------------------------------------------------------- commands
@@ -707,9 +1048,13 @@ def cmd_init(room, a):
     for text in a.profile or []:
         name, profile = parse_profile(text)
         config['profiles'].setdefault(name, {}).update(profile)
+    if a.ask_mode:                            # the viewer asks the user normal or research; the lead waits for the answer
+        config['mode'] = 'choose'
     room.save_config(config)
     write_agents_md(room)
-    print(f'room ready: {room.dir}')
+    if a.ask_mode:
+        room.append('LEAD', MODE_ASK['it' if config['lang'] == 'it' else 'en'], 'choice')
+    print(f'room ready: {room.dir}' + (' (the viewer asks the user to choose normal or research)' if a.ask_mode else ''))
 
 
 def cmd_config(room, a):
@@ -780,11 +1125,26 @@ def cmd_post(room, a, text=None):
                      f'hold what you are waiting for. Nothing was posted: read --as {a.name}, then decide.')
     if not text and not a.image:
         sys.exit('empty message')
+    if not kind:
+        refusal = closing_refusal(room, a.name, text)
+        if refusal:
+            sys.exit(f'error: {refusal}. Nothing was posted.')
+        pv = plan_version(text)
+        if pv and pv > PLAN_MAX and a.name not in room.user_names():
+            sys.exit(f'error: {PLAN_MAX} versions of the plan are enough: the LEAD reviews the open points and decides. Post '
+                     f'what still divides you in one message tagged @LEAD. Nothing was posted.')
     try:
         images = [room.store_image_file(p, i) for i, p in enumerate(a.image or [])]
     except ValueError as exc:
         sys.exit(f'error: {exc}')
-    n = room.append(a.name, text, kind or False, images, state=state)
+    flags = None
+    if not kind and a.name in room.config().get('participants', []):
+        items = room.messages()
+        if not any(m['from'] == a.name and not m.get('kind') for m in items):     # its first real message
+            cur = room.cursor(a.name)
+            if any(m['n'] <= cur and m['from'] != a.name and not m.get('kind') and m['from'] not in room.user_names() for m in items):
+                flags = {'after_read': True}  # it read the others' positions first: information for the lead, not a refusal
+    n = room.append(a.name, text, kind or False, images, state=state, flags=flags)
     if n is None:
         for rel in images:                    # nothing was posted: do not leave the copied pictures behind
             try:
@@ -805,6 +1165,16 @@ def cmd_post(room, a, text=None):
     if kind:
         return
     print_alert(room, a.name, n, text, images)
+    if loose_heading(text):
+        print('NOTE: "PLAN vN" / "CLOSED vN" count only as a heading, followed by a colon or a bracket ("PLAN v2: ...", '
+              '"PLAN v2 (draft): ..."). Written like this it is a sentence: post it again as "PLAN vN: ..." if it is a plan.')
+    if late_vote(text):
+        print('NOTE: your VOTE is not on the first line of the message, so it does not count. Post it again as its own '
+              'message, starting with "VOTE vN: yes, checked ..." or "VOTE vN: no, because ...".')
+    for version, yes in votes_in(text):
+        if not yes:
+            print(f'A no on v{version}: the LEAD reviews the split. Your no must say what it rests on (file:line, an '
+                  f'output, #n); a yes needs the same.')
 
 
 # ---------------------------------------------------------------------- structured statuses and the task board
@@ -875,6 +1245,133 @@ def state_line(st):
     return line
 
 
+DRIFT_MESSAGES = 25       # real messages in a row without a change of the board: the chat may be drifting
+BUDGET_CALLS = 300        # chat calls (post, read, wait) of one agent before the lead hears about it, and again at each multiple
+LEASE_HEARTBEATS = 5          # a taken task whose owner is silent (not idle) this many heartbeats may be taken by another
+PROOF_MAX = 2000
+VERIFY_TIMEOUT = 110          # a verify command's default limit: under the 120 s a Bash tool call gets by default
+ACCEPT_MIN = 10               # a lent piece not accepted (task accept) within these minutes goes back to its lender
+CODE_EXT = ('py|js|mjs|ts|tsx|jsx|go|rs|c|h|cc|cpp|hpp|java|kt|rb|php|cs|swift|m|sh|ps1|bat|sql|html|css|scss|vue|svelte|'
+            'md|rst|txt|log|json|jsonl|ya?ml|toml|ini|cfg|csv|tsv|xml|ipynb|gd|tscn|tres|cs|lua|r|jl|dart|zig|proto')
+# what a proof must name (one of): a command's exit code, tests passed or failed, file:line, a path or a source file, #message,
+# a commit or hash (digits and letters), a link, a measured time or size. Bounded quantifiers: no slow matching on long text
+ARTIFACT = re.compile(r'\bexit(?:\s*code)?\s*[:=]?\s*-?\d{1,5}\b|\b\d{1,6}\s+(?:passed|failed|tests?)\b'
+                      r'|\b[\w.-]{1,120}\.[A-Za-z0-9]{1,6}:\d{1,7}\b'
+                      r'|(?<![\w])(?:[\w.-]{1,80}[/\\]){1,12}[\w.-]{1,120}\.[A-Za-z0-9]{1,6}\b'
+                      r'|\b[\w-]{1,120}\.(?:' + CODE_EXT + r')\b'
+                      r'|(?<![\w&])#\d{1,7}\b|\b(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}\b|https?://\S{3,}'
+                      r'|\b\d{1,9}(?:[.,]\d{1,6})?\s?(?:ms|MB|GB|KB|MiB|GiB)\b|\b\d{1,9}(?:[.,]\d{1,6})?(?:s|x)\b', re.IGNORECASE)
+
+
+def has_artifact(text):
+    """the text names something checkable (see ARTIFACT); only its first 4000 characters are read"""
+    return ARTIFACT.search((text or '')[:4000]) is not None
+
+
+def norm_file(x):
+    """a declared file as the board compares it: forward slashes, no leading ./, the whole tree ('.', './', '/') as '/',
+    and without case on Windows, where SRC/A.PY and src/a.py are one file"""
+    x = x.strip().replace('\\', '/')
+    while x.startswith('./'):
+        x = x[2:]
+    x = '/' if x in ('', '.', '/') else x
+    return x.casefold() if os.name == 'nt' else x
+
+
+def files_overlap(a, b):
+    """two declared files clash: the same file, or one is a folder (ending with /) that holds the other"""
+    a, b = norm_file(a), norm_file(b)
+    return a == b or a == '/' or b == '/' or (a.endswith('/') and b.startswith(a)) or (b.endswith('/') and a.startswith(b))
+
+
+def changed_files(branch, cwd):
+    """the files HEAD changed since it left branch (git diff --name-only branch...HEAD); [] when git cannot tell"""
+    import subprocess
+    try:
+        r = subprocess.run(['git', 'diff', '--name-only', f'{branch}...HEAD'], cwd=cwd or None, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [x.strip() for x in r.stdout.decode('utf-8', errors='replace').splitlines() if x.strip()] if r.returncode == 0 else []
+
+
+def run_tree(cmd, cwd, limit):
+    """run a shell command and return (exit code, or None when it ran over `limit` s, and its output). The command gets its
+    own process group, and on timeout the whole tree is killed: on Windows killing cmd.exe alone left its child running"""
+    import subprocess
+    import tempfile
+    kw = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+    with tempfile.TemporaryFile() as out:
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, **kw)
+        try:
+            code = p.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True, stdin=subprocess.DEVNULL)
+            else:
+                import signal
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    p.kill()
+            p.wait()
+            code = None
+        out.seek(0)
+        return code, out.read().decode('utf-8', errors='replace')
+
+
+def run_verify(cmd, cwd, limit=None):
+    """run a task's verify command in its folder: the line for the proof, or ValueError with the end of its output"""
+    import hashlib
+    limit = limit or VERIFY_TIMEOUT
+    if cwd and not Path(cwd).is_dir():
+        raise ValueError(f'the folder of the verify command does not exist: {cwd}. Nothing was closed.')
+    try:
+        code, out = run_tree(cmd, cwd, limit)
+    except OSError as exc:
+        raise ValueError(f'the verify command `{cmd}` could not start: {exc}. Nothing was closed.')
+    tail = '\n'.join(out.strip().splitlines()[-15:])
+    if code is None:
+        raise ValueError(f'the verify command `{cmd}` ran over {limit} s and was stopped (with its children). Nothing was '
+                         f'closed. Its last lines:\n{tail}')
+    if code != 0:
+        raise ValueError(f'the verify command `{cmd}` exited {code}: the task stays open. Its last lines:\n{tail}')
+    last = ' / '.join(x.strip()[:80] for x in out.strip().splitlines()[-3:] if x.strip())
+    return f'verify `{cmd[:80]}` exit 0 · sha {hashlib.sha256(out.encode()).hexdigest()[:12]}' + (f' · {last}' if last else '')
+
+
+def run_merge_check(branch, cwd):
+    """the work in cwd (its HEAD) merges into branch without conflicts: git merge-tree --write-tree (git 2.38 or later)"""
+    import subprocess
+
+    def git(*args):
+        r = subprocess.run(['git', *args], cwd=cwd or None, capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+        return r.returncode, (r.stdout + r.stderr).decode('utf-8', errors='replace').strip()
+    try:
+        code, dirty = git('status', '--porcelain', '--untracked-files=no')
+        if code != 0:
+            raise ValueError(f'the merge check into {branch} could not read git in {cwd or "this folder"}: {dirty[:200]}. Nothing was closed.')
+        if dirty:
+            raise ValueError(f'uncommitted changes in {cwd or "this folder"}: commit your work first, the merge check reads '
+                             f'commits ({", ".join(x[3:] for x in dirty.splitlines()[:6])}). Nothing was closed.')
+        code, ahead = git('rev-list', '--count', f'{branch}..HEAD')
+        if code != 0:
+            raise ValueError(f'the merge check could not compare with {branch}: {ahead[:200]}. Nothing was closed.')
+        if int(ahead or 0) == 0:
+            raise ValueError(f'HEAD has no commit beyond {branch}: there is no work to merge. Nothing was closed.')
+        r = subprocess.run(['git', 'merge-tree', '--write-tree', '--name-only', branch, 'HEAD'], cwd=cwd or None,
+                           capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f'the merge check into {branch} could not run: {exc}. Nothing was closed.')
+    out = (r.stdout + r.stderr).decode('utf-8', errors='replace').strip()
+    if r.returncode == 1:
+        files = [x for x in out.splitlines()[1:] if x.strip() and not x.startswith(('Auto-merging', 'CONFLICT'))]
+        raise ValueError(f'HEAD does not merge into {branch}: conflicts in {", ".join(files[:10]) or "(see git)"}. Merge '
+                         f'{branch} into your branch, fix them, then close again. Nothing was closed.')
+    if r.returncode != 0:
+        raise ValueError(f'the merge check into {branch} failed (git 2.38 or later needed): {out[:300]}. Nothing was closed.')
+    return f'merges cleanly into {branch}: {ahead} commit(s) (tree {out.splitlines()[0][:12]})'
+
+
 class Board:
     """the room's task board (ROOM/board.json): facts, and tasks that anyone proposes and one participant takes. A task
     whose dependencies are not done cannot be taken, and taking one whose files another taken task declares is refused
@@ -906,36 +1403,120 @@ class Board:
             raise ValueError(f'no task {tid} on the board')
         return t
 
-    def add(self, name, title, deps=(), files=()):
+    def add(self, name, title, deps=(), files=(), verify=None, cwd=None, merge_into=None, verify_timeout=None):
+        """verify: a command that must exit 0 before the task can be done; merge_into: the branch the work must merge
+        into without conflicts. Both are set by the lead or the user only (cmd_task checks it): never from chat text"""
         def fn(b):
             for d in deps:
                 self.find(b, d)
             tid = f"T{len(b['tasks']) + 1}"
-            b['tasks'].append({'id': tid, 'title': title[:200], 'by': name, 'owner': None, 'state': 'open', 'deps': list(deps),
-                               'files': list(files), 'proof': '', 'notes': [], 'ts': time.time()})
-            return f'📋 {tid} proposed by {name}: {title[:120]}' + (f' (after {", ".join(deps)})' if deps else '')
+            t = {'id': tid, 'title': title[:200], 'by': name, 'owner': None, 'state': 'open', 'deps': list(deps),
+                 'files': list(files), 'proof': '', 'notes': [], 'ts': time.time()}
+            if cwd:                             # without it the checks run where the closing agent works (its worktree)
+                t['cwd'] = str(Path(cwd).resolve())
+            if verify:
+                t['verify'] = verify
+                if verify_timeout:
+                    t['verify_timeout'] = int(verify_timeout)
+            if merge_into:
+                t['merge_into'] = merge_into
+            b['tasks'].append(t)
+            return (f'📋 {tid} proposed by {name}: {title[:120]}' + (f' (after {", ".join(deps)})' if deps else '')
+                    + (f' · done only when `{verify[:80]}` exits 0' if verify else '')
+                    + (f' · must merge into {merge_into}' if merge_into else ''))
         return self.change(fn)
+
+    def lapsed(self, t, items=None, name=None):
+        """the lease of a taken task has lapsed: its owner has been silent for 5 heartbeats and is not idle (an idle one
+        waits for someone, on purpose); then another participant may take it without --force. A lent piece lapses only
+        for its lender (it goes back, it is not taken by a third), and also when its helper has not accepted it in time"""
+        if t['state'] != 'taken' or not t['owner']:
+            return False
+        if t.get('lender') and t['owner'] != t['lender']:
+            if name is not None and name != t['lender']:
+                return False
+            if not t.get('accepted', True) and time.time() - t.get('lent_ts', t.get('ts', 0)) > ACCEPT_MIN * 60:
+                return True
+        items = self.room.messages() if items is None else items
+        if self.room.idle_entry(t['owner'], items):
+            return False
+        age = self.room.silence(t['owner'], items)
+        age = time.time() - t.get('ts', time.time()) if age is None else min(age, time.time() - t.get('ts', 0))
+        return age > LEASE_HEARTBEATS * self.room.heartbeat()
+
+    def blockers(self, b, t, name, items):
+        """why `name` cannot take t now: [] when it can"""
+        if t['state'] == 'done':
+            return [f"{t['id']} is already done"]
+        if t['owner'] and t['owner'] != name and not self.lapsed(t, items, name):
+            return [f"{t['id']} is taken by {t['owner']}: ask them, or --force"]
+        todo = [d for d in t['deps'] if self.find(b, d)['state'] != 'done']
+        if todo:
+            return [f"{t['id']} waits for {', '.join(todo)}: take it when they are done"]
+        clash = [(o['id'], o['owner'], f) for o in b['tasks'] if o is not t and o['state'] == 'taken' and o['owner'] != name
+                 and not self.lapsed(o, items) for f in t['files'] if any(files_overlap(f, g) for g in o['files'])]
+        if clash:
+            return ['these files are already being changed: ' + '; '.join(f'{f} by {who} ({i})' for i, who, f in clash)
+                    + '. Agree with them first, or --force']
+        return []
 
     def take(self, name, tid, force=False):
         def fn(b):
+            items = self.room.messages()
             t = self.find(b, tid)
             if t['state'] == 'done':
                 raise ValueError(f"{t['id']} is already done")
-            if t['owner'] and t['owner'] != name and not force:
-                raise ValueError(f"{t['id']} is taken by {t['owner']}: ask them, or --force")
-            todo = [d for d in t['deps'] if self.find(b, d)['state'] != 'done']
-            if todo:
-                raise ValueError(f"{t['id']} waits for {', '.join(todo)}: take it when they are done")
-            clash = [(o['id'], o['owner'], f) for o in b['tasks'] if o is not t and o['state'] == 'taken' and o['owner'] != name
-                     for f in t['files'] if f in o['files']]
-            if clash and not force:
-                raise ValueError('these files are already being changed: ' + '; '.join(f'{f} by {who} ({i})' for i, who, f in clash)
-                                 + '. Agree with them first, or --force')
+            why = self.blockers(b, t, name, items)
+            if why and not force:
+                raise ValueError(why[0])
+            was = t['owner'] if t['owner'] not in (None, name) else None
+            lapsed = was and self.lapsed(t, items, name)
             t.update(owner=name, state='taken', ts=time.time())
-            return f"📋 {t['id']} taken by {name}: {t['title'][:120]}"
+            return (f"📋 {t['id']} taken by {name}: {t['title'][:120]}"
+                    + (f' · {was} was silent for over {LEASE_HEARTBEATS} heartbeats: lease lapsed' if lapsed else ''))
         return self.change(fn)
 
-    def done(self, name, tid, proof='', force=False):
+    def next(self, name):
+        """take the first task `name` can take now: open, its dependencies done, its files free (a lapsed task too)"""
+        def fn(b):
+            items = self.room.messages()
+            for t in sorted(b['tasks'], key=lambda t: int(t['id'][1:]) if t['id'][1:].isdigit() else 0):
+                if t['state'] == 'open' or (t['state'] == 'taken' and t['owner'] != name and self.lapsed(t, items, name)):
+                    if not self.blockers(b, t, name, items):
+                        was = t['owner']
+                        t.update(owner=name, state='taken', ts=time.time())
+                        return (f"📋 {t['id']} taken by {name} (task next): {t['title'][:120]}"
+                                + (f' · {was} was silent for over {LEASE_HEARTBEATS} heartbeats: lease lapsed' if was else ''))
+            raise ValueError('no task you can take now: every open one waits for a dependency or its files are taken')
+        return self.change(fn)
+
+    def done(self, name, tid, proof='', force=False, gaps='', via_mcp=False):
+        """close a task: with a proof that names an artifact (a command and its exit code, tests passed, file:line, #n,
+        a hash, a path, a link), after its verify command exits 0 and its branch merges cleanly. The checks run before
+        the room's lock is taken: a long test never holds up the room"""
+        t = self.find(self.load(), tid)
+        if t['owner'] not in (None, name):
+            raise ValueError(f"{t['id']} belongs to {t['owner']}: only they close it")
+        checks, cwd = [], t.get('cwd')
+        if (t.get('verify') or t.get('merge_into')) and not cwd:
+            if via_mcp:                       # the MCP server's folder is not the agent's worktree
+                raise ValueError(f"{t['id']} is checked where its work is: close it from your shell, in your worktree "
+                                 f"(chat.py task done {t['id']} ...), or ask the LEAD to give the task a --cwd")
+            cwd = os.getcwd()
+        if t.get('verify'):
+            checks.append(run_verify(t['verify'], cwd, t.get('verify_timeout')))
+        if t.get('merge_into'):
+            checks.append(run_merge_check(t['merge_into'], cwd))
+        extra = []
+        if t.get('merge_into') and t.get('files'):          # files changed beyond the declared ones: a check, not a refusal
+            extra = [f for f in changed_files(t['merge_into'], cwd)
+                     if not any(files_overlap(f, g) for g in t['files'])]
+        if not checks and not has_artifact(proof or '') and not (force and name in self.room.user_names()):
+            raise ValueError('a proof must name what shows it works: a command and its exit code, tests passed, file:line, '
+                             '#message, a hash, a path or a link (task done ID --proof "pytest -q: 12 passed, exit 0"). '
+                             'What you did not do goes in --gaps. Nothing was closed.')
+        proof = '; '.join([*checks, proof] if proof else checks)
+
         def fn(b):
             t = self.find(b, tid)
             if t['owner'] not in (None, name):
@@ -945,11 +1526,38 @@ class Board:
             if out and not force:
                 raise ValueError(f"{t['id']} has pieces still lent: {', '.join(out)}. Wait for them to be done or given "
                                  f"back, or --force")
-            t.update(owner=name, state='done', proof=proof[:300], ts=time.time())
+            t.update(owner=name, state='done', proof=proof[:PROOF_MAX], ts=time.time(), rule=2)   # rule 2: closed with an artifact
+            if gaps:
+                t['gaps'] = gaps[:PROOF_MAX]
+            if extra:
+                t['extra_files'] = extra[:30]
             freed = [o['id'] for o in b['tasks'] if o['state'] == 'open' and t['id'] in o['deps']
                      and all(self.find(b, d)['state'] == 'done' for d in o['deps'])]
-            return (f"📋 {t['id']} done by {name}: {t['title'][:100]}" + (f' · proof: {proof[:120]}' if proof else '')
-                    + (f' · now free: {", ".join(freed)}' if freed else ''))
+            return (f"📋 {t['id']} done by {name}: {t['title'][:100]}" + (f' · proof: {proof[:160]}' if proof else '')
+                    + (f' · NOT DONE: {gaps[:160]}' if gaps else '') + (f' · now free: {", ".join(freed)}' if freed else ''))
+        return self.change(fn)
+
+    def amend(self, name, tid, files, force=False):
+        """widen the files of a task: its owner, when nobody else holds or plans them; the lead (or the user) on any task,
+        and over another task's files with --force, which is how the lead decides who changes them"""
+        def fn(b):
+            items = self.room.messages()
+            t = self.find(b, tid)
+            lead = name in self.room.user_names()
+            if t['state'] == 'done' or (not lead and (t['owner'] != name or t['state'] != 'taken')):
+                raise ValueError(f"{t['id']} is not yours in progress: only its owner (or the LEAD) widens its files")
+            if not files:
+                raise ValueError('task amend needs --files a.py,dir/')
+            clash = [(o['id'], o['owner'] or 'open', f) for o in b['tasks'] if o is not t and o['state'] != 'done'
+                     and o['owner'] != t['owner'] and not self.lapsed(o, items)
+                     for f in files if any(files_overlap(f, g) for g in o['files'])]
+            if clash and not (lead and force):
+                raise ValueError('these files belong to another task: ' + '; '.join(f'{f} in {i} ({who})' for i, who, f in clash)
+                                 + ('. Decide who changes them: split the task, or amend again with --force.' if lead
+                                    else '. Ask the LEAD (@LEAD) to decide who changes them.'))
+            new = [f for f in files if f not in t['files']]
+            t['files'] += new
+            return f"📋 {t['id']} now also changes {', '.join(new) or '(nothing new)'} ({name})"
         return self.change(fn)
 
     def drop(self, name, tid):
@@ -995,18 +1603,29 @@ class Board:
             if helper == name:
                 raise ValueError('you cannot lend a piece to yourself')
             clash = [(o['id'], o['owner'], f) for o in b['tasks'] if o is not t and o['state'] == 'taken'
-                     and o['owner'] not in (name, helper) for f in files if f in o['files']]
+                     and o['owner'] not in (name, helper) for f in files if any(files_overlap(f, g) for g in o['files'])]
             if clash:
                 raise ValueError('these files are already being changed: ' + '; '.join(f'{f} by {who} ({i})' for i, who, f in clash))
             hid = f"T{len(b['tasks']) + 1}"
             b['tasks'].append({'id': hid, 'title': scope.strip()[:200], 'by': name, 'owner': helper, 'state': 'taken', 'deps': [],
-                               'files': list(files), 'proof': '', 'parent': t['id'], 'lender': name,
+                               'files': list(files), 'proof': '', 'parent': t['id'], 'lender': name, 'accepted': False,
+                               'lent_ts': time.time(),
                                'done_when': done_when.strip()[:300], 'notes': [f'packet from {name}: {note[:300]}'] if note else [],
                                'ts': time.time()})
             t['notes'] = (t['notes'] + [f"lent to {helper} as {hid}" + (f": {', '.join(files)}" if files else '')])[-10:]
             return (f"🤝 {hid} lent by {name} to @{helper} (a piece of {t['id']}): {scope.strip()[:140]}"
                     + (f" · files {', '.join(files)}" if files else '') + f' · done when: {done_when.strip()[:140]}'
                     + (f' · {note[:200]}' if note else ''))
+        return self.change(fn)
+
+    def accept(self, name, tid):
+        """the helper confirms a lent piece: until then, after ACCEPT_MIN minutes, it goes back to its lender"""
+        def fn(b):
+            t = self.find(b, tid)
+            if not t.get('lender') or t['owner'] != name:
+                raise ValueError(f"{t['id']} is not a piece lent to you")
+            t['accepted'] = True
+            return f"🤝 {t['id']} accepted by {name}: {t['title'][:120]}"
         return self.change(fn)
 
     def giveback(self, name, tid, note=''):
@@ -1039,7 +1658,7 @@ class Board:
         return self.change(fn)
 
     def show(self):
-        b = self.load()
+        b, items = self.load(), self.room.messages()
         lines = (['FACTS:'] + [f"- {f['text']} ({f['by']})" for f in b['facts']]) if b['facts'] else []
         if b['decisions']:
             lines += ['DECISIONS (latest):'] + [f"- {d['text']} ({d['by']})" for d in b['decisions'][-6:]]
@@ -1050,7 +1669,11 @@ class Board:
             extra = ((f" · after {', '.join(t['deps'])}" if t['deps'] and t['state'] == 'open' else '')
                      + (f" · 🤝 lent by {t['lender']} from {t.get('parent')} · done when: {t.get('done_when', '')}"
                         if t.get('lender') and t['state'] != 'done' and t['owner'] != t['lender'] else '')
-                     + (f" · files {', '.join(t['files'])}" if t['files'] else '') + (f" · proof: {t['proof']}" if t['proof'] else ''))
+                     + (f" · files {', '.join(t['files'])}" if t['files'] else '')
+                     + (f" · verify: `{t['verify']}`" if t.get('verify') and t['state'] != 'done' else '')
+                     + (f" · merge into {t['merge_into']}" if t.get('merge_into') and t['state'] != 'done' else '')
+                     + (f" · proof: {t['proof']}" if t['proof'] else '') + (f" · NOT DONE: {t['gaps']}" if t.get('gaps') else '')
+                     + (' · ⏳ lease lapsed' if self.lapsed(t, items) else ''))
             lines.append(f"{t['id']} [{state}] {t['title']}{extra}")
             shown = t['notes'][-2:]
             if t.get('lender') and t['notes'] and t['notes'][0].startswith('packet from') and t['notes'][0] not in shown:
@@ -1064,17 +1687,30 @@ def cmd_task(room, a):
     if not a.name:
         sys.exit('--as NAME required')
     if not a.pairs:
-        sys.exit('task: add "title" [--deps T1,T2] [--files a,b] | take ID [--force] | done ID [--proof TEXT] | drop ID '
+        sys.exit('task: add "title" [--deps T1,T2] [--files a,b] [--verify CMD --cwd DIR --merge-into BRANCH: lead only] '
+                 '| take ID [--force] | next | amend ID --files a,b | accept ID | done ID --proof TEXT [--gaps TEXT] [--touched TEXT] | drop ID '
                  '| note ID TEXT | handoff ID NAME [--note TEXT] | help ID NAME --scope TEXT --done-when TEXT [--files a,b] '
                  '[--note TEXT] | giveback ID [--note TEXT] | decide TEXT | fact TEXT')
     act, rest, b = a.pairs[0], a.pairs[1:], Board(room)
     split = lambda v: [x.strip() for x in (v or '').split(',') if x.strip()]
     if act == 'add' and rest:
-        line = b.add(a.name, ' '.join(rest), split(a.deps), split(a.files))
+        if (getattr(a, 'verify', None) or getattr(a, 'merge_into', None)) and a.name not in room.user_names():
+            sys.exit('error: only the lead or the user sets --verify and --merge-into (they decide what closes a task). '
+                     'Nothing was added.')
+        line = b.add(a.name, ' '.join(rest), split(a.deps), split(a.files), getattr(a, 'verify', None),
+                     getattr(a, 'cwd', None), getattr(a, 'merge_into', None), getattr(a, 'verify_timeout', None))
     elif act == 'take' and rest:
         line = b.take(a.name, rest[0], a.force)
+    elif act == 'next':
+        line = b.next(a.name)
+    elif act == 'amend' and rest:
+        line = b.amend(a.name, rest[0], split(a.files), a.force)
+    elif act == 'accept' and rest:
+        line = b.accept(a.name, rest[0])
     elif act == 'done' and rest:
-        line = b.done(a.name, rest[0], a.proof or '', a.force)
+        line = b.done(a.name, rest[0], a.proof or '', a.force, getattr(a, 'gaps', None) or '', getattr(a, 'mcp', False))
+        if getattr(a, 'touched', None):           # interfaces changed: a finding everyone reads, read --focus included
+            room.append(a.name, f"💡 {rest[0].upper()} changed what others may use: {a.touched[:300]}", 'finding')
         lender = Board.find(b.load(), rest[0]).get('lender')
         if lender and lender != a.name:               # a lent piece is back: its lender is tagged and woken
             line = f'{line} · @{lender}'
@@ -1145,16 +1781,97 @@ def failures(room, now=None):
     without proof; one file in the statuses of two participants within 20 minutes; a tag not answered while the tagged
     one keeps posting; the same status three times in a row."""
     now = now or time.time()
-    items, out, people = room.messages(), [], set(room.config().get('participants', []))
-    for t in Board(room).load()['tasks']:
+    config = room.config()
+    items, out, people, users = room.messages(), [], set(config.get('participants', [])), room.user_names()
+    board = Board(room).load()
+    for t in board['tasks']:
         if t['state'] == 'done' and not t.get('proof'):
             out.append((f"noproof:{t['id']}", f"{t['id']} was closed by {t['owner']} without a proof (task done … --proof)"))
+        elif t['state'] == 'done' and t.get('rule') == 2 and not has_artifact(t.get('proof', '')):
+            out.append((f"noartifact:{t['id']}", f"{t['id']} was closed by {t['owner']} with a proof that names no artifact "
+                        f"(exit code, tests, file:line, #n): {t['proof'][:80]}"))
+        if t['state'] == 'done' and t.get('rule') == 2 and t.get('files') and not t.get('verify') and not t.get('merge_into'):
+            said = (t.get('proof', '') + ' ' + t.get('gaps', '')).casefold()
+            unnamed = [f for f in t['files'] if Path(f.rstrip('/')).name.casefold() not in said]
+            if unnamed:
+                out.append((f"coverage:{t['id']}", f"{t['id']} closed by {t['owner']} without naming {', '.join(unnamed[:5])} in its "
+                            f"proof: checked, or left out?"))
+        if t.get('lender') and t['state'] == 'taken' and not t.get('accepted', True) and t['owner'] != t['lender'] \
+                and time.time() - t.get('lent_ts', 0) > ACCEPT_MIN * 60:
+            out.append((f"unaccepted:{t['id']}", f"{t['id']}, lent by {t['lender']} to {t['owner']}, was not accepted in "
+                        f"{ACCEPT_MIN} min: {t['lender']} may take it back (task take {t['id']})"))
+        if t['state'] == 'done' and t.get('gaps'):
+            out.append((f"gaps:{t['id']}", f"{t['id']} is closed with parts NOT done: {t['gaps'][:120]}"))
+    flips = {}
+    for m in items:
+        if m.get('kind'):
+            continue
+        for version, yes in votes_in(m.get('text', '')):
+            key = (m['from'], version)
+            if yes and flips.get(key) == 'no' and not has_artifact(m['text']):
+                out.append((f"flip:{m['from']}:{version}:{m['n']}", f"{m['from']} turned a no into a yes on v{version} "
+                            f"(#{m['n']}) without new evidence: conformity, or a reason left unsaid?"))
+            flips[key] = 'yes' if yes else 'no'
+    for t in board['tasks']:
+        if t.get('extra_files'):
+            out.append((f"extra:{t['id']}", f"{t['id']} ({t['owner']}) changed files it did not declare: {', '.join(t['extra_files'][:8])}"))
+    for m in items:
+        st = m.get('state') if isinstance(m.get('state'), dict) else None
+        if m.get('kind') == IDLE:
+            st = None
+            continue
+        full = (st and st.get('pct') == 100) or (not st and m.get('kind') in ('status', 'stato')
+                                                  and re.search(r'(?<!\d)100\s?%', m.get('text', '')))
+        if full and not (st and st.get('evidence')) and not has_artifact((st or {}).get('done', '') if st else m.get('text', '')):
+            out.append((f"claim:{m['from']}:{m['n']}", f"{m['from']} says 100% (#{m['n']}) without evidence: which output, file:line or test shows it?"))
+        if m.get('after_read'):
+            out.append((f"echo:{m['from']}", f"{m['from']} wrote its first position (#{m['n']}) after reading the others': an independent view may be missing"))
+    real_since = 0
+    for m in items:
+        if m.get('kind') == 'board':
+            real_since = 0
+        elif not m.get('kind') and m['from'] not in users:
+            real_since += 1
+    used_board = board['tasks'] or board['facts'] or board['decisions']       # a room that never used the board is not drifting from it
+    if used_board and real_since >= DRIFT_MESSAGES:
+        out.append((f"drift:{len(items)//DRIFT_MESSAGES}", f"{real_since} messages since the last change of the board (task, fact, decision): "
+                    f"is the chat still converging, or drifting?"))
+    active = [k for k in people if k not in config.get('left', [])]
+    closed = max((m['n'] for m in items if not m.get('kind') and closing(m.get('text', ''))[0]), default=0)
+    plan = max((m['n'] for m in items if not m.get('kind') and plan_version(m.get('text', '')) is not None), default=0)
+    taken = [t for t in board['tasks'] if t['state'] == 'taken']
+    idles = [room.idle_entry(k, items) for k in active]
+    waits_user = any(i and (any(names(i.get('text', ''), u) for u in users)
+                            or re.search(r"\b(?:the user|l'utente|dell'utente|all'utente|utente|committente)\b", i.get('text', ''), re.IGNORECASE))
+                     for i in idles)                  # waiting for the user (or the lead, by name) is not a stall
+    if len(active) > 1 and all(idles) and not waits_user and not taken and not (closed and closed > plan):
+        last = max(room.idle_entry(k, items)['n'] for k in active)
+        out.append((f"allidle:{last}", "everyone is idle, no task is in progress and nothing is closed: each waits for another. "
+                    "The LEAD unblocks it (a decision, a task, a tag)."))
+    for m in items:                                   # a closing nobody ever disagreed with: was the plan really tested?
+        is_closed, cv = closing(m.get('text', ''))
+        if not is_closed or m.get('kind') or m['from'] in users:
+            continue
+        v = cv or max((plan_version(x.get('text', '')) or 0 for x in items if x['n'] < m['n'] and not x.get('kind')), default=0)
+        first = min((x['n'] for x in items if not x.get('kind') and plan_version(x.get('text', '')) is not None), default=0)
+        dissent = any(not yes for x in items if first <= x['n'] < m['n'] and not x.get('kind') for _, yes in votes_in(x.get('text', '')))
+        voters = votes_on(room, v, items)[1] if v else {}
+        if v and len(voters) >= 2 and not dissent:
+            out.append((f"consensus:{m['n']}", f"CLOSED v{v} (#{m['n']}) without a single no on any version: premature "
+                        f"consensus? Ask who tested the plan, and how."))
+    budget = int(config.get('budget_calls', BUDGET_CALLS))
+    for k, v in room.counters().items():
+        used = sum(v.values())
+        if budget and used >= budget:
+            step = used // budget
+            out.append((f"budget:{k}:{step}", f"{k} has made {used} chat calls (budget {budget}): is it still advancing, or "
+                        f"looping on reads and waits?"))
     touched = {}
     for m in items:
         if m.get('state', {}).get('files') and now - m.get('ts', 0) < 1200:
             for f in m['state']['files']:
                 touched.setdefault(f, {})[m['from']] = m['n']
-    lent = [t for t in Board(room).load()['tasks'] if t.get('lender') and t['state'] == 'taken']
+    lent = [t for t in board['tasks'] if t.get('lender') and t['state'] == 'taken']
     for f, who in touched.items():
         if any(f in t['files'] and set(who) <= {t['owner'], t['lender']} for t in lent):
             continue                                  # a piece lent with its files: the board already says who changes them
@@ -1174,6 +1891,10 @@ def failures(room, now=None):
             if len(after) >= 2 and not answered:
                 out.append((f"tag:{m['n']}:{k}", f"{k} has not answered #{m['n']} from {m['from']} and has posted {len(after)} times since"))
     for k in people:
+        st = [x['state'] for x in items if x['from'] == k and isinstance(x.get('state'), dict)][-2:]
+        if len(st) == 2 and st[0].get('pct') == st[1].get('pct') and st[0].get('next') and st[0].get('next') == st[1].get('next'):
+            out.append((f"stall:{k}:{st[1].get('pct')}:{st[1]['next'][:30]}", f"{k} posted two statuses with the same "
+                        f"{st[1].get('pct')}% and the same next step ({st[1]['next'][:60]}): stuck, or missing something?"))
         own = [x for x in items if x['from'] == k and x.get('kind') in ('status', 'stato')][-3:]
         if len(own) == 3 and len({x['text'].strip() for x in own}) == 1:
             out.append((f"loop:{k}:{own[-1]['n']}", f"{k} posted the same status three times (#{own[0]['n']}, #{own[1]['n']}, #{own[2]['n']}): stuck?"))
@@ -1190,18 +1911,27 @@ AGENTS_MD = """# This folder is a chat room (chatroom plugin)
 Several agents (Claude Code and Codex alike) talk here through `chat.py`, the plugin's script. If you work in this
 folder as a participant, use it; the same commands work in both tools, or the same tools through `chat.py mcp`.
 
-- Read what is new: `python CHAT read --focus --as NAME --room ROOM` (in full only what concerns you), or without
-  `--focus` for everything.
+- Read what is new: `python CHAT read --focus --as NAME --room ROOM` (in full only what concerns you, the rest as one
+  line per author with message numbers), `read --range A-B` to open those messages, or without `--focus` for everything.
+- Wait: `wait --focus --as NAME --timeout 100` returns for what concerns you or when your timer expires.
 - Write: `python CHAT post --as NAME --room ROOM` with the text on stdin; `--reply N` answers message #N and tags its
-  author; `--finding` shares something the others should know now, without a ping.
+  author; `--finding` shares something the others should know now, without a ping. Only the agents you tag are pinged
+  (everyone for @all, PLAN, VOTE, CLOSED): tag who should answer, and send the pings that `post` prints (ALERT line).
 - Status, with your percentage, ideally as JSON: `--status` with `{"task": "T3", "step": "...", "pct": 60, "files": [...],
-  "next": "...", "needs": "..."}`.
-- The shared plan is the task board: `board`, `task add "title" --files a,b --deps T1`, `task take T3` before you
-  start (refused if the files are taken or the dependencies are open), `task done T3 --proof "..."`,
+  "next": "...", "needs": "..."}`. Every fact carries its source (#n, file:line, a command and its exit code).
+- The shared plan is the task board: `board`, `task add "title" --files a,dir/ --deps T1`, `task take T3` or `task next`
+  before you start (refused if the files are taken or the dependencies are open; a task whose owner is silent for 5
+  heartbeats is free again), `task amend T3 --files c.py`, `task done T3 --proof "pytest -q: 12 passed, exit 0" --gaps
+  "what is not done"` (the proof must name an artifact; a task with a verify command closes only when it exits 0),
   `task handoff T3 NAME --note "..."`, `task help T3 NAME --scope "..." --files a --done-when "..." --note "..."`
-  (lend a piece of your task to someone who waits), `task giveback T9 --note "..."`, `task decide "..."`.
+  (lend a piece of your task to someone who waits; who receives it runs `task accept T9` within 10 minutes),
+  `task giveback T9 --note "..."`, `task decide "..."`. A task with a verify command is closed from your shell, in your
+  worktree, where its test runs.
+- Votes name what they rest on: `VOTE v2: yes, checked a.py:40` or `VOTE v2: no, because ...`. A CLOSED is refused until
+  everyone voted yes with evidence; a no is reviewed by the lead; after PLAN v3 only the lead posts a new version.
+- In a research room: change only the program in the research worktree and run `research evaluate --desc "..."`;
+  `research status` shows the best and the latest runs. The kernel commits, evaluates, keeps or resets.
 - Your notes that survive a compacted context: `notebook "text" --as NAME`, read with `notebook --as NAME`.
-- After every real message, send the pings that `post` prints (ALERT line).
 
 CHAT is the plugin's scripts/chat.py; ROOM is this folder.
 """
@@ -1217,8 +1947,9 @@ def write_agents_md(room):
 
 # ---------------------------------------------------------------------- the MCP server
 MCP_TOOLS = [
-    {'name': 'chat_read', 'description': 'The new messages of the room. focus=true (default): in full only what concerns you, the rest as a digest.',
-     'inputSchema': {'type': 'object', 'properties': {'focus': {'type': 'boolean'}}}},
+    {'name': 'chat_read', 'description': 'The new messages of the room. focus=true (default): in full only what concerns you, the rest as a digest. '
+                                         'range "A-B": those messages in full (your place does not move).',
+     'inputSchema': {'type': 'object', 'properties': {'focus': {'type': 'boolean'}, 'range': {'type': 'string'}}}},
     {'name': 'chat_post', 'description': 'Post in the room: a message (then send the pings it returns), or a status (status=true, '
                                          'with the percentage, or state as JSON), an idle status, a finding, or a reply to #reply.',
      'inputSchema': {'type': 'object', 'properties': {
@@ -1230,18 +1961,25 @@ MCP_TOOLS = [
                                          'arrives is shown as chat_read shows it.',
      'inputSchema': {'type': 'object', 'properties': {'timeout': {'type': 'integer'}, 'focus': {'type': 'boolean'}}}},
     {'name': 'board', 'description': 'The task board: facts, decisions, tasks and who does what.', 'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'task', 'description': 'Change the task board: add (text, files, deps), take (id, force), done (id, proof), drop (id), '
+    {'name': 'task', 'description': 'Change the task board: add (text, files, deps), take (id, force), next (take the first free one), '
+                                    'amend (id, files: widen yours), accept (id: a piece lent to you), done (id, proof naming an artifact, gaps, touched), drop (id), '
                                     'note (id, text), handoff (id, to, note), help (id, to, scope, files, done_when, note: '
                                     'lend a piece of your task to who waits), giveback (id, note), decide (text), fact (text).',
      'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
-         'action': {'type': 'string', 'enum': ['add', 'take', 'done', 'drop', 'note', 'handoff', 'help', 'giveback', 'decide', 'fact']},
+         'action': {'type': 'string', 'enum': ['add', 'take', 'next', 'amend', 'accept', 'done', 'drop', 'note', 'handoff', 'help', 'giveback', 'decide', 'fact']},
+         'gaps': {'type': 'string', 'description': 'done: what you did not do'}, 'touched': {'type': 'string', 'description': 'done: interfaces you changed that others use'},
          'id': {'type': 'string'}, 'text': {'type': 'string'}, 'files': {'type': 'array', 'items': {'type': 'string'}},
          'deps': {'type': 'array', 'items': {'type': 'string'}}, 'proof': {'type': 'string'}, 'to': {'type': 'string'},
          'note': {'type': 'string'}, 'force': {'type': 'boolean'}, 'scope': {'type': 'string'}, 'done_when': {'type': 'string'}}}},
+    {'name': 'research', 'description': 'The research kernel: evaluate (desc: what this attempt tries) commits the program, '
+                                        'runs the sealed evaluator and keeps or resets; status shows the best and the results.',
+     'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
+         'action': {'type': 'string', 'enum': ['evaluate', 'status']}, 'desc': {'type': 'string'}}}},
     {'name': 'notebook', 'description': 'Your own notes, which survive a compacted context: with text adds a line, without reads them.',
      'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}},
-    {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof, one file in two statuses, '
-                                     'tags left unanswered, a status repeated.', 'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof or with gaps, one file in two '
+                                     'statuses, tags left unanswered, a status repeated or stalled, a vote flipped without evidence, '
+                                     'an agent over its call budget.', 'inputSchema': {'type': 'object', 'properties': {}}},
 ]
 for _t in MCP_TOOLS:      # one server for every agent (subagents share their lead's MCP config): each call may say where and who
     _t['inputSchema']['properties'].update({'room': {'type': 'string', 'description': 'the room folder, when the server was started without --room'},
@@ -1267,8 +2005,9 @@ class ThreadOut:
         return getattr(self.real, k)
 
 
-def mcp_call(room, name, tool, args):
-    """run one tool as the shell command would, and return what it prints (errors included) as text"""
+def mcp_call(room, name, tool, args, cancel=None, wait_cap=None):
+    """run one tool as the shell command would, and return what it prints (errors included) as text; cancel: set when
+    the client cancels the call; wait_cap: the longest chat_wait this client lets run (Codex stops a tool at 60 s)"""
     import contextlib
     import io
     if args.get('room'):
@@ -1294,10 +2033,16 @@ def mcp_call(room, name, tool, args):
         else:
             with contextlib.redirect_stdout(out):
                 yield
+    if tool in ('chat_read', 'chat_post', 'chat_wait'):
+        room.count(name, tool[5:])
     try:
         with capture():
             if tool == 'chat_read':
-                room.read(name, args.get('focus', True))
+                if args.get('range'):
+                    first, _, last = str(args['range']).partition('-')
+                    room.read_range(int(first.strip().lstrip('#')), int((last or first).strip().lstrip('#')))
+                else:
+                    room.read(name, args.get('focus', True))
             elif tool == 'chat_post':
                 ns.status, ns.idle, ns.finding, ns.reply = bool(args.get('status')), bool(args.get('idle')), bool(args.get('finding')), args.get('reply')
                 text = json.dumps(args['state'], ensure_ascii=False) if args.get('state') else str(args.get('text', ''))
@@ -1305,18 +2050,36 @@ def mcp_call(room, name, tool, args):
                     ns.status = True
                 cmd_post(room, ns, text)
             elif tool == 'chat_wait':
-                room.wait(name, int(args.get('timeout', 100)), bool(args.get('focus', True)))
+                timeout = int(args.get('timeout', 100))
+                if wait_cap and timeout > wait_cap:
+                    timeout = wait_cap                # under the client's own limit: the answer always arrives
+                room.wait(name, timeout, bool(args.get('focus', True)), cancel)
             elif tool == 'board':
                 cmd_board(room, ns)
             elif tool == 'task':
                 act = args['action']
+                if args.get('verify') or args.get('merge_into') or args.get('cwd'):
+                    return ('error: verify, merge_into and cwd are set by the lead from the shell (chat.py task add ... --verify), '
+                            'never through MCP: a command run by the server would skip the permission the client asks for'), True
                 ns.pairs = [act] + ([str(args['id'])] if args.get('id') else []) \
                     + ([args['to']] if act in ('handoff', 'help') and args.get('to') else []) \
                     + ([str(args['text'])] if args.get('text') else [])
                 ns.files, ns.deps = ','.join(args.get('files') or []) or None, ','.join(args.get('deps') or []) or None
                 ns.proof, ns.force, ns.note = args.get('proof'), bool(args.get('force')), args.get('note')
                 ns.scope, ns.done_when = args.get('scope'), args.get('done_when')
+                ns.gaps, ns.touched, ns.verify, ns.cwd, ns.merge_into, ns.mcp = args.get('gaps'), args.get('touched'), None, None, None, True
                 cmd_task(room, ns)
+            elif tool == 'research':
+                ns.pairs, ns.desc = [str(args.get('action', 'status'))], args.get('desc')
+                if ns.pairs[0] not in ('evaluate', 'status'):
+                    return 'research: evaluate or status (the lead starts or changes a research from the shell)', True
+                if ns.pairs[0] == 'evaluate' and wait_cap:
+                    contract = room.dir / 'research' / 'contract.json'
+                    budget = json.loads(contract.read_text(encoding='utf-8')).get('budget_s', 300) if contract.is_file() else 300
+                    if 2 * budget + 30 > wait_cap + 10:   # this client would stop the call before the run ends
+                        return (f'error: a run may last {2 * budget} s, longer than this client lets a tool run: evaluate from your '
+                                f'shell with a timeout of at least {2 * budget + 120} s (chat.py research evaluate ...)'), True
+                cmd_research(room, ns)
             elif tool == 'notebook':
                 ns.pairs = [str(args['text'])] if args.get('text') else []
                 cmd_notebook(room, ns)
@@ -1347,11 +2110,18 @@ def cmd_mcp(room, a):
             out.write(json.dumps(obj, ensure_ascii=False) + '\n')
             out.flush()
 
+    cancels, client = {}, {'wait_cap': None}         # the Event of each running call; how long this client lets a wait run
+
     def call(mid, params):
+        cancel = cancels.setdefault(mid, threading.Event())
         try:
-            text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') if isinstance(params.get('arguments'), dict) else {})
+            text, err = mcp_call(room, a.name, params.get('name'), params.get('arguments') if isinstance(params.get('arguments'), dict) else {},
+                                 cancel, client['wait_cap'])
         except Exception as exc:                      # one server serves every agent: a bad call (a room that is not a path...) answers with an error, never ends it
             text, err = f'error: {type(exc).__name__}: {exc}', True
+        cancels.pop(mid, None)
+        if cancel.is_set():
+            return                                    # cancelled: the client expects no answer (MCP cancellation)
         send({'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': err}})
     sys.stdin.reconfigure(encoding='utf-8')          # JSON-RPC is UTF-8; Windows would read it as cp1252
     for line in sys.stdin:
@@ -1362,9 +2132,21 @@ def cmd_mcp(room, a):
         if not isinstance(msg, dict):
             continue
         mid, method = msg.get('id'), msg.get('method')
-        if mid is None:                              # a notification (initialized, cancelled): nothing to answer
+        if mid is None:                              # a notification: nothing to answer; a cancelled call stops its wait
+            if method == 'notifications/cancelled':
+                rid = (msg.get('params') or {}).get('requestId')
+                cancels.setdefault(rid, threading.Event()).set()
             continue
         if method == 'initialize':
+            info = (msg.get('params') or {}).get('clientInfo') or {}
+            if 'codex' in str(info.get('name', '')).lower():
+                # Codex stops a tool at tool_timeout_sec, 60 s by default; who raises it says so to the server with
+                # env CHATROOM_TOOL_TIMEOUT (the same seconds) in the server's Codex config
+                try:
+                    told = int(os.environ.get('CHATROOM_TOOL_TIMEOUT', '60'))
+                except ValueError:
+                    told = 60
+                client['wait_cap'] = max(20, told - 10)
             res = {'protocolVersion': (msg.get('params') or {}).get('protocolVersion', '2025-06-18'),
                    'capabilities': {'tools': {}}, 'serverInfo': {'name': 'chatroom', 'version': '1'},
                    'instructions': who + 'Read with chat_read, take your task on the board before working, post statuses with '
@@ -1458,7 +2240,7 @@ def tv_search(q, video=True):
     is missing or fails"""
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--flat-playlist', '-J', '--no-warnings', f'ytsearch24:{q}'],
-                           capture_output=True, text=True, encoding='utf-8', timeout=30, **YTDLP)
+                           capture_output=True, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', timeout=30, **YTDLP)
         found = json.loads(r.stdout or '{}').get('entries') or [] if r.stdout.strip() else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         found = None
@@ -1536,7 +2318,7 @@ def tv_audio_url(vid):
     url = stderr = ''
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
-                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=40, **YTDLP)
+                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', timeout=40, **YTDLP)
         url, stderr = (r.stdout or '').strip().splitlines()[0] if (r.stdout or '').strip() else '', r.stderr
     except (OSError, subprocess.TimeoutExpired) as exc:
         stderr = str(exc) if isinstance(exc, OSError) else ''
@@ -1560,7 +2342,7 @@ def tv_stream_url(vid):
     lines, stderr = [], ''
     try:
         r = subprocess.run([sys.executable, '-m', 'yt_dlp', '-g', '-f', STREAM_FORMAT + ',bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--no-warnings',
-                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, text=True, encoding='utf-8', timeout=60, **YTDLP)
+                            f'https://www.youtube.com/watch?v={vid}'], capture_output=True, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', timeout=60, **YTDLP)
         lines, stderr = (r.stdout or '').strip().splitlines(), r.stderr
     except (OSError, subprocess.TimeoutExpired) as exc:
         stderr = str(exc) if isinstance(exc, OSError) else ''
@@ -1647,18 +2429,124 @@ def cmd_add(room, a):
     names = [n.strip() for n in (a.participants or '').split(',') if n.strip()]
     if not names and not a.name:
         sys.exit('add: give --participants and/or --as')
-    config = room.config()
-    for n in names:
-        if n not in config.setdefault('participants', []):
-            config['participants'].append(n)
-    config['left'] = [n for n in config.get('left', []) if n not in names]
-    for text in a.profile or []:
-        name, profile = parse_profile(text)
-        config.setdefault('profiles', {}).setdefault(name, {}).update(profile)
-    if a.name and a.name not in config.setdefault('self_names', []):
-        config['self_names'].append(a.name)
-    room.save_config(config)
+    profiles = [parse_profile(text) for text in a.profile or []]
+
+    def change(config):
+        for n in names:
+            if n not in config.setdefault('participants', []):
+                config['participants'].append(n)
+        config['left'] = [n for n in config.get('left', []) if n not in names]
+        for name, profile in profiles:
+            config.setdefault('profiles', {}).setdefault(name, {}).update(profile)
+        if a.name and a.name not in config.setdefault('self_names', []):
+            config['self_names'].append(a.name)
+        return config
+    config = room.edit_config(change)
     print(f"room {room.dir}: participants now {', '.join(config['participants'])}" + (f'; {a.name} posts as a lead' if a.name else ''))
+
+
+# what the lead writes once about the room for the agents' prompts (chat.py brief); chat.py prompt fills the template
+# from it and from the config, so a prompt is never rewritten by hand and every agent gets the same rules
+BRIEF_KEYS = ('goal', 'style', 'materials', 'constraints', 'closing', 'max')
+BRIEF_DEFAULT = {
+    'en': {'style': 'Plain and short.', 'constraints': 'none beyond the rules above.', 'max': '45',
+           'closing': 'anyone may post a message starting with "PLAN vN: " (with the colon); the others amend it with a vN+1 or vote '
+                      '"VOTE vN: yes, checked <file:line, output, #n>" / "VOTE vN: no, because <evidence>", each vote as '
+                      'the first line of its own message. A yes without what it rests on does not count; a no always stops '
+                      'the closing, and without evidence the LEAD asks for it. When one version has a yes from everyone, its '
+                      'author posts CLOSED vN (chat.py refuses it before) and everyone stops. A no is a split: the LEAD '
+                      'reviews it and decides. After PLAN v3 only the LEAD posts a new version.'},
+    'it': {'style': 'Semplice e breve.', 'constraints': 'nessuno oltre alle regole sopra.', 'max': '45',
+           'closing': 'chiunque può scrivere un messaggio che inizia con "PIANO vN: " (con i due punti); gli altri lo correggono con una vN+1 '
+                      'o votano "VOTO vN: sì, verificato <file:riga, output, #n>" / "VOTO vN: no, perché <prova>", ogni '
+                      'voto come prima riga di un messaggio suo. Un sì senza ciò su cui poggia non conta; un no ferma sempre '
+                      'la chiusura, e se è senza prova il LEAD la chiede. Quando una versione ha il sì di tutti, il suo '
+                      'autore scrive CHIUSO vN (chat.py lo rifiuta prima) e tutti si fermano. Un no è una divisione: la '
+                      'rivede il LEAD, che decide. Dopo PIANO v3 solo il LEAD pubblica una nuova versione.'}}
+LANGUAGE_NAME = {'en': 'English', 'it': 'Italian'}
+
+
+def brief(room):
+    return read_json(room.dir / 'brief.json', {})
+
+
+def cmd_brief(room, a):
+    """chat.py brief key=value ...: the room's brief for the prompts (goal, style, materials, constraints, closing, max);
+    without pairs it prints it"""
+    data = brief(room)
+    for pair in a.pairs:
+        key, _, value = pair.partition('=')
+        key = key.strip()
+        if key not in BRIEF_KEYS:
+            raise ValueError(f'unknown brief key {key!r}: use one of {", ".join(BRIEF_KEYS)}')
+        data[key] = value.strip()
+    if a.pairs:
+        room.locked(lambda: write_atomic(room.dir / 'brief.json', json.dumps(data, indent=2, ensure_ascii=False)))
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def fill_prompt(room, name, template='agent_prompt.md'):
+    """the prompt of one participant, filled from the template, the config and the brief: the lead passes it unchanged
+    to the Agent tool (or spawn_agent), so no prompt is rewritten by hand"""
+    config, data = room.config(), brief(room)
+    lang = 'it' if config.get('lang') == 'it' else 'en'
+    if name not in config.get('participants', []):
+        raise ValueError(f'{name} is not a participant of this room: add it first (chat.py add --participants {name})')
+    path = (HERE.parent / 'templates' / template).resolve()
+    if (HERE.parent / 'templates').resolve() not in path.parents or not path.is_file():
+        raise ValueError(f'no template {template!r} in the plugin templates')
+    dossier = room.dir / 'DOSSIER.md'
+    values = {
+        'NAME': name, 'OTHERS': ', '.join(n for n in config['participants'] if n != name) or '-',
+        'LANGUAGE': LANGUAGE_NAME[lang], 'ROOM': str(room.dir).replace('\\', '/'),
+        'CHAT': str(Path(__file__).resolve()).replace('\\', '/'), 'HEARTBEAT': str(room.heartbeat()),
+        'ROLE': config.get('profiles', {}).get(name, {}).get('role') or '-', 'TOPIC': config.get('topic', ''),
+        'GOAL': data.get('goal') or config.get('subtitle') or config.get('topic', ''),
+        'MATERIALS': data.get('materials') or (str(dossier).replace('\\', '/') if dossier.is_file() else
+                                               str(room.dir / 'research' / 'task.md').replace('\\', '/')
+                                               if (room.dir / 'research' / 'task.md').is_file() else '-'),
+        **{k.upper(): data.get(k) or BRIEF_DEFAULT[lang][k] for k in ('style', 'constraints', 'closing', 'max')}}
+    contract = room.dir / 'research' / 'contract.json'
+    if contract.is_file():                      # a research room: the worker templates name the contract's terms
+        c = json.loads(contract.read_text(encoding='utf-8'))
+        values.update({'PROGRAM': c['program'], 'EVALUATE': c['evaluate'], 'METRIC': c['metric'],
+                       'BETTER': 'lower' if c['direction'] == 'min' else 'higher', 'BUDGET_S': str(c['budget_s']),
+                       'MAX_EVALS': str(c['max_evals']), 'WORK': c['work'].replace('\\', '/'),
+                       'SEALED': ', '.join(c['sealed']) or '-', 'EVAL_TIMEOUT': str(2 * c['budget_s'] + 120),
+                       'EVAL_TIMEOUT_MS': str((2 * c['budget_s'] + 120) * 1000),
+                       'EVAL_HOW': (f"Run it from your shell with a timeout of at least {2 * c['budget_s'] + 120} s "
+                                    f"({(2 * c['budget_s'] + 120) * 1000} ms for the Bash tool of Claude Code)"
+                                    if 2 * c['budget_s'] + 120 <= 600 else
+                                    f"A run may last {2 * c['budget_s']} s, longer than one shell call may wait (600 s): start it in "
+                                    f"the background (Bash tool with run_in_background in Claude Code, a background job elsewhere) "
+                                    f"and wait for it to end; research status shows it running"),
+                       'METRIC_SOURCE': ('a result file the sealed evaluator writes ($CHATROOM_RESULT): nothing your program prints counts'
+                                         if c.get('metric_source') == 'file' else
+                                         'its output, where it must appear exactly once: never print a line starting with '
+                                         f"\"{c['metric']}:\" yourself (two such lines make the run a crash)")})
+    text = re.sub(r'\{\{([A-Z_]+)\}\}', lambda m: values.get(m.group(1), m.group(0)), path.read_text(encoding='utf-8'))
+    left = sorted(set(re.findall(r'\{\{([A-Z_]+)\}\}', text)))
+    if left:
+        raise ValueError(f'the template {template} has fields nobody fills: {", ".join(left)}')
+    return text
+
+
+def cmd_research(room, a):
+    """chat.py research init|evaluate|status: the research kernel (research.py), first step: an autoresearch loop"""
+    import research
+    research.cmd(room, a)
+
+
+def cmd_prompt(room, a):
+    """chat.py prompt NAME [--template FILE] [--out FILE]: the filled prompt of one participant"""
+    if len(a.pairs) != 1:
+        sys.exit('prompt: give one participant name')
+    text = fill_prompt(room, a.pairs[0], a.template or 'agent_prompt.md')
+    if a.out:
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(a.out).write_text(text, encoding='utf-8')
+        return print(f'prompt for {a.pairs[0]} written to {a.out} ({len(text)} characters): pass it unchanged')
+    sys.stdout.write(text)
 
 
 def cmd_remove(room, a):
@@ -1667,24 +2555,25 @@ def cmd_remove(room, a):
     names = [n.strip() for n in (a.participants or '').split(',') if n.strip()]
     if not names:
         sys.exit('remove: give --participants A,B')
-    config = room.config()
-    config['participants'] = [n for n in config.get('participants', []) if n not in names]
-    config['left'] = sorted(set(config.get('left', [])) | set(names))
     gone = {}
     room.update_roster(lambda roster: gone.update({n: roster.pop(n) for n in names if n in roster}))
     if gone:
         kept = room.dir / 'roster.left.json'
         old = json.loads(kept.read_text(encoding='utf-8')) if kept.exists() else {}
         write_atomic(kept, json.dumps({**old, **gone}, ensure_ascii=False, indent=2))
-    room.save_config(config)
+
+    def change(config):
+        config['participants'] = [n for n in config.get('participants', []) if n not in names]
+        config['left'] = sorted(set(config.get('left', [])) | set(names))
+        return config
+    config = room.edit_config(change)
     print(f"room {room.dir}: {', '.join(names)} left; participants now {', '.join(config['participants']) or 'none'}")
 
 
 def cmd_command(room, a):
     """chat.py command NAME [--as AUTHOR]: post a quick command (default author: the user)"""
     if not a.pairs:
-        lang = room.config().get('lang', 'en')
-        for c in command_list(lang):
+        for c in room_commands(room.config()):
             print(f"/{c['name']:<11} {c['icon']} {c['label']}")
         return
     author = a.name or room.config().get('user_name', 'USER')
@@ -1701,8 +2590,8 @@ def alert_lines(room, items, users):
     roster = room.roster()
     out = []
     for m in items:
-        if m.get('from') not in users or m.get('from') in room.config().get('self_names', []):
-            continue                          # only the user's messages: the lead pings its own
+        if m.get('from') not in users or m.get('from') in room.config().get('self_names', []) or m.get('kind') in SETUP_KINDS:
+            continue                          # only the user's messages: the lead pings its own; the room's setup is the lead's
         text = m.get('text', '')
         named = [k for k in roster if tags(text, k)]
         if named and not tags_everyone(text):
@@ -1719,10 +2608,14 @@ def alert_lines(room, items, users):
 
 
 def watch_line(m, users):
-    """one compact line per real message, for a lead that watches the room on a budget: no statuses, no tools"""
+    """one compact line per real message, for a lead that watches the room on a budget: no statuses, no tools; a no vote
+    is marked, because the lead reviews a split"""
     text = ' '.join(m.get('text', '').split())
-    kind = ('PLAN' if re.match(r'(PLAN|PIANO)\s*v\d+', text, re.IGNORECASE) else 'VOTE' if re.search(r'\b(VOTE|VOTO)\s*v?\d+\s*:', text, re.IGNORECASE)
-            else 'CLOSED' if re.match(r'(CLOSED|CHIUSO)\b', text, re.IGNORECASE) else 'USER' if m.get('from') in users else 'MSG')
+    votes = votes_in(m.get('text', ''))
+    pv = plan_version(m.get('text', ''))
+    kind = ('PLAN' + (' (v{} > {}: LEAD DECIDES)'.format(pv, PLAN_MAX) if pv > PLAN_MAX else '') if pv is not None
+            else 'VOTE-NO (LEAD REVIEW)' if any(not yes for _, yes in votes) else 'VOTE' if votes
+            else 'CLOSED' if closing(m.get('text', ''))[0] else 'USER' if m.get('from') in users else 'MSG')
     return f"WATCH #{m['n']} {kind} {m['from']}: {text[:220]}" + (' [...]' if len(text) > 220 else '')
 
 
@@ -1730,7 +2623,12 @@ def cmd_alerts(room, a):
     """the lead's relay: print a ping line for each new message of the user (--follow keeps watching);
     with --messages also one WATCH line per real message, so the lead follows the room without reading it all. Each lead
     (--as) keeps its own place; the first time, what is older than ten minutes is not replayed"""
-    name, checked, seen_checks, last = '_alerts' + (f'_{a.name}' if a.name else ''), 0, set(), None
+    name, checked, last = '_alerts' + (f'_{a.name}' if a.name else ''), 0, None
+    seen_path = room.dir / f'checks_seen{name}.json'   # the relay restarts every 30 min: what it said stays said
+    try:
+        seen_checks = set(json.loads(seen_path.read_text(encoding='utf-8')))
+    except (OSError, ValueError, TypeError):
+        seen_checks = set()
     if not (room.dir / f'cursor_{name}.txt').exists():
         old = [m['n'] for m in room.messages() if time.time() - float(m.get('ts') or 0) > 600]
         room.set_cursor(name, max(old, default=0))
@@ -1760,6 +2658,10 @@ def cmd_alerts(room, a):
             for key, text in failures(room):
                 if key not in seen_checks:
                     seen_checks.add(key)
+                    try:
+                        write_atomic(seen_path, json.dumps(sorted(seen_checks)))
+                    except OSError:
+                        pass
                     print(f'CHECK {text}', flush=True)
         if not a.follow:
             return
@@ -1810,8 +2712,9 @@ def cmd_status(room, a):
         idle[k] = {'since': m.get('time'), 'message': m['n'],
                    'seconds': int(time.time() - m['ts']) if 'ts' in m else None,
                    'waits_for': (m.get('text') or '').split('\n')[0][:160]} if m else False
-    print(json.dumps({'total': len(items), 'per_participant': counts, 'seconds_silent': silent, 'idle': idle},
-                     ensure_ascii=False))
+    calls = {k: sum(v.values()) for k, v in room.counters().items()}
+    print(json.dumps({'total': len(items), 'per_participant': counts, 'seconds_silent': silent, 'idle': idle,
+                      'calls': calls, 'budget_calls': int(room.config().get('budget_calls', BUDGET_CALLS))}, ensure_ascii=False))
 
 
 def help_size(minutes):
@@ -1997,10 +2900,12 @@ def cmd_serve(room, a):
 
     def adopt_helper(name, text, doc, role):
         """a lent helper's line comes into this room's own chat, as one more participant (with its desk)"""
-        c = room.config()
-        if name not in c.get('participants', []):
+        def change(c):
+            if name in c.get('participants', []):
+                return False
             c.setdefault('participants', []).append(name)
-            room.save_config(c)
+            return True
+        if room.edit_config(change):
             room.update_config(profiles={name: {'emoji': '🤝', 'color': '#26a69a', 'role': role}})
         p = sharing.doc_path(common.dir, doc) if doc else None
         room.append(name, text + (f'\n(document: {p})' if p else ''))
@@ -2014,12 +2919,17 @@ def cmd_serve(room, a):
             adopt_helper(m['from'], m['text'], m.get('doc'), f"lent by {b.host if b else '?'}")
     def friend_post(name, text, color=None):
         """a friend allowed in the room's chat writes there: from then on the friend counts as the user"""
-        c = room.config()
-        if name not in c.get('friends', []):
-            if name in {*c.get('participants', []), *c.get('profiles', {}), *room.roster(), *room.user_names(), *(m['from'] for m in room.messages())}:
+        taken = {*room.roster(), *(m['from'] for m in room.messages())}
+
+        def change(c):
+            if name in c.get('friends', []):
+                return False
+            users = {c.get('user_name', 'USER'), *c.get('user_aliases', []), *c.get('self_names', [])}
+            if name in {*c.get('participants', []), *c.get('profiles', {}), *users, *taken}:
                 raise ValueError("that name is already someone in the host's room: join with another name")   # a friend must not pass for an agent
             c.setdefault('friends', []).append(name)
-            room.save_config(c)
+            return True
+        if room.edit_config(change):
             room.update_config(profiles={name: {'emoji': '🌐', 'color': color or '#888888', 'role': 'friend'}})
         return room.append(name, text)
     import types
@@ -2138,10 +3048,10 @@ def cmd_serve(room, a):
     if not resumed:
         (common.dir / 'link.json').unlink(missing_ok=True)       # a link left by a server that died
         if room.config().get('common', {}).get('shared'):
-            room.update_config(common={**room.config()['common'], 'shared': False})
+            room.edit_config(lambda c: c.update(common=clean_common({**c.get('common', {}), 'shared': False})))
 
     def set_shared(on):
-        room.update_config(common={**room.config().get('common', {}), 'shared': on})
+        room.edit_config(lambda c: c.update(common=clean_common({**c.get('common', {}), 'shared': on})))
 
     def install_cloudflared():
         try:
@@ -2455,7 +3365,7 @@ def cmd_serve(room, a):
                     return self.send(404, 'no personal office', 'text/plain')
                 return self.send(200, OFFICE_FILE.read_bytes(), 'application/json; charset=utf-8')
             if path == '/commands.json':
-                body = json.dumps(command_list(room.config().get('lang', 'en')), ensure_ascii=False)
+                body = json.dumps(room_commands(room.config()), ensure_ascii=False)
                 return self.send(200, body, 'application/json; charset=utf-8')
             self.send(404, 'not found', 'text/plain')
 
@@ -2549,7 +3459,7 @@ def cmd_serve(room, a):
                     elif act == 'lend_auto':           # lend by itself, with these defaults (off unless turned on)
                         save_settings(lend_auto=clean_lend_auto(body))
                     elif act == 'friends_chat':        # friends linked to the room read and write its own chat
-                        c = room.config(); c['friends_chat'] = bool(body.get('on')); room.save_config(c)
+                        room.edit_config(lambda c: c.update(friends_chat=bool(body.get('on'))))
                     elif act == 'lend_mode':
                         save_settings(lend_mode='safe' if body.get('mode') == 'safe' else 'full')
                     elif act == 'install' and not install['busy']:
@@ -2682,7 +3592,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
                                         'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp',
-                                        'helpers'])
+                                        'helpers', 'brief', 'prompt', 'research'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -2700,6 +3610,7 @@ def main():
     p.add_argument('--timeout', type=int, default=100,
                    help=f'wait: at most {WAIT_MAX} s, or {IDLE_WAIT_MAX} s while you are idle')
     p.add_argument('--topic')
+    p.add_argument('--ask-mode', dest='ask_mode', action='store_true', help='init: the viewer asks the user to choose normal or research')
     p.add_argument('--participants')
     p.add_argument('--title')
     p.add_argument('--subtitle')
@@ -2714,15 +3625,37 @@ def main():
     p.add_argument('--image', action='append', help='post: attach a picture (png, jpg, webp, gif); repeat for more')
     p.add_argument('--file', help='post --common: share a text document (up to 5 MB) in the common room')
     p.add_argument('--out')
+    p.add_argument('--program', help='research init: the one file of the repository that may change')
+    p.add_argument('--evaluate', help='research init: the command that evaluates the program and prints "METRIC: value"')
+    p.add_argument('--metric', help='research init: the name the evaluator prints before the colon')
+    p.add_argument('--direction', help='research init: min (lower is better, default) or max')
+    p.add_argument('--budget-min', dest='budget_min', type=float, help='research init: minutes per run (killed at twice that)')
+    p.add_argument('--max-evals', dest='max_evals', type=int, help='research init: how many runs in all (default 100)')
+    p.add_argument('--sealed', help='research init: files that must not change (the evaluator, the data loader), comma separated')
+    p.add_argument('--tag', help='research init: the name of the run (branch research/TAG)')
+    p.add_argument('--desc', help='research evaluate: what this attempt tries, in one line')
+    p.add_argument('--keep', help='research init: folders of the worktree the kernel never cleans (data the evaluator needs), comma separated')
+    p.add_argument('--result-file', dest='result_file', action='store_const', const=True, default=None,
+                   help='research init/amend: the sealed evaluator writes "METRIC: value" to $CHATROOM_RESULT; only that counts')
+    p.add_argument('--no-result-file', dest='result_file', action='store_const', const=False,
+                   help='research amend: read the metric from the output again')
+    p.add_argument('--template', help='prompt: a template of the plugin (default agent_prompt.md)')
     p.add_argument('--deps', help='task add: the tasks it waits for, comma separated (T1,T2)')
     p.add_argument('--files', help='task add: the files it changes, comma separated; two taken tasks cannot share one')
     p.add_argument('--proof', help='task done: what shows it works (a test, a command, a photo)')
     p.add_argument('--force', action='store_true', help='task take: take it although it is taken or its files are')
+    p.add_argument('--gaps', help='task done: what you did not do (it stays on the board)')
+    p.add_argument('--touched', help='task done: the interfaces you changed that others use (a finding for everyone)')
+    p.add_argument('--verify', help='task add, lead or user only: a command that must exit 0 before the task is done')
+    p.add_argument('--cwd', help='task add: the folder where --verify and --merge-into run (default: where the closing agent runs done)')
+    p.add_argument('--verify-timeout', dest='verify_timeout', type=int, help='task add: seconds the verify command may run (default 110)')
+    p.add_argument('--merge-into', dest='merge_into', help='task add, lead or user only: the branch the work must merge into without conflicts')
     p.add_argument('--note', help='task handoff / help / giveback: the decisions taken, the files touched, what was tried')
     p.add_argument('--scope', help='task help: what the lent piece is, what is in and what is out')
     p.add_argument('--done-when', dest='done_when', help='task help: the proof that closes the lent piece')
     p.add_argument('--finding', action='store_true', help='post: a finding the others should know now (no ping, no percentage); read --focus always shows it')
     p.add_argument('--reply', type=int, help='post: answer message #N; its author is tagged and gets the ping')
+    p.add_argument('--range', help='read: messages A-B in full (your place in the chat does not move)')
     p.add_argument('--focus', action='store_true', help='read, wait: in full only what concerns you, the rest as a one-line digest per author')
     p.add_argument('--port', type=int, default=8765)
     p.add_argument('--repo', default='', help='serve: the project folder the GitHub window on the office wall reads (gh and git run there); or "repo" in the room config')
@@ -2743,7 +3676,8 @@ def main():
         commands = {'config': cmd_config, 'roster': cmd_roster, 'status': cmd_status, 'transcript': cmd_transcript,
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
                     'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp,
-                    'helpers': cmd_helpers}
+                    'helpers': cmd_helpers, 'brief': cmd_brief, 'prompt': cmd_prompt,
+                    'research': cmd_research}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:
@@ -2756,8 +3690,16 @@ def main():
         room = common_room(room)
     if a.command == 'read' and a.all:
         return room.show(room.messages())
+    if a.command == 'read' and a.range:               # a range never moves anyone's place: no --as needed
+        first, _, last = a.range.partition('-')
+        try:
+            first, last = int(first.strip().lstrip('#')), int((last or first).strip().lstrip('#'))
+        except ValueError:
+            sys.exit('--range A-B: two message numbers, for example --range 40-52')
+        return room.read_range(first, last)
     if not a.name:
         sys.exit('--as NAME required')
+    room.count(a.name, a.command)
     if a.command == 'post':
         return cmd_post(room, a)
     if a.command == 'read':

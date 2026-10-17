@@ -28,8 +28,14 @@ const setPref = (k, v) => { try { localStorage.setItem('chatroom.office.' + k, J
 const lerp = (a, b, k) => a + (b - a) * k;
 const wrapAng = a => (a + Math.PI * 3) % (Math.PI * 2) - Math.PI;
 const angLerp = (a, b, k) => a + (((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * k;
-const PCT = /(\d{1,3})\s?%/g, PLAN = /^\s*(PLAN|PIANO)\s*v(\d+)/i, CLOSED = /^\s*(CLOSED|CHIUSO)\s*v?(\d+)?/i;
-const VOTE = /(VOTE|VOTO)\s*v?(\d+)\s*:\s*(yes|no|sì|si)/i, EVERY = /(^|[^\w@])@(all|tutti|everyone)\b/i;
+// a PLAN, a VOTE or a CLOSED is read at the start of a line, after a reply mark, tags or markdown: the same reading as chat.py heads()
+const LINE_HEAD = /^(?:\s*↪\s*#\d+|\s*@[\w-]+[\s,:]*|\s*\d{1,3}[.)]\s+|[^\p{L}\p{N}_@↪]+|_+)+/u;
+const QUOTED = /^\s*(?:↪\s*#\d+\s*)?(?:@[\w-]+[\s,:]*)*[>"“”«‘’'`(]/u;   // somebody else's words: not read
+const heads = t => String(t || '').split('\n').filter(l => l.trim() && !QUOTED.test(l)).map(l => l.replace(LINE_HEAD, '')).filter(h => h.trim());
+const firstHead = t => heads(t)[0] || '';
+const HEAD_END = String.raw`[*_]*(?!\s*[\p{L}])`;   // a heading: "PLAN v2: ...", "PLAN v1 (draft)", not "PLAN v2 also needs a test"
+const PCT = /(\d{1,3})\s?%/g, PLAN = new RegExp(String.raw`^(PLAN|PIANO)\s*v(\d+)` + HEAD_END, 'iu'), CLOSED = new RegExp(String.raw`^(CLOSED|CHIUSO)(?:\s*[vV](\d+))?` + HEAD_END, 'u');
+const VOTE = /^(VOTE|VOTO)\s*v?(\d+)\s*[*_]*\s*:\s*[*_]*\s*(yes|no|sì|si)(?![\p{L}\p{N}])/iu, voteOf = t => firstHead(t).match(VOTE), EVERY = /(^|[^\w@])@(all|tutti|everyone)\b/i;
 
 // ------------------------------------------------------------------ renderer, scene, camera
 const root = document.getElementById('office') || document.body.appendChild(Object.assign(document.createElement('div'), {id: 'office'}));
@@ -762,12 +768,12 @@ function chatBase(c, all) {
   let plan = null, closed = null;
   for (const m of all) {
     if (m.kind) continue;
-    const p = String(m.text).match(PLAN); if (p) plan = {v: +p[2], author: m.from, n: m.n};
-    const cl = String(m.text).match(CLOSED); if (cl && plan && (!cl[2] || +cl[2] >= plan.v)) closed = {v: cl[2] ? +cl[2] : plan.v, n: m.n, author: m.from, ts: m.ts || 0};
+    const p = firstHead(m.text).match(PLAN); if (p) plan = {v: +p[2], author: m.from, n: m.n};
+    const cl = firstHead(m.text).match(CLOSED); if (cl && plan && (!cl[2] || +cl[2] >= plan.v)) closed = {v: cl[2] ? +cl[2] : plan.v, n: m.n, author: m.from, ts: m.ts || 0};
   }
   if (closed && plan && plan.n > closed.n) closed = null;
   const votes = {};
-  if (plan) for (const m of all) { const v = String(m.text).match(VOTE); if (v && +v[2] === plan.v && m.n > plan.n) votes[m.from] = /no/i.test(v[3]) ? 'no' : 'yes'; }
+  if (plan) for (const m of all) { const v = voteOf(m.text); if (v && +v[2] === plan.v && m.n > plan.n) votes[m.from] = /no/i.test(v[3]) ? 'no' : 'yes'; }
   const per = {};
   for (const name of names) {
     const mine = byFrom.get(name) || [], last = mine[mine.length - 1];
@@ -1165,18 +1171,18 @@ function events() {
       from.bubble = {text: m.text, until: Date.now() / 1000 + 4.5, kind: m.kind === 'idle' ? 'idle' : 'status'};
       continue;
     }
-    from.bubble = {text: m.text, until: Date.now() / 1000 + 7, kind: PLAN.test(m.text) ? 'plan' : VOTE.test(m.text) ? 'vote' : m.from === D.user ? 'user' : 'msg'};
+    from.bubble = {text: m.text, until: Date.now() / 1000 + 7, kind: PLAN.test(firstHead(m.text)) ? 'plan' : voteOf(m.text) ? 'vote' : m.from === D.user ? 'user' : 'msg'};
     const targets = EVERY.test(m.text) || m.from === D.user ? [...people.values()] : D.names.filter(n => tagsName(m.text, n)).map(n => people.get(n));
     for (const t of targets.slice(0, 6)) if (t && t !== from) flyPlane(from.head(), t.head());
     if (from !== boss && from !== assistant && SPOTS.has(m.from)) {                       // an agent's words send it somewhere
-      if (PLAN.test(m.text)) sendVisit(from, boardSpot(), 14, 'raise');
+      if (PLAN.test(firstHead(m.text))) sendVisit(from, boardSpot(), 14, 'raise');
       else { const mate = D.names.find(n => n !== m.from && SPOTS.has(n) && tagsName(m.text, n)); if (mate) sendVisit(from, SPOTS.get(mate).stand, REVIEW.test(m.text) ? 12 : 7, REVIEW.test(m.text) ? 'read' : 'speak', people.get(mate)); }
     }
     if (m.from === D.user) for (const p of people.values()) { glance(p, boss.head(), 3500); }
     if (assistant && from !== assistant) { glance(assistant, from.head(), 2500); assistant.act = 'read'; }
     emit(10, from.head(), {color: ['#fff59d', '#ffffff'], speed: 1, up: 1.2, life: 0.7, size: 0.05});
     if (tagsName(m.text, D.user)) notify('tag' + m.n, `💬 ${m.from} → ${D.user}`, m.text.slice(0, 160), false, () => window.chatroom?.jumpTo(m.n));
-    if (CLOSED.test(m.text) && m.n > lastClosedN) {
+    if (CLOSED.test(firstHead(m.text)) && m.n > lastClosedN) {
       lastClosedN = m.n;
       emit(260, new THREE.Vector3(0, 2.4, 0), {color: ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb'], speed: 5, up: 5, life: 3, size: 0.08, gravity: -4});
       printJob = 3;
@@ -1374,7 +1380,9 @@ function drawScreen(name, act, t) {
 }
 
 // ------------------------------------------------------------------ UI, modes, selection, camera
-let mode = pref('mode', window.innerWidth >= 1000 ? 'split' : 'office'), selected = null, follow = false;
+// ?view=chat (or office, split) opens the viewer in that view, once; the buttons change it as usual
+const VIEW = new URLSearchParams(location.search).get('view');
+let mode = ['split', 'office', 'chat'].includes(VIEW) ? VIEW : pref('mode', window.innerWidth >= 1000 ? 'split' : 'office'), selected = null, follow = false;
 // first person: the camera is the user's figure's eyes; leaving it flies back to the overview before the orbit resumes
 let pov = pref('pov', false), flyHome = false, povLocked = false, povRot = 0, watchEnd = 0;
 let paintball = null;                                                      // office-paintball.js, created at the end; while it is on the view stays in first person

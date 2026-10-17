@@ -813,7 +813,7 @@ def end(pid):
     if not alive(pid):
         return
     if os.name == 'nt':
-        subprocess.run(['taskkill', '/PID', str(int(pid)), '/T', '/F'], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        subprocess.run(['taskkill', '/PID', str(int(pid)), '/T', '/F'], capture_output=True, stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
     else:
         try:
             os.kill(int(pid), 15)
@@ -994,32 +994,31 @@ def clean_room_config(c):
             'profiles': profiles}
 
 
-PLAN_RE, CLOSED_RE = re.compile(r'^\s*(PLAN|PIANO)\s*v(\d+)', re.I), re.compile(r'^\s*(CLOSED|CHIUSO)\s*v?(\d+)?', re.I)
-VOTE_RE = re.compile(r'(VOTE|VOTO)\s*v?(\d+)\s*:\s*(yes|no|sì|si)', re.I)
 
 
 def board_of(items):
     """what the whiteboard shows of a chat: the plan (version, author, closed or not) and each agent's vote on it (the same
     reading as office.js derive())"""
+    from chat import closing, plan_version, votes_in     # one reading of plans and votes, the same as the room's
     plan = closed = None
     for m in items:
         if m.get('kind'):
             continue
         text = str(m.get('text', ''))
-        p = PLAN_RE.match(text)
-        if p:
-            plan = {'v': int(p.group(2)), 'author': m.get('from', ''), 'n': m.get('n', 0)}
-        c = CLOSED_RE.match(text)
-        if c and plan and (not c.group(2) or int(c.group(2)) >= plan['v']):
-            closed = {'v': int(c.group(2)) if c.group(2) else plan['v'], 'n': m.get('n', 0)}
+        pv = plan_version(text)
+        if pv is not None:
+            plan = {'v': pv, 'author': m.get('from', ''), 'n': m.get('n', 0)}
+        is_closed, cv = closing(text)
+        if is_closed and plan and (not cv or cv >= plan['v']):
+            closed = {'v': cv or plan['v'], 'n': m.get('n', 0)}
     if closed and plan and plan['n'] > closed['n']:
         closed = None
     votes = {}
     if plan:
         for m in items:
-            v = VOTE_RE.search(str(m.get('text', '')))
-            if v and int(v.group(2)) == plan['v'] and m.get('n', 0) > plan['n']:
-                votes[m.get('from', '')] = 'no' if re.search('no', v.group(3), re.I) else 'yes'
+            for version, yes in votes_in(str(m.get('text', ''))):
+                if version == plan['v'] and m.get('n', 0) > plan['n'] and not m.get('kind'):
+                    votes[m.get('from', '')] = 'yes' if yes else 'no'
     return {'plan': {'v': plan['v'], 'author': plan['author'], 'closed': bool(closed)} if plan else None, 'votes': votes}
 
 
@@ -1416,7 +1415,7 @@ def _prova():
             raise AssertionError('a wrong answer to an ask got in')
         host.ask_answer(g, 1, True, 'AIUTO1', 'haiku', 20)
         assert any(p['name'] == 'BOB·AIUTO1' and p['guest'] == 'BOB' for p in host.people())
-        board = board_of([{'n': 1, 'from': 'L', 'text': 'PLAN v3 x'}, {'n': 2, 'from': 'A', 'text': 'VOTE v3: yes'}, {'n': 3, 'from': 'B', 'text': 'VOTE v3: no'}])
+        board = board_of([{'n': 1, 'from': 'L', 'text': 'PLAN v3: x'}, {'n': 2, 'from': 'A', 'text': 'VOTE v3: yes'}, {'n': 3, 'from': 'B', 'text': 'VOTE v3: no'}])
         assert board == {'plan': {'v': 3, 'author': 'L', 'closed': False}, 'votes': {'A': 'yes', 'B': 'no'}}, board
         assert clean_plan({'v': 'x'}) is None and clean_person({'name': 'A', 'vote': 'maybe'}).get('vote') is None
         host.kick('BOB')
