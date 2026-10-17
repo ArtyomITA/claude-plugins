@@ -98,7 +98,12 @@ def check_code(root, en, errors):
     for f in sorted((root / 'scripts').glob('*.py')):
         if f.name == 'i18n.py':                                       # the library itself
             continue
-        for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+        tree = ast.parse(f.read_text(encoding='utf-8'))
+        for n in ast.walk(tree):                                       # a local named say or tr hides the function
+            if (isinstance(n, ast.Name) and n.id in ('say', 'tr') and isinstance(n.ctx, ast.Store)) or \
+                    (isinstance(n, ast.arg) and n.arg in ('say', 'tr')):
+                errors.append(f'{f.name}:{n.lineno}: a variable named {getattr(n, "id", None) or n.arg} hides the i18n function')
+        for n in ast.walk(tree):
             fname = getattr(n.func, 'id', getattr(n.func, 'attr', None)) if isinstance(n, ast.Call) else None
             if fname not in ('tr', 'say') or not n.args:
                 continue
@@ -182,13 +187,32 @@ def strays(root):
 
 def shape(text):
     """what a translation must keep from its original"""
-    commands = re.findall(r'CHAT(?:\}\})?"?\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?', text)
+    # a command is python "{{CHAT}}" VERB / python CHAT VERB (prose that says "CHAT with" is not one)
+    commands = re.findall(r'python\s+"?(?:\{\{CHAT\}\}|CHAT)"?\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?', text)
     return {'fields': sorted(set(re.findall(r'\{\{([A-Z_]+)\}\}', text))),
             'flags': sorted(set(re.findall(r'(?<![\w-])--[a-z][a-z-]+', text))),
             'commands': sorted({(v + ' ' + w) if v == 'research' and w else v for v, w in commands}),
             'steps': len(re.findall(r'(?m)^\s*\d+\.\s', text)),
             'ids': sorted(set(re.findall(r'(?<![\w-])(?:att-(?:N|\d+)|[EI]\d+|[EI]-n)(?![\w-])', text))),
             'protocol': protocol_in(text)}
+
+
+def blocks_differ(en_text, it_text):
+    """a translation keeps every bullet and paragraph, and none much shorter than its original (a rule left out)"""
+    out = []
+    bullets = lambda t: len(re.findall(r'(?m)^\s*[-*] ', t))
+    if bullets(en_text) != bullets(it_text):
+        out.append(f'{bullets(it_text)} bullet points instead of {bullets(en_text)}')
+    split = lambda t: [b for b in re.split(r'\n\s*\n', t.strip()) if b.strip()]
+    ba, bb = split(en_text), split(it_text)
+    if len(ba) != len(bb):
+        out.append(f'{len(bb)} paragraphs instead of {len(ba)}')
+        return out
+    for i, (x, y) in enumerate(zip(ba, bb), 1):
+        wx, wy = len(x.split()), len(y.split())
+        if wx >= 12 and wy < 0.75 * wx:                    # Italian runs longer than English, never much shorter
+            out.append(f'paragraph {i} has {wy} words against {wx} in English: something may be missing ({y[:60]!r})')
+    return out
 
 
 def check_documents(root, errors):
@@ -204,7 +228,10 @@ def check_documents(root, errors):
                 if not original.is_file():
                     errors.append(f'{group}/{lang_dir.name}/{f.name}: no English {group}/{f.name}')
                     continue
-                a, b = shape(original.read_text(encoding='utf-8')), shape(f.read_text(encoding='utf-8'))
+                ta, tb = original.read_text(encoding='utf-8'), f.read_text(encoding='utf-8')
+                for msg in blocks_differ(ta, tb):
+                    errors.append(f'{group}/{lang_dir.name}/{f.name}: {msg}')
+                a, b = shape(ta), shape(tb)
                 for what in a:
                     if a[what] != b[what]:
                         errors.append(f'{group}/{lang_dir.name}/{f.name}: {what} differ from the English one '

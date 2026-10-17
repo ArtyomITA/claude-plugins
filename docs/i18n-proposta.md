@@ -116,3 +116,22 @@ terzo delle 3.400 parole) e 10.100 parole di template e guide (15.700 con le ski
 2. Skill: restano in inglese (il passo 7 cade).
 3. Lingua degli agenti: quella della stanza, per tutti.
 4. Traduzione: Claude, con una revisione Haiku per ogni blocco.
+   Poi (17/10 sera, su richiesta): i testi dei passi 4-6 li scrivono più agenti Haiku in parallelo, ognuno su un blocco
+   con un validatore meccanico (campi, protocollo, flag, inizio e fine dei frammenti); alla fine test completi e una
+   revisione completa Sonnet.
+
+## 5. Stato (17/10/2026 sera)
+
+- Passi 1-3 fatti (commit locali 1b7b088, a26a889, 1141583). Passi 4-6: research.py, share.py (testi e risposte
+  HTTP), template e guide in `templates/it/` e `guides/it/`, `AGENTS.md` delle stanze (`templates/room_agents.md`).
+- `chat.py prompt` e `chat.py guide` scelgono la traduzione per la lingua della stanza (`guide --lang it` o `--room`).
+- Restano in inglese, per scelta:
+  - lo scheletro del report research (`CHECKLIST` in research.py): il cancello della fase 5 confronta i suoi
+    segnaposto `<...>` e la riga DEGRADED; tradurlo vuol dire uno scheletro e un controllo per lingua;
+  - l'help della CLI (argparse) e le descrizioni degli strumenti MCP: sono il contratto con il client e la
+    documentazione da terminale, uguali per tutte le stanze;
+  - `activity.py` e `github_data.py`: nessun testo visibile (solo nomi di strumenti e stati che il JS traduce);
+  - `hooks/register.ts`: è la mod di Claude Code, fuori dal processo della stanza;
+  - le skill (decisione 2) e i nomi delle stanze e delle insegne dell'ufficio (dati salvati dall'utente).
+- `i18n_check` controlla anche: variabili che nascondono `say`/`tr`, punti elenco e paragrafi dei documenti tradotti,
+  paragrafi tradotti molto più corti dell'originale (una regola persa).

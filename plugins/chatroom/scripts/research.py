@@ -36,6 +36,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import say  # noqa: E402
+
 TSV_HEAD = 'n\tcommit\tmetric\tstatus\tseconds\tlines\tby\tdescription\tkind\tidea\tspread\n'
 NUMBER = r'([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)'
 PHASES = ('contract', 'drafting', 'investigation', 'evidence', 'final', 'report', 'closed')
@@ -68,10 +71,10 @@ def _git(cwd, *args, check=True, ident=None):
     try:
         r = subprocess.run(['git', *pre, *args], cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL, timeout=600)
     except subprocess.TimeoutExpired:
-        raise ValueError(f"git {' '.join(args)} ran over 600 s")
+        raise ValueError(say('kernel._git.git_ran_over_s', args=' '.join(args)))
     out = (r.stdout + r.stderr).decode('utf-8', errors='replace').strip()
     if check and r.returncode != 0:
-        raise ValueError(f"git {' '.join(args)} failed: {out[:400]}")
+        raise ValueError(say('kernel._git.git_failed', args=' '.join(args), out=out[:400]))
     return out
 
 
@@ -99,7 +102,7 @@ def _load(room, name):
     from chat import read_json
     path = _dir(room) / name
     if not path.is_file():
-        raise ValueError('no research in this room: the lead starts it with chat.py research init')
+        raise ValueError(say('kernel._load.no_research_in_this'))
     return read_json(path, {})
 
 
@@ -168,9 +171,7 @@ def _edit(room, fn):
         c = _load(room, 'contract.json')
         st = _migrate(c, _load(room, 'state.json'))
         if tuple(st.get('kernel') or (0,)) > KERNEL:
-            raise ValueError(f"this research is run by kernel {'.'.join(map(str, st['kernel']))}, newer than this one "
-                             f"({'.'.join(map(str, KERNEL))}, {Path(__file__).resolve()}): use the chat.py of the newer install "
-                             f"(an MCP server keeps its version until the session restarts)")
+            raise ValueError(say('kernel.run.this_research_is_run', map='.'.join(map(str, st['kernel'])), map_='.'.join(map(str, KERNEL)), resolve=Path(__file__).resolve()))
         st['kernel'] = list(KERNEL)
         out = fn(c, st)
         _write(room, 'state.json', st)
@@ -185,8 +186,7 @@ def _check_kernel(room):
     except ValueError:
         return
     if k > KERNEL:
-        raise ValueError(f"this research is run by kernel {'.'.join(map(str, k))}, newer than this one "
-                         f"({'.'.join(map(str, KERNEL))}, {Path(__file__).resolve()}): use the chat.py of the newer install")
+        raise ValueError(say('kernel._check_kernel.this_research_is_run', map='.'.join(map(str, k)), map_='.'.join(map(str, KERNEL)), resolve=Path(__file__).resolve()))
 
 
 def _state(room):
@@ -223,7 +223,7 @@ def parse_guards(text):
     for item in [x.strip() for x in (text or '').split(',') if x.strip()]:
         m = re.fullmatch(r'([A-Za-z0-9_.-]+):(min|max):(\d+(?:\.\d+)?%?)', item)
         if not m:
-            raise ValueError(f'--guard {item!r}: NAME:min|max:TOL (min = lower is better; TOL a number or N%)')
+            raise ValueError(say('kernel.parse_guards.guard_name_min_max', v1=repr(item)))
         out.append({'name': m.group(1), 'direction': m.group(2), 'tol': m.group(3)})
     return out
 
@@ -254,7 +254,7 @@ def _need(room, c, name, *roles):
         return
     have = _role_of(c, name)
     if have not in roles:
-        raise ValueError(f"{name} is {have or 'not given a research role'}: this is for {' or '.join(roles)}")
+        raise ValueError(say('kernel._need.is_this_is_for', name=name, v2=have or 'not given a research role', roles=' or '.join(roles)))
 
 
 def _not_worse(c, value, than):
@@ -279,59 +279,58 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
     """the lead or the user writes the contract: which file changes, how it is built and evaluated, what is sealed, the
     budget, how noise is handled. --draft starts at phase 1 (the evaluator is still being written, sealed later)"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user starts a research (they write the contract)')
+        raise ValueError(say('kernel.init.only_the_lead_or'))
     if (_dir(room) / 'contract.json').exists():
-        raise ValueError(f'this room already has a research: {_dir(room) / "contract.json"}')
+        raise ValueError(say('kernel.init.this_room_already_has', v1=_dir(room) / "contract.json"))
     if direction not in ('min', 'max'):
-        raise ValueError('--direction is min (lower is better) or max')
+        raise ValueError(say('kernel.init.direction_is_min_lower'))
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', metric or ''):
-        raise ValueError('--metric is the name the evaluator prints before the colon, for example val_bpb (it prints "val_bpb: 0.99")')
+        raise ValueError(say('kernel.init.metric_is_the_name'))
     if not (0 < float(budget_min) <= 1440):
-        raise ValueError('--budget-min: the minutes of one run, more than 0 and at most 1440')
+        raise ValueError(say('kernel.init.budget_min_the_minutes'))
     if not (1 <= int(max_evals) <= 100000):
-        raise ValueError('--max-evals: how many runs in all, at least 1')
+        raise ValueError(say('kernel.init.max_evals_how_many'))
     if not (1 <= int(repeats or 1) <= 50):
-        raise ValueError('--repeats: how many times each run measures (the median counts), 1 to 50')
+        raise ValueError(say('kernel.init.repeats_how_many_times'))
     if min_gain is not None and not re.fullmatch(r'\d+(\.\d+)?%?', str(min_gain)):
-        raise ValueError('--min-gain: a number (absolute) or a percentage like 1.5%')
+        raise ValueError(say('kernel.init.min_gain_a_number'))
     if build_min is not None and not (0 < float(build_min) <= 1440):
-        raise ValueError('--build-min: the minutes a build may take, more than 0 and at most 1440')
+        raise ValueError(say('kernel.init.build_min_the_minutes'))
     guards = parse_guards(guards)
     task = _dir(room) / 'task.md'
     if not task.is_file() or not task.read_text(encoding='utf-8', errors='replace').strip():
-        raise ValueError(f'write the contract first, with the user, in {task} (phase 0; chat.py guide research has the template)')
+        raise ValueError(say('kernel.init.write_the_contract_first', task=task))
     top = Path(_git(repo, 'rev-parse', '--show-toplevel')).resolve()
     if _git(top, 'status', '--porcelain', '--untracked-files=no'):
-        raise ValueError(f'{top} has uncommitted changes: commit or stash them first (the research starts from a clean commit)')
+        raise ValueError(say('kernel.init.has_uncommitted_changes_commit', top=top))
     rel_prog = _rel(top, program)
     if not (top / rel_prog).is_file() or not _git(top, 'ls-files', '--', rel_prog):
-        raise ValueError(f'{rel_prog} is not a tracked file of {top}: the program must be one committed file (not a folder)')
+        raise ValueError(say('kernel.init.is_not_a_tracked', rel_prog=rel_prog, top=top))
     seals = {}
     for f in sealed:
         rel = _rel(top, f)
         if rel == rel_prog:
-            raise ValueError(f'{rel} is the program: it cannot also be sealed')
+            raise ValueError(say('kernel.init.is_the_program_it', rel=rel))
         if not (top / rel).is_file():
-            raise ValueError(f'{rel} is not a file: seal each file (a folder of data goes in --keep, or outside the repository)')
+            raise ValueError(say('kernel.init.is_not_a_file', rel=rel))
         if not _git(top, 'ls-files', '--', rel):
-            raise ValueError(f'sealed file {rel} is not tracked in {top}: only committed files can be sealed (the research '
-                             f'worktree holds only them). Commit it, or keep it outside the repository, read-only')
+            raise ValueError(say('kernel.init.sealed_file_is_not', rel=rel, top=top))
         seals[rel] = _git(top, 'rev-parse', f'HEAD:{rel}')
     if not draft and not evaluate:
-        raise ValueError('--evaluate is needed (or --draft, to write the evaluator in phase 1 and seal it later)')
+        raise ValueError(say('kernel.init.evaluate_is_needed_or'))
     keep = [k.strip().replace('\\', '/').strip('/') + '/' for k in keep if k.strip().strip('/.')]
     if any(k.split('/')[0] in ('..', '.git') or k == rel_prog + '/' for k in keep):
-        raise ValueError('--keep names folders inside the worktree for data the evaluator needs (not .git, not ..)')
+        raise ValueError(say('kernel.init.keep_names_folders_inside'))
     tag = tag or time.strftime('r%m%d-%H%M')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', tag):
-        raise ValueError('--tag: letters, digits, dot, dash or underscore')
+        raise ValueError(say('kernel.init.tag_letters_digits_dot'))
     branch = f'research/{tag}'
     if _git(top, 'branch', '--list', branch):
-        raise ValueError(f'the branch {branch} already exists: pick another --tag')
+        raise ValueError(say('kernel.init.the_branch_already_exists', branch=branch))
     d = _dir(room)
     work = d / 'work'
     if work.exists():
-        raise ValueError(f'{work} already exists: a research left half made? remove it (git worktree remove --force "{work}") first')
+        raise ValueError(say('kernel.init.already_exists_a_research', work=work))
     (d / 'runs').mkdir(parents=True, exist_ok=True)
     _git(top, 'worktree', 'add', '-b', branch, str(work), 'HEAD')   # its own folder: the user's checkout is never touched
     subs = _submodules(work)
@@ -358,20 +357,17 @@ def init(room, by, program, evaluate, metric, direction='min', budget_min=5.0, m
     _save(room, 'state.json', st)
     (d / 'results.tsv').write_text(TSV_HEAD, encoding='utf-8')
     _log(room, by, 'init', {'program': rel_prog, 'phase': st['phase'], 'task_sha': contract['task_sha'], 'contract': contract})
-    noise = (f", median of {contract['repeats']} measures" if contract['repeats'] > 1 else '') + \
-            (f", a keep must beat the best by more than {contract['min_gain']}" if contract['min_gain'] else '') + \
-            (f", guards {', '.join(g['name'] + ' ' + g['direction'] + ' ' + g['tol'] for g in guards)} (median vs baseline)" if guards else '')
-    return (f"🔬 research {tag} open at phase {st['phase']} ({PHASES[st['phase']]}): only {rel_prog} changes, in {work} (branch "
-            f"{branch}); " + (f"build `{build}`, " if build else '') + (f"evaluator `{evaluate}`, " if evaluate else 'evaluator to be written, ')
-            + f"metric {metric} ({'lower' if direction == 'min' else 'higher'} is better) read from "
-            f"{'the result file $CHATROOM_RESULT' if result_file else 'the output (exactly one line per measure)'}{noise}, "
-            f"{contract['budget_s']} s per run, {max_evals} runs" + (f"; sealed: {', '.join(seals)}" if seals else '')
-            + (f"; kept untouched (data): {', '.join(keep)}" if keep else '')
-            + (f"; a build may take {contract['build_s'] or 2 * contract['budget_s']} s" if build else '')
-            + ('; WARNING: the build output is removed before every run unless its folder is in --keep (a full rebuild each time)'
+    noise = (say('kernel.init.median_of_measures', repeats=contract['repeats']) if contract['repeats'] > 1 else '') + \
+            (say('kernel.init.a_keep_must_beat', min_gain=contract['min_gain']) if contract['min_gain'] else '') + \
+            (say('kernel.init.guards_median_vs_baseline', v1=', '.join(g['name'] + ' ' + g['direction'] + ' ' + g['tol'] for g in guards)) if guards else '')
+    return (say('kernel.init.research_open_at_phase', tag=tag, phase=st['phase'], PHASES=PHASES[st['phase']], rel_prog=rel_prog, work=work, branch=branch) + (say('kernel.init.build', build=build) if build else '') + (say('kernel.init.evaluator', evaluate=evaluate) if evaluate else say('kernel.init.evaluator_to_be_written'))
+            + say('kernel.init.metric_is_better_read', metric=metric, v2='lower' if direction == 'min' else 'higher', v3='the result file $CHATROOM_RESULT' if result_file else 'the output (exactly one line per measure)', noise=noise, budget_s=contract['budget_s'], max_evals=max_evals) + (say('kernel.init.sealed', seals=', '.join(seals)) if seals else '')
+            + (say('kernel.init.kept_untouched_data', keep=', '.join(keep)) if keep else '')
+            + (say('kernel.init.a_build_may_take', v1=contract['build_s'] or 2 * contract['budget_s']) if build else '')
+            + (say('kernel.init.warning_the_build_output')
                if build and not keep else '') + subs
-            + f"; one evaluate call can take up to {max_run_seconds(contract)} s"
-            + ('. Phase 1: write and smoke-run the evaluator, then the lead seals it.' if draft else '. The first run is the baseline.'))
+            + say('kernel.init.one_evaluate_call_can', max_run_seconds=max_run_seconds(contract))
+            + (say('kernel.init.phase_write_and_smoke') if draft else say('kernel.init.the_first_run_is')))
 
 
 def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=None, build=None, build_min=None,
@@ -379,79 +375,78 @@ def amend(room, by, evaluate=None, budget_min=None, max_evals=None, result_file=
     """the lead changes the contract: budgets at any time; what is measured and how only before a baseline is kept (a
     crashed baseline is fixed this way, not by starting over)"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user changes the contract')
+        raise ValueError(say('kernel.amend.only_the_lead_or'))
     c, st = _state(room)
     said = []
     measured = any(x is not None for x in (evaluate, result_file, build, repeats, min_gain, guards))
     if measured and st['best'] is not None:
-        raise ValueError('how runs are measured cannot change after a baseline is kept: the runs would not compare')
+        raise ValueError(say('kernel.amend.how_runs_are_measured'))
     for key, value, label in (('evaluate', evaluate, 'evaluator'), ('build', build, 'build'), ('final', final, 'final evaluator')):
         if value is not None:
             c[key] = value
             said.append(f'{label} `{value}`')
     if result_file is not None:
         c['metric_source'] = 'file' if result_file else 'output'
-        said.append(f"metric from {'the result file' if result_file else 'the output'}")
+        said.append(say('kernel.amend.metric_from', v1=say('kernel.word.result_file') if result_file else say('kernel.word.output')))
     if repeats is not None:
         if not (1 <= int(repeats) <= 50):
-            raise ValueError('--repeats: 1 to 50')
+            raise ValueError(say('kernel.amend.repeats_to'))
         c['repeats'] = int(repeats)
-        said.append(f'median of {repeats} measures')
+        said.append(say('kernel.amend.median_of_measures', repeats=repeats))
     if guards is not None:
         c['guards'] = parse_guards(guards)
         said.append('guards ' + (', '.join(g['name'] for g in c['guards']) or 'none'))
     if min_gain is not None:
         if not re.fullmatch(r'\d+(\.\d+)?%?', str(min_gain)):
-            raise ValueError('--min-gain: a number or a percentage like 1.5%')
+            raise ValueError(say('kernel.amend.min_gain_a_number'))
         c['min_gain'] = str(min_gain)
-        said.append(f'minimal gain {min_gain}')
+        said.append(say('kernel.amend.minimal_gain', min_gain=min_gain))
     if budget_min is not None:
         if not (0 < float(budget_min) <= 1440):
-            raise ValueError('--budget-min: more than 0 and at most 1440')
+            raise ValueError(say('kernel.amend.budget_min_more_than'))
         c['budget_s'] = max(1, int(float(budget_min) * 60))
-        said.append(f"{c['budget_s']} s per run")
+        said.append(say('kernel.amend.s_per_run', budget_s=c['budget_s']))
     if build_min is not None:
         if not (0 < float(build_min) <= 1440):
-            raise ValueError('--build-min: more than 0 and at most 1440')
+            raise ValueError(say('kernel.amend.build_min_more_than'))
         c['build_s'] = max(1, int(float(build_min) * 60))
-        said.append(f"{c['build_s']} s per build")
+        said.append(say('kernel.amend.s_per_build', build_s=c['build_s']))
     if max_evals is not None:
         if not (st['evals'] < int(max_evals) <= 100000):
-            raise ValueError(f"--max-evals must be more than the {st['evals']} runs already made")
+            raise ValueError(say('kernel.amend.max_evals_must_be', evals=st['evals']))
         c['max_evals'] = int(max_evals)
-        said.append(f'{max_evals} runs in all')
+        said.append(say('kernel.amend.runs_in_all', max_evals=max_evals))
     if not said:
-        raise ValueError('research amend: --evaluate, --build, --final, --result-file/--no-result-file, --repeats, '
-                         '--min-gain, --guard, --budget-min, --build-min or --max-evals')
+        raise ValueError(say('kernel.amend.research_amend_evaluate_build'))
     _save(room, 'contract.json', c)
     if measured:
         _edit(room, lambda c2, s2: s2.update(protocol=None))   # the next baseline (or smoke) records the protocol anew
     _log(room, by, 'amend', said)
-    return f"🔬 research {c['tag']} contract changed by {by}: " + ', '.join(said)
+    return say('kernel.amend.research_contract_changed_by', tag=c['tag'], by=by) + ', '.join(said)
 
 
 def roles(room, by, pairs):
     """the lead names who plays which research role: PROPOSER=P WORKER=W1,W2 REGISTRAR=R AUDITOR=A SEARCHER=S1,S2"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user assigns research roles')
+        raise ValueError(say('kernel.roles.only_the_lead_or'))
     c, _ = _state(room)
     out = dict(c.get('roles', {}))
     for pair in pairs:
         role, _, names = pair.partition('=')
         role = role.strip().upper()
         if role not in ROLES:
-            raise ValueError(f'unknown role {role}: one of {", ".join(ROLES)}')
+            raise ValueError(say('kernel.roles.unknown_role_one_of', role=role, ROLES=", ".join(ROLES)))
         out[role] = [n.strip() for n in names.split(',') if n.strip()]
     seen = {}
     for role, names in out.items():
         for n in names:
             if n in seen and seen[n] != role:
-                raise ValueError(f'{n} cannot be both {seen[n]} and {role}')
+                raise ValueError(say('kernel.roles.cannot_be_both_and', n=n, seen=seen[n], role=role))
             seen[n] = role
     c['roles'] = out
     _save(room, 'contract.json', c)
     _log(room, by, 'roles', out)
-    return '🔬 research roles: ' + '; '.join(f"{r} {', '.join(n)}" for r, n in out.items() if n)
+    return say('kernel.roles.research_roles') + '; '.join(f"{r} {', '.join(n)}" for r, n in out.items() if n)
 
 
 # ---------------------------------------------------------------------------------------------------------- worktrees
@@ -460,13 +455,13 @@ def _check_work(c, wk):
     user's checkout"""
     work = Path(wk['work'])
     if not work.is_dir():
-        raise ValueError(f'the research worktree is missing ({work}): the research cannot go on there. Tell the lead.')
+        raise ValueError(say('kernel._check_work.the_research_worktree_is', work=work))
     top = _git(work, 'rev-parse', '--show-toplevel', check=False)
     if not top or Path(top).resolve() != work.resolve():
-        raise ValueError(f'{work} is not the research worktree any more (git sees {top or "nothing"}): stop and tell the lead.')
+        raise ValueError(say('kernel._check_work.is_not_the_research', work=work, v2=top or "nothing"))
     branch = _git(work, 'rev-parse', '--abbrev-ref', 'HEAD', check=False)
     if branch != wk['branch']:
-        raise ValueError(f"the research worktree is on {branch}, not on {wk['branch']}: switch back (git switch {wk['branch']}).")
+        raise ValueError(say('kernel._check_work.the_research_worktree_is2', branch=branch, branch_=wk['branch']))
     return work
 
 
@@ -497,38 +492,37 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
     idea) or an optimizer (the same agent, a few refinements). Each worker gets its own worktree and branch; the lead
     chooses the parent, never the idea"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user assigns cycles')
+        raise ValueError(say('kernel.assign.only_the_lead_or'))
     if kind not in ('explorer', 'optimizer'):
-        raise ValueError('--type explorer or optimizer')
+        raise ValueError(say('kernel.assign.type_explorer_or_optimizer'))
     _check_kernel(room)
     c, st = _state(room)
     if st['phase'] != 2:
-        raise ValueError(f"cycles are assigned in the investigation (phase 2); now phase {st['phase']} ({PHASES[st['phase']]})")
+        raise ValueError(say('kernel.assign.cycles_are_assigned_in', phase=st['phase'], PHASES=PHASES[st['phase']]))
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', worker or ''):
-        raise ValueError('a worker name: letters, digits, - or _')
+        raise ValueError(say('kernel.assign.a_worker_name_letters'))
     if c.get('roles') and _role_of(c, worker) != 'WORKER':
-        raise ValueError(f'{worker} is not a WORKER of this research (research roles WORKER=...)')
+        raise ValueError(say('kernel.assign.is_not_a_worker', worker=worker))
     if idea and not any(i['id'] == idea and i['status'] in ('accepted', 'tried') for i in st['ideas']):
-        raise ValueError(f'no accepted idea {idea}')
+        raise ValueError(say('kernel.assign.no_accepted_idea', idea=idea))
     parent = parent or 'best'
     if parent == 'best':
         parent = f"att-{st['best']['n']}" if st['best'] else 'base'
     if parent != 'base':
         if not re.fullmatch(r'att-\d+', parent):
-            raise ValueError('--parent base, best or att-N')
+            raise ValueError(say('kernel.assign.parent_base_best_or'))
         pa = next((x for x in st['attempts'] if f"att-{x['n']}" == parent), None)
         if not pa or pa['state'] == 'revoked' or pa['status'] != 'keep' or pa['kind'] != 'attempt':
-            raise ValueError(f'{parent} cannot be a parent: it must be a kept attempt, not revoked')
+            raise ValueError(say('kernel.assign.cannot_be_a_parent', parent=parent))
     if st.get('pending') and st['pending'].get('worker') in (worker, '_main'):
         if _run_alive(room):
-            raise ValueError(f'{worker} has a run in progress: wait for it')
+            raise ValueError(say('kernel.assign.has_a_run_in', worker=worker))
         _reconcile(room, c, st)                        # a run cut off half way: recorded as a crash first
         c, st = _state(room)
     family = 'base' if parent in ('base', f"att-{(st.get('baseline') or {}).get('n')}") else _family(st, int(parent[4:]))
     recent = [a['family'] for a in st['assigns'][-4:]]
     if not force and len(recent) == 4 and family != 'base' and len(set(recent + [family])) == 1:
-        raise ValueError(f'the last four cycles all grew family {family}: start one from base (an explorer on a fresh idea), '
-                         f'or --force')
+        raise ValueError(say('kernel.assign.the_last_four_cycles', family=family))
     commit = _commit_of(c, parent)
     d = _dir(room)
     work = d / f'work-{worker}'
@@ -564,11 +558,11 @@ def assign(room, by, worker, idea=None, parent='best', kind='explorer', force=Fa
     _log(room, by, 'assign', {'worker': worker, 'parent': parent, 'type': kind, 'idea': idea})
     keep = c.get('keep') or []
     old = st['workers'].get(worker, {})
-    return (f"🔬 cycle for {worker}: {kind} from {parent}" + (f" on idea {idea}" if idea else '') + f", worktree {work}" + subs
-            + (f"; its own copies of {', '.join(keep)} (data, build) start empty: fill or link them before the first run"
+    return (say('kernel.assign.cycle_for_from', worker=worker, kind=kind, parent=parent) + (say('kernel.assign.on_idea', idea=idea) if idea else '') + say('kernel.assign.worktree', work=work) + subs
+            + (say('kernel.assign.its_own_copies_of', keep=', '.join(keep))
                if keep and fresh else '')
-            + (f"; {old.get('crashes')} crashes in a row so far" if old.get('crashes') else '')
-            + ('; still PAUSED: research resume ' + worker if old.get('paused') else ''))
+            + (say('kernel.assign.crashes_in_a_row', get=old.get('crashes')) if old.get('crashes') else '')
+            + (say('kernel.assign.still_paused_research_resume') + worker if old.get('paused') else ''))
 
 
 def _family(st, n):
@@ -592,7 +586,7 @@ def _worker(st, name):
         return name, st['workers'][name]
     if list(st['workers']) == ['_main']:
         return '_main', st['workers']['_main']
-    raise ValueError(f'{name} has no worktree: the lead starts its cycle with research assign {name}')
+    raise ValueError(say('kernel._worker.has_no_worktree_the', name=name))
 
 
 # ---------------------------------------------------------------------------------------------------------- running
@@ -661,7 +655,7 @@ def _measure(c, work, d, n, env, log, on_start=None):
         secs += s
         text = log.read_text(encoding='utf-8', errors='replace')
         if code != 0:
-            return None, (f"build over {c.get('build_s') or 2 * c['budget_s']} s: killed" if code is None else f'build exit {code}'), \
+            return None, (say('kernel._measure.build_over_s_killed', v1=c.get('build_s') or 2 * c['budget_s']) if code is None else say('kernel._measure.build_exit', code=code)), \
                 secs, '', [], text
     values, protocol, gvals = [], [], {g['name']: [] for g in c.get('guards', [])}
     pattern = rf"^\s*{re.escape(c['metric'])}\s*:\s*{NUMBER}\s*$"
@@ -687,18 +681,18 @@ def _measure(c, work, d, n, env, log, on_start=None):
         source = (result.read_text(encoding='utf-8', errors='replace') if result.is_file() else '') if c.get('metric_source') == 'file' else out
         found = re.findall(pattern, source, re.MULTILINE)
         if len(found) > 1:
-            return None, f"{len(found)} \"{c['metric']}:\" lines: ambiguous (only the evaluator may print it, once)", secs, '', protocol, text
+            return None, say('kernel._measure.lines_ambiguous_only_the', len_found=len(found), metric=c['metric']), secs, '', protocol, text
         if not found:
-            return None, (f"no \"{c['metric']}: value\" in the result file" if c.get('metric_source') == 'file'
+            return None, (say('kernel._measure.no_value_in_the', metric=c['metric']) if c.get('metric_source') == 'file'
                           else f"no \"{c['metric']}:\" line"), secs, '', protocol, text
         v = float(found[0])
         if v != v or abs(v) == float('inf'):
-            return None, 'the metric is not a finite number', secs, '', protocol, text
+            return None, say('kernel._measure.the_metric_is_not'), secs, '', protocol, text
         values.append(v)
         for g in gvals:
             got = re.findall(rf"^\s*{re.escape(g)}\s*:\s*{NUMBER}\s*$", source, re.MULTILINE)
             if len(got) != 1:
-                return None, f'guard {g}: {len(got)} "{g}:" lines (exactly one per measure)', secs, '', protocol, text
+                return None, say('kernel._measure.guard_lines_exactly_one', g=g, len_got=len(got)), secs, '', protocol, text
             gvals[g].append(float(got[0]))
     value = statistics.median(values)
     spread = f'{min(values):.6g}..{max(values):.6g}' if len(values) > 1 else ''
@@ -723,12 +717,11 @@ def evaluate(room, name, desc, idea=None, kind='attempt', of=None, seed=None):
     smoke (phase 1) checks the evaluator runs"""
     c, st = _state(room)
     if kind not in ('attempt', 'fix', 'smoke', *AUX_KINDS):
-        raise ValueError(f'--kind attempt, fix, smoke, {", ".join(AUX_KINDS)}')
+        raise ValueError(say('kernel.evaluate.kind_attempt_fix_smoke', AUX_KINDS=", ".join(AUX_KINDS)))
     _need(room, c, name, 'WORKER')
     held = _gpu_hold(room)
     if held and held['by'] != name:
-        raise ValueError(f"the GPU is held by {held['by']} ({held['reason']}) until {time.strftime('%H:%M', time.localtime(held['until']))}"
-                         f"{' or its build ends' if held.get('pid') else ''}: try again then (research status shows it)")
+        raise ValueError(say('kernel.evaluate.the_gpu_is_held', by=held['by'], reason=held['reason'], strftime=time.strftime('%H:%M', time.localtime(held['until'])), v4=' or its build ends' if held.get('pid') else ''))
     return _locked(room, c, name, lambda: _evaluate(room, name, desc, idea, kind, of, seed))
 
 
@@ -756,8 +749,7 @@ def _locked(room, c, name, fn):
             except ValueError:
                 age, alive = 0, True
             if alive and age < budget + 300:
-                raise ValueError(f'another evaluation is running (by {who}, {age:.0f} s ago; lock {lock}): one run at a time on '
-                                 f'the evaluator; try again when it ends (research status shows it)')
+                raise ValueError(say('kernel._locked.another_evaluation_is_running', who=who, v2=format(age, '.0f'), lock=lock))
             tomb = lock.with_name(f'eval.lock.dead.{secrets.token_hex(4)}')
             try:
                 os.rename(lock, tomb)                 # its owner is dead, or it ran far over any run's limit: one taker only
@@ -776,7 +768,7 @@ def _locked(room, c, name, fn):
                 pass
             _stop_child(room)                         # the owner is gone: its evaluator must not keep the GPU
     else:
-        raise ValueError(f'could not take the evaluation lock {lock}: try again')
+        raise ValueError(say('kernel._locked.could_not_take_the', lock=lock))
     try:
         return fn()
     finally:
@@ -824,12 +816,12 @@ def _reconcile(room, c, st):
                 s2['aux'] += 1
             s2['attempts'].append({'n': p['n'], 'worker': key, 'commit': p.get('commit') or '', 'metric': None, 'status': 'crash',
                                    'kind': p.get('kind', 'attempt'), 'idea': p.get('idea'), 'state': 'committed', 'parent_n': None,
-                                   'desc': 'INTERRUPTED (worktree lost): ' + p.get('desc', ''), 'ts': time.time()})
+                                   'desc': say('kernel.lost.interrupted_worktree_lost') + p.get('desc', ''), 'ts': time.time()})
             s2['pending'] = None
         _edit(room, lost)
-        _row(room, p['n'], p.get('commit') or '', None, 'crash', 0, '', p.get('by', '?'), 'INTERRUPTED (worktree lost): ' + p.get('desc', ''),
+        _row(room, p['n'], p.get('commit') or '', None, 'crash', 0, '', p.get('by', '?'), say('kernel._reconcile.interrupted_worktree_lost') + p.get('desc', ''),
              p.get('kind', 'attempt'), p.get('idea') or '')
-        line = f"🔬 att-{p['n']} by {p.get('by', '?')} was interrupted and its worktree is not usable ({exc}): recorded as CRASH; the lead re-assigns {key}"
+        line = say('kernel._reconcile.att_by_was_interrupted', n=p['n'], get=p.get('by', '?'), exc=exc, key=key)
         room.append(p.get('by', 'LEAD'), line, 'board')
         return line
     head = _git(work, 'rev-parse', 'HEAD', check=False)
@@ -858,10 +850,9 @@ def _reconcile(room, c, st):
     _row(room, p['n'], commit, None, 'crash', 0, p.get('lines', ''), p.get('by', '?'), 'INTERRUPTED: ' + p.get('desc', ''),
          p.get('kind', 'attempt'), p.get('idea') or '')
     has_tag = bool(_git(work, 'tag', '--list', tag))
-    what = 'the drafted files' if p.get('kind') == 'smoke' else c['program']
-    line = (f"🔬 att-{p['n']} by {p.get('by', '?')} was interrupted half way (the call ended before the result): recorded as "
-            f"CRASH, {what} back to the last good state" + (f"; its code stays in tag {tag}" if has_tag else f"; its code is in commit {commit}")
-            + (f" (git checkout {tag} -- . brings the drafted files back)" if p.get('kind') == 'smoke' else ''))
+    what = say('kernel._reconcile.the_drafted_files') if p.get('kind') == 'smoke' else c['program']
+    line = (say('kernel._reconcile.att_by_was_interrupted2', n=p['n'], get=p.get('by', '?'), what=what) + (say('kernel._reconcile.its_code_stays_in', tag=tag) if has_tag else say('kernel._reconcile.its_code_is_in', commit=commit))
+            + (say('kernel._reconcile.git_checkout_brings_the', tag=tag) if p.get('kind') == 'smoke' else ''))
     room.append(p.get('by', 'LEAD'), line, 'board')
     return line
 
@@ -875,79 +866,72 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
         mine = st['pending'].get('worker') in (name, '_main') or (st['pending'].get('worker') not in st['workers'])
         line = _reconcile(room, c, st)
         if line and mine:
-            raise ValueError(line + '. Edit the program again (git checkout <that tag> -- <program> brings it back) and evaluate.')
+            raise ValueError(line + say('kernel._evaluate.edit_the_program_again'))
         c, st = _state(room)                             # another worker's cut-off run: recorded, and this run goes on
     phase = st['phase']
     if kind == 'attempt' and phase != 2:
-        raise ValueError(f"attempts run in the investigation (phase 2); now phase {phase} ({PHASES[phase]})"
+        raise ValueError(say('kernel._evaluate.attempts_run_in_the', phase=phase, PHASES=PHASES[phase])
                          + ('; in phase 1 use --kind smoke' if phase == 1 else '; in phase 3 use --kind ablation|baseline|control|repeat' if phase == 3 else ''))
     if kind in AUX_KINDS and phase != 3:
-        raise ValueError(f'{kind} runs belong to the evidence phase (3); now phase {phase} ({PHASES[phase]})')
+        raise ValueError(say('kernel._evaluate.runs_belong_to_the', kind=kind, phase=phase, PHASES=PHASES[phase]))
     if kind == 'smoke' and phase != 1:
-        raise ValueError('smoke runs belong to the drafting phase (1)')
+        raise ValueError(say('kernel._evaluate.smoke_runs_belong_to'))
     if not c.get('evaluate'):
-        raise ValueError('the contract has no evaluator yet: the lead sets it with research amend --evaluate')
+        raise ValueError(say('kernel._evaluate.the_contract_has_no'))
     key, wk = _worker(st, name)
     work = _check_work(c, wk)
     if not (work / c['program']).is_file():
-        raise ValueError(f"{c['program']} is missing from {work}: restore it (git checkout {wk['head']} -- {c['program']}). Nothing ran.")
+        raise ValueError(say('kernel._evaluate.is_missing_from_restore', program=c['program'], work=work, head=wk['head']))
     if kind == 'attempt' and seed is not None:
-        raise ValueError('attempts use the evaluator\'s own seed; --seed is for repeats, ablations and baselines (phase 3)')
+        raise ValueError(say('kernel._evaluate.attempts_use_the_evaluator'))
     if kind == 'attempt':
         if st['evals'] >= c['max_evals']:
-            raise ValueError(f"the budget of {c['max_evals']} runs is used up: the research is over, tell the lead")
+            raise ValueError(say('kernel._evaluate.the_budget_of_runs', max_evals=c['max_evals']))
         if wk.get('paused'):
-            raise ValueError(f'{name} is paused after {CRASH_MAX} crashes in a row: the lead looks at the logs and resumes it '
-                             f'(research resume {name})')
+            raise ValueError(say('kernel._evaluate.is_paused_after_crashes', name=name, CRASH_MAX=CRASH_MAX))
         if fix and not wk.get('fix_ok'):
-            raise ValueError('a fix run needs the AUDITOR (or the lead) to allow it first: research allow-fix '
-                             f'{name} --reason "what it corrects" (a fix is kept at equal metric, so it must be a real correction)')
+            raise ValueError(say('kernel._evaluate.a_fix_run_needs', name=name))
         if fix and not wk.get('best'):
-            raise ValueError('a fix corrects a kept state: your line has no keep yet')
+            raise ValueError(say('kernel._evaluate.a_fix_corrects_a'))
         if wk.get('since_evidence', 0) >= S_MAX and c.get('roles'):
-            raise ValueError(f'{S_MAX} attempts without any evidence proposed: propose what you learned (research '
-                             f'propose-evidence --source att-N) or ask the lead for a redirect, then run again')
+            raise ValueError(say('kernel._evaluate.attempts_without_any_evidence', S_MAX=S_MAX))
     if phase >= 2:
         for rel, sha in c['sealed'].items():
             if not _seal_holds(work, rel, sha):
-                raise ValueError(f'the sealed file {rel} changed: restore it (git checkout {wk["head"]} -- {rel}). Nothing ran.')
+                raise ValueError(say('kernel._evaluate.the_sealed_file_changed', rel=rel, head=wk["head"]))
     tracked = [x for x in _git(work, 'diff', '--name-only', wk['head']).splitlines() if x.strip()]
     if phase >= 2:
         others = [f for f in tracked if f != c['program']]
         if others:
-            raise ValueError(f"only {c['program']} may change; also changed: {', '.join(others[:10])}. Restore them "
-                             f"(git checkout {wk['head']} -- <file>). Nothing ran.")
+            raise ValueError(say('kernel._evaluate.only_may_change_also', program=c['program'], others=', '.join(others[:10]), head=wk['head']))
     kept = tuple(c.get('keep', []))
     untracked = [x[3:].strip('"') for x in _git(work, 'status', '--porcelain', '--untracked-files=all').splitlines() if x.startswith('??')]
     untracked = [f for f in untracked if '__pycache__/' not in f and not f.endswith(('.pyc', '.pyo')) and not f.startswith(kept)]
     if untracked and phase >= 2:
-        raise ValueError(f"only {c['program']} may change; new files are not allowed: {', '.join(untracked[:10])}. Delete them "
-                         f"(the program must stand alone). Nothing ran.")
+        raise ValueError(say('kernel._evaluate.only_may_change_new', program=c['program'], untracked=', '.join(untracked[:10])))
     first = st.get('baseline') is None and kind == 'attempt'
     if kind == 'attempt':
         if first and c['program'] in tracked:
-            raise ValueError(f"the first run is the baseline: run it with {c['program']} unchanged "
-                             f"(git checkout {wk['head']} -- {c['program']}), then try your idea. Nothing ran.")
+            raise ValueError(say('kernel._evaluate.the_first_run_is', program=c['program'], head=wk['head']))
         if not first and c['program'] not in tracked and wk.get('best'):
-            raise ValueError(f"{c['program']} is the same as your best (att-{wk['best']['n']}): change it first. Nothing ran.")
+            raise ValueError(say('kernel._evaluate.is_the_same_as', program=c['program'], n=wk['best']['n']))
         program_sha = _sha(work / c['program'])
         seen = next((p for p in wk.get('programs', []) if p['sha'] == program_sha), None)
         if seen and not first:
-            raise ValueError(f"this exact program already ran as att-{seen['n']}: change it. Nothing ran.")
+            raise ValueError(say('kernel._evaluate.this_exact_program_already', n=seen['n']))
     if kind in AUX_KINDS:
         if not of or not any(f"att-{a['n']}" == of and a['state'] != 'revoked' for a in st['attempts']):
-            raise ValueError(f'a {kind} run says what it measures against: --of att-N, an attempt that exists (usually the best)')
+            raise ValueError(say('kernel._evaluate.a_run_says_what', kind=kind))
     idea = idea or wk.get('idea')
     if idea and not any(i['id'] == idea for i in st['ideas']):
-        raise ValueError(f'no idea {idea}')
+        raise ValueError(say('kernel._evaluate.no_idea', idea=idea))
     desc = ' '.join((desc or ('baseline' if first else '')).split())[:200]
     if not desc:
-        raise ValueError('say what this run tries: --desc "one line"')
+        raise ValueError(say('kernel._evaluate.say_what_this_run'))
     n = (st['evals'] + 1) if kind == 'attempt' else (AUX_BASE + st['aux'] + 1) if kind in AUX_KINDS else (SMOKE_BASE + st['aux'] + 1)
     tag = f"{c['branch']}/att-{n}"
     if _git(work, 'tag', '--list', tag):
-        raise ValueError(f'tag {tag} already exists while the state counts otherwise: the research state and the repository '
-                         f'disagree; tell the lead')
+        raise ValueError(say('kernel._evaluate.tag_already_exists_while', tag=tag))
     pending = {'n': n, 'by': name, 'worker': key, 'desc': desc, 'ts': time.time(), 'kind': kind, 'idea': idea}
     _edit(room, lambda c2, s2: s2.update(pending=pending))  # from here a cut-off run is a crash at the next call
     try:
@@ -976,7 +960,7 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     def started(pid):                                     # recorded: a caller killed now leaves a process the kernel can stop
         pending['child'], pending['child_ts'] = pid, time.time()
         _edit(room, lambda c2, s2: s2.update(pending=dict(pending)))
-    room.append(name, f"🔬 att-{n} [{kind}] running ({c['budget_s']} s budget" + (f" x{c['repeats']}" if c.get('repeats', 1) > 1 else '')
+    room.append(name, say('kernel._evaluate.att_running_s_budget', n=n, kind=kind, budget_s=c['budget_s']) + (f" x{c['repeats']}" if c.get('repeats', 1) > 1 else '')
                 + f"): {desc[:100]}", 'board')
     value, why, secs, spread, protocol, text = _measure(c, work, d, n, env, log, started)
     guards = c.pop('_guards', {}) if value is not None else {}
@@ -984,33 +968,32 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     if value is not None and kind == 'attempt' and not first:
         for g in c.get('guards', []):
             if g['name'] in base_g and _guard_broken(g, guards[g['name']], base_g[g['name']]):
-                value, why = None, (f"guard {g['name']} = {guards[g['name']]:.6g} (median), worse than the baseline's "
-                                    f"{base_g[g['name']]:.6g} by more than {g['tol']}")
+                value, why = None, (say('kernel._evaluate.guard_median_worse_than', name=g['name'], v2=format(guards[g['name']], '.6g'), v3=format(base_g[g['name']], '.6g'), tol=g['tol']))
                 break
     proto = ' | '.join(protocol)
     if value is not None and kind == 'attempt' and st.get('protocol') is not None and proto != st['protocol']:
-        value, why = None, f"the evaluation protocol changed (protocol: {proto[:120]} instead of {st['protocol'][:120]})"
+        value, why = None, say('kernel._evaluate.the_evaluation_protocol_changed', proto=proto[:120], protocol=st['protocol'][:120])
     if value is None:
         status = 'crash'
     elif kind == 'smoke':
-        status, why = 'smoke', 'the evaluator runs and reports the metric'
+        status, why = 'smoke', say('kernel._evaluate.the_evaluator_runs_and')
     elif kind in AUX_KINDS:
-        status, why = kind, f'measured against {of}'
+        status, why = kind, say('kernel._evaluate.measured_against', of=of)
     else:
         best = wk.get('best') or st.get('baseline')     # a line without a keep yet competes with the baseline
         if fix and best:
             if _not_worse(c, value, best['metric']):
-                status, why = 'keep', f"fix: not worse than att-{best['n']} ({best['metric']:.6g})" + \
+                status, why = 'keep', say('kernel._evaluate.fix_not_worse_than', n=best['n'], v2=format(best['metric'], '.6g')) + \
                     (f" within {c['min_gain']}" if c.get('min_gain') else '')
             else:
-                status, why = 'discard', f"fix: worse than att-{best['n']} ({best['metric']:.6g})" + \
-                    (f" by more than {c['min_gain']}" if c.get('min_gain') else '')
+                status, why = 'discard', say('kernel._evaluate.fix_worse_than_att', n=best['n'], v2=format(best['metric'], '.6g')) + \
+                    (say('kernel._evaluate.by_more_than', min_gain=c['min_gain']) if c.get('min_gain') else '')
         elif first or _better(c, value, best['metric'] if best else None):
             status = 'keep'
-            why = 'baseline' if first else (f"better than att-{best['n']} ({best['metric']:.6g})" if best else 'first of this line')
+            why = 'baseline' if first else (say('kernel._evaluate.better_than_att', n=best['n'], v2=format(best['metric'], '.6g')) if best else say('kernel._evaluate.first_of_this_line'))
         else:
-            status, why = 'discard', f"not better than att-{best['n']} ({best['metric']:.6g})" + \
-                (f" by more than {c['min_gain']}" if c.get('min_gain') else '')
+            status, why = 'discard', say('kernel._evaluate.not_better_than_att', n=best['n'], v2=format(best['metric'], '.6g')) + \
+                (say('kernel._evaluate.by_more_than', min_gain=c['min_gain']) if c.get('min_gain') else '')
     if status != 'keep' or kind != 'attempt':
         if kind != 'smoke':
             _git(work, 'reset', '-q', '--hard', wk['head'])   # back to the best: the attempt keeps its tag
@@ -1064,27 +1047,27 @@ def _evaluate(room, name, desc, idea, kind, of, seed):
     with open(d / f'findings-{key}.md', 'a', encoding='utf-8') as f:     # the line's own log: facts only, no advice
         f.write(f"- att-{n} [{kind}] {desc} | {c['metric']} = {'—' if value is None else f'{value:.6g}'} | {status}"
                 + (f' ({why})' if status in ('crash', 'discard') else '') + '\n')
-    flags = (' · only numbers changed (tuning)' if tuning and kind == 'attempt' else '') + \
-            (f' · {readded} line(s) put back that this line had deleted' if readded else '')
-    line = (f"🔬 att-{n} [{kind}] by {name}: {desc[:100]} · {c['metric']} = {'—' if value is None else f'{value:.6g}'}"
-            + (f' ({spread})' if spread else '') + f" · {status.upper()} ({why}) · {lines} lines" + flags
-            + (f" · {n}/{c['max_evals']} runs" if kind == 'attempt' else ''))
+    flags = (say('kernel._evaluate.only_numbers_changed_tuning') if tuning and kind == 'attempt' else '') + \
+            (say('kernel._evaluate.line_s_put_back', readded=readded) if readded else '')
+    line = (say('kernel._evaluate.att_by', n=n, kind=kind, name=name, desc=desc[:100], metric=c['metric'], v6='—' if value is None else f'{value:.6g}')
+            + (f' ({spread})' if spread else '') + say('kernel._evaluate.lines', upper=status.upper(), why=why, lines=lines) + flags
+            + (say('kernel._evaluate.runs', n=n, max_evals=c['max_evals']) if kind == 'attempt' else ''))
     room.append(name, line, 'board')
     tail = '\n'.join(text.strip().splitlines()[-30:]) if status == 'crash' else ''
-    warn = f'\nwarning: some files could not be removed (a process still holds them?): {held[:300]}' if held else ''
+    warn = say('kernel._evaluate.warning_some_files_could', held=held[:300]) if held else ''
     c3, s3 = _state(room)
     nudge = ''
     if kind == 'attempt' and s3['workers'][key].get('paused'):
-        nudge = f'\n{name} is now paused after {CRASH_MAX} crashes in a row: the lead resumes it after a look at the logs.'
-    return line + (f'\nlog: {log}\nlast lines:\n{tail}' if tail else f'\nlog: {log}') + warn + nudge
+        nudge = say('kernel._evaluate.is_now_paused_after', name=name, CRASH_MAX=CRASH_MAX)
+    return line + (say('kernel._evaluate.log_last_lines', log=log, tail=tail) if tail else f'\nlog: {log}') + warn + nudge
 
 
 def resume(room, by, worker):
     if by not in room.user_names():
-        raise ValueError('only the lead or the user resumes a paused worker')
+        raise ValueError(say('kernel.resume.only_the_lead_or'))
     key = _edit(room, lambda c, st: (_worker(st, worker)[1].update(paused=False, crashes=0, since_evidence=0), _worker(st, worker)[0])[1])
     _log(room, by, 'resume', worker)
-    return f'🔬 {worker} resumed by {by}'
+    return say('kernel.resume.resumed_by', worker=worker, by=by)
 
 
 def reanchor(room, by, data):
@@ -1094,29 +1077,28 @@ def reanchor(room, by, data):
     c, st = _state(room)
     _need(room, c, by, 'WORKER')
     if st['phase'] != 2:
-        raise ValueError('re-anchoring belongs to the investigation (phase 2)')
+        raise ValueError(say('kernel.reanchor.re_anchoring_belongs_to'))
     keys = ('anchor', 'direction', 'bottleneck', 'supporting_evidence', 'decision_reason', 'next_search_focus')
     if not isinstance(data, dict) or any(k not in data for k in keys):
-        raise ValueError('a re-anchoring is JSON with ' + ', '.join(keys))
+        raise ValueError(say('kernel.reanchor.a_re_anchoring_is') + ', '.join(keys))
     if data['direction'] not in ('extend', 'redirect'):
-        raise ValueError('direction: extend or redirect')
+        raise ValueError(say('kernel.reanchor.direction_extend_or_redirect'))
     if not isinstance(data['supporting_evidence'], list):
-        raise ValueError('supporting_evidence is a list of att-N and E-numbers')
+        raise ValueError(say('kernel.reanchor.supporting_evidence_is_a'))
     known = {f"att-{a['n']}" for a in st['attempts'] if a['state'] != 'revoked'} | {e['id'] for e in st['evidence'] if e['state'] in ('tentative', 'committed')}
     bad = [x for x in data['supporting_evidence'] if x not in known]
     if bad:
-        raise ValueError(f"unknown or revoked evidence: {', '.join(bad)}")
+        raise ValueError(say('kernel.reanchor.unknown_or_revoked_evidence', bad=', '.join(bad)))
     key, wk = _worker(st, by)
     if st.get('pending') and st['pending'].get('worker') == key:
-        raise ValueError('a run of yours is in progress')
+        raise ValueError(say('kernel.reanchor.a_run_of_yours'))
     anchor = data['anchor']
     if anchor == 'current':
         commit, best = wk['head'], wk.get('best')
     else:
         a = next((x for x in st['attempts'] if f"att-{x['n']}" == anchor), None)
         if not a or a['state'] == 'revoked' or a['status'] != 'keep' or a['kind'] != 'attempt':
-            raise ValueError(f'{anchor} is not a state to start from: a kept attempt, not revoked (a discarded one would leave '
-                             f'your line below its own best)')
+            raise ValueError(say('kernel.reanchor.is_not_a_state', anchor=anchor))
         commit = _commit_of(c, anchor)
         best = {'n': a['n'], 'commit': a['commit'], 'metric': a['metric']} if a['status'] == 'keep' else wk.get('best')
     work = _check_work(c, wk)
@@ -1130,8 +1112,7 @@ def reanchor(room, by, data):
         s2['history'].append({'ts': time.time(), 'by': by, 'reanchor': {k: data[k] for k in keys}})
     _edit(room, apply)
     _log(room, by, 'reanchor', data)
-    return (f"⚓ {by} re-anchors at {anchor} and will {data['direction']}: bottleneck {str(data['bottleneck'])[:120]} · next "
-            f"{str(data['next_search_focus'])[:120]}")
+    return (say('kernel.reanchor.re_anchors_at_and', by=by, anchor=anchor, direction=data['direction'], str_bottleneck=str(data['bottleneck'])[:120], str_next_search_focus=str(data['next_search_focus'])[:120]))
 
 
 # ---------------------------------------------------------------------------------------------------------- ideas
@@ -1156,29 +1137,28 @@ def propose_idea(room, by, data):
     c, st = _state(room)
     _need(room, c, by, 'PROPOSER')
     if st['phase'] != 2:
-        raise ValueError('ideas are proposed in the investigation (phase 2)')
+        raise ValueError(say('kernel.propose_idea.ideas_are_proposed_in'))
     if not isinstance(data, dict):
-        raise ValueError('an idea is a JSON object')
+        raise ValueError(say('kernel.propose_idea.an_idea_is_a'))
     missing = [k for k in ('title', 'hypothesis', 'plan', 'changes', 'prior_work', 'mode') if not str(data.get(k, '')).strip()]
     rub = data.get('rubrics') if isinstance(data.get('rubrics'), dict) else {}
     if not rub.get('metric') or not rub.get('implementation'):
-        missing.append('rubrics.metric and rubrics.implementation')
+        missing.append(say('kernel.propose_idea.rubrics_metric_and_rubrics'))
     if missing:
-        raise ValueError('the idea lacks: ' + ', '.join(missing) + ' (prior_work may be "none known")')
+        raise ValueError(say('kernel.propose_idea.the_idea_lacks') + ', '.join(missing) + say('kernel.propose_idea.prior_work_may_be'))
     if data['changes'] not in ('question', 'method', 'both'):
-        raise ValueError('changes: question, method or both')
+        raise ValueError(say('kernel.propose_idea.changes_question_method_or'))
     if data['mode'] != st['next_mode']:
-        raise ValueError(f"the next idea is a \"{st['next_mode']}\" idea: " + (
-            'what is missing or wrong in what was tried (a gap in the results, a bottleneck nobody attacked)' if st['next_mode'] == 'gap'
-            else 'a solution taken from another field or another kind of program, applied here'))
+        raise ValueError(say('kernel.propose_idea.the_next_idea_is', next_mode=st['next_mode']) + (
+            say('kernel.propose_idea.what_is_missing_or') if st['next_mode'] == 'gap'
+            else say('kernel.propose_idea.a_solution_taken_from')))
     text = _idea_text(data)
     near = max(((_similarity(text, _idea_text(i)), i['id']) for i in st['ideas']), default=(0.0, None))
     if near[0] > SIMILAR:
-        raise ValueError(f'too close to {near[1]} (similarity {near[0]:.2f}): what is new in it? Propose something farther away')
+        raise ValueError(say('kernel.propose_idea.too_close_to_similarity', near=near[1], v2=format(near[0], '.2f')))
     recent = [i['changes'] for i in st['ideas'] if i['status'] != 'rejected'][-3:]
     if len(recent) == 3 and all(x == 'method' for x in recent) and data['changes'] == 'method':
-        raise ValueError('three ideas in a row changed only the method: the next one must change the question (what is '
-                         'measured, assumed or optimised), or both')
+        raise ValueError(say('kernel.propose_idea.three_ideas_in_a'))
 
     def apply(c2, s2):
         s2['seq']['I'] += 1
@@ -1191,7 +1171,7 @@ def propose_idea(room, by, data):
         return iid
     iid = _edit(room, apply)
     _log(room, by, 'idea', {**data, 'id': iid})
-    return f"💡 idea {iid} ({data['mode']}, changes the {data['changes']}): {str(data['title'])[:140]}"
+    return say('kernel.propose_idea.idea_changes_the', iid=iid, mode=data['mode'], changes=data['changes'], str_title=str(data['title'])[:140])
 
 
 # ---------------------------------------------------------------------------------------------------------- evidence
@@ -1201,22 +1181,22 @@ def propose_evidence(room, by, text, source):
     _need(room, c, by, 'WORKER', 'SEARCHER', 'REGISTRAR', 'PROPOSER')
     text = ' '.join((text or '').split())
     if not text:
-        raise ValueError('evidence needs a text: what was learned, in one or two sentences')
+        raise ValueError(say('kernel.propose_evidence.evidence_needs_a_text'))
     if not source:
-        raise ValueError('evidence needs its source: --source att-N, E3 or a link (https://...)')
+        raise ValueError(say('kernel.propose_evidence.evidence_needs_its_source'))
     srcs = [s.strip() for s in source.split(',') if s.strip()]
     for s in srcs:
         if re.fullmatch(r'att-\d+', s):
             a = next((x for x in st['attempts'] if f"att-{x['n']}" == s), None)
             if not a:
-                raise ValueError(f'no attempt {s}')
+                raise ValueError(say('kernel.propose_evidence.no_attempt', s=s))
             if a['state'] == 'revoked':
-                raise ValueError(f'{s} was revoked: it cannot back new evidence')
+                raise ValueError(say('kernel.propose_evidence.was_revoked_it_cannot', s=s))
         elif re.fullmatch(r'E\d+', s):
             if not any(e['id'] == s and e['state'] in ('tentative', 'committed') for e in st['evidence']):
-                raise ValueError(f'no live evidence {s}')
+                raise ValueError(say('kernel.propose_evidence.no_live_evidence', s=s))
         elif not re.fullmatch(r'https?://\S{4,}', s):
-            raise ValueError(f'source {s}: att-N, E-number or an http(s) link')
+            raise ValueError(say('kernel.propose_evidence.source_att_n_e', s=s))
 
     def apply(c2, s2):
         s2['seq']['E'] += 1
@@ -1229,7 +1209,7 @@ def propose_evidence(room, by, text, source):
         return eid
     eid = _edit(room, apply)
     _log(room, by, 'evidence', {'id': eid, 'source': srcs})
-    return f'📎 evidence {eid} (tentative, from {", ".join(srcs)}): {text[:160]}'
+    return say('kernel.propose_evidence.evidence_tentative_from', eid=eid, srcs=", ".join(srcs), text=text[:160])
 
 
 def curate(room, by, accept=(), reject=(), drop=()):
@@ -1240,19 +1220,19 @@ def curate(room, by, accept=(), reject=(), drop=()):
     accept, reject, drop = (list(dict.fromkeys(x)) for x in (accept, reject, drop))
     both = (set(accept) & set(reject)) | (set(accept) & set(drop)) | (set(reject) & set(drop))
     if both:
-        raise ValueError(f"{', '.join(sorted(both))}: one decision per piece of evidence")
+        raise ValueError(say('kernel.curate.one_decision_per_piece', sorted=', '.join(sorted(both))))
 
     def apply(c2, s2):
         ev = {e['id']: e for e in s2['evidence']}
         for eid in [*accept, *reject]:
             if eid not in ev or ev[eid]['state'] != 'tentative':
-                raise ValueError(f'{eid} is not tentative evidence')
+                raise ValueError(say('kernel.apply.is_not_tentative_evidence', eid=eid))
         for eid in drop:
             if eid not in ev or ev[eid]['state'] != 'committed':
-                raise ValueError(f'{eid} is not committed evidence')
+                raise ValueError(say('kernel.apply.is_not_committed_evidence', eid=eid))
         live = sum(1 for e in s2['evidence'] if e['state'] == 'committed') - len(drop) + len(accept)
         if live > CURATED_MAX:
-            raise ValueError(f'{live} committed pieces of evidence would pass the limit of {CURATED_MAX}: drop some first (--drop)')
+            raise ValueError(say('kernel.apply.committed_pieces_of_evidence', live=live, CURATED_MAX=CURATED_MAX))
         for eid in accept:
             ev[eid]['state'] = 'committed'
         for eid in reject:
@@ -1262,7 +1242,7 @@ def curate(room, by, accept=(), reject=(), drop=()):
         return live
     live = _edit(room, apply)
     _log(room, by, 'curate', {'accept': list(accept), 'reject': list(reject), 'drop': list(drop)})
-    return f"📎 curated by {by}: accepted {', '.join(accept) or '-'}, rejected {', '.join(reject) or '-'}, dropped {', '.join(drop) or '-'} · {live} committed"
+    return say('kernel.curate.curated_by_accepted_rejected', by=by, v2=', '.join(accept) or '-', v3=', '.join(reject) or '-', v4=', '.join(drop) or '-', live=live)
 
 
 def direction(room, by, data):
@@ -1271,21 +1251,21 @@ def direction(room, by, data):
     _need(room, c, by, 'REGISTRAR')
     keys = ('active', 'searchable', 'no_positive', 'completed', 'change_summary')
     if not isinstance(data, dict) or set(data) - set(keys) or not data.get('active') or not data.get('change_summary'):
-        raise ValueError(f'a direction is JSON with active and change_summary, and optionally searchable, no_positive, completed (lists)')
+        raise ValueError(say('kernel.direction.a_direction_is_json'))
     for k in ('searchable', 'no_positive', 'completed'):
         if k in data and not isinstance(data[k], list):
             raise ValueError(f'{k} is a list')
 
     new = {k: data.get(k, [] if k in ('searchable', 'no_positive', 'completed') else '') for k in keys}
     if new == st.get('direction'):
-        raise ValueError('the direction is the same as the last one: nothing to record')
+        raise ValueError(say('kernel.direction.the_direction_is_the'))
 
     def apply(c2, s2):
         s2['direction'] = new
         s2['history'].append({'ts': time.time(), 'by': by, **s2['direction']})
     _edit(room, apply)
     _log(room, by, 'direction', data)
-    return f"🧭 direction by {by}: {_words(data['active'], 200)} · change: {_words(data['change_summary'], 200)}"
+    return say('kernel.direction.direction_by_change', by=by, _words=_words(data['active'], 200), _words_=_words(data['change_summary'], 200))
 
 
 def _words(value, limit):
@@ -1299,16 +1279,16 @@ def conclude(room, by, worker, gate, trigger, text):
     c, st = _state(room)
     _need(room, c, by, 'REGISTRAR')
     if gate not in ('updated', 'kept', 'skipped'):
-        raise ValueError('--gate updated, kept or skipped')
+        raise ValueError(say('kernel.conclude.gate_updated_kept_or'))
     if trigger not in ('a', 'b', 'c', 'd', 'none'):
-        raise ValueError('--trigger a (new best), b (a direction exhausted), c (a contradiction), d (the budget), or none')
+        raise ValueError(say('kernel.conclude.trigger_a_new_best'))
     if len((text or '').split()) > 300 or not (text or '').strip():
-        raise ValueError('a conclusion is 1 to 300 words')
+        raise ValueError(say('kernel.conclude.a_conclusion_is_to'))
     refs = re.findall(r'\b(att-\d+|E\d+)\b', text)
     _edit(room, lambda c2, s2: s2['conclusions'].update({worker: {'gate': gate, 'trigger': trigger, 'text': text.strip(),
                                                                     'refs': refs, 'state': 'committed', 'by': by, 'ts': time.time()}}))
     _log(room, by, 'conclude', {'worker': worker, 'gate': gate})
-    return f'📝 conclusion for {worker} by {by}: gate={gate}; trigger={trigger}'
+    return say('kernel.conclude.conclusion_for_by_gate', worker=worker, by=by, gate=gate, trigger=trigger)
 
 
 def revoke(room, by, target, reason):
@@ -1325,13 +1305,12 @@ def _revoke(room, by, target, reason):
     c, st = _state(room)
     _need(room, c, by, 'AUDITOR')
     if not reason:
-        raise ValueError('a revocation says why: --reason "..."')
+        raise ValueError(say('kernel._revoke.a_revocation_says_why'))
     if not re.fullmatch(r'att-\d+|E\d+', target or ''):
-        raise ValueError('revoke att-N or E-number')
+        raise ValueError(say('kernel._revoke.revoke_att_n_or'))
     if target.startswith('att-'):
         if st.get('baseline') and target == f"att-{st['baseline']['n']}":
-            raise ValueError('the baseline cannot be revoked: everything is measured against it (a wrong baseline means a new '
-                             'research, or research amend and a new baseline)')
+            raise ValueError(say('kernel._revoke.the_baseline_cannot_be'))
         c, st = _settle(room, c, st, locked=True)        # the worktrees about to move must not be in a run
 
     def apply(c2, s2):
@@ -1345,7 +1324,7 @@ def _revoke(room, by, target, reason):
                 changed = False
                 for x in s2['attempts']:
                     if x['state'] != 'revoked' and (f"att-{x['n']}" == target or f"att-{x.get('parent_n')}" in gone):
-                        x['state'], x['revoked_why'] = 'revoked', (reason if f"att-{x['n']}" == target else f'built on {target}: {reason}')
+                        x['state'], x['revoked_why'] = 'revoked', (reason if f"att-{x['n']}" == target else say('kernel.apply.built_on', target=target, reason=reason))
                         gone.add(f"att-{x['n']}")
                         changed = True
         elif not any(e['id'] == target for e in s2['evidence']):
@@ -1355,7 +1334,7 @@ def _revoke(room, by, target, reason):
             changed = False
             for e in s2['evidence']:
                 if e['state'] in ('tentative', 'committed') and (e['id'] in gone or any(s in gone for s in e['source'])):
-                    e['state'], e['revoked_why'] = 'revoked', f'rests on {target}: {reason}'
+                    e['state'], e['revoked_why'] = 'revoked', say('kernel.apply.rests_on', target=target, reason=reason)
                     gone.add(e['id'])
                     changed = True
         for w, cc in s2['conclusions'].items():
@@ -1391,7 +1370,7 @@ def _revoke(room, by, target, reason):
         _clean(work, c)
         _edit(room, lambda c2, s2, k=key, f=full: s2['workers'][k].update(head=f))
     _log(room, by, 'revoke', {'target': target, 'reason': reason, 'cascade': gone})
-    return f"⛔ {target} revoked by {by} ({reason[:120]}); also withdrawn: {', '.join(x for x in gone if x != target) or 'nothing'}"
+    return say('kernel._revoke.revoked_by_also_withdrawn', target=target, by=by, reason=reason[:120], v4=', '.join(x for x in gone if x != target) or 'nothing')
 
 
 def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, next_intent=None, notes=''):
@@ -1401,14 +1380,14 @@ def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, 
     _need(room, c, by, 'AUDITOR')
     allowed = {1: ('pass', 'fail'), 2: ('answer_ready', 'search_more'), 3: ('pass', 'fail'), 5: ('pass', 'fail')}
     if int(phase) not in allowed or outcome not in allowed[int(phase)]:
-        raise ValueError('verdicts: phase 1/3/5 pass|fail, phase 2 answer_ready|search_more')
+        raise ValueError(say('kernel.verdict.verdicts_phase_pass_fail'))
     if int(phase) != st['phase']:
-        raise ValueError(f"the research is in phase {st['phase']} ({PHASES[st['phase']]}): a verdict is on the phase now")
+        raise ValueError(say('kernel.verdict.the_research_is_in', phase=st['phase'], PHASES=PHASES[st['phase']]))
     scores = scores or {}
     if not isinstance(scores, dict) or any(v not in (0, 1.5, 3, '0', '1.5', '3') for v in scores.values()):
-        raise ValueError('scores: {"item": 0 | 1.5 | 3, ...} (0 missing or wrong, 1.5 mentioned without support, 3 right and needed)')
+        raise ValueError(say('kernel.verdict.scores_item_missing_or'))
     if outcome == 'search_more' and not next_intent:
-        raise ValueError('search_more needs one concrete --next-intent')
+        raise ValueError(say('kernel.verdict.search_more_needs_one'))
     rec = {'phase': int(phase), 'outcome': outcome, 'scores': {k: float(v) for k, v in scores.items()}, 'coverage': coverage or {},
            'missing': missing or [], 'next_intent': next_intent or '', 'notes': notes, 'by': by, 'ts': time.time(),
            'snap': _snap(room, st)}
@@ -1420,7 +1399,7 @@ def verdict(room, by, phase, outcome, scores=None, coverage=None, missing=None, 
     _edit(room, apply)
     _log(room, by, 'verdict', rec)
     score = f" · score {sum(rec['scores'].values()):.1f}/{3 * len(rec['scores'])}" if rec['scores'] else ''
-    return f"⚖️ verdict at phase {phase} by {by}: {outcome.upper()}{score}" + (f' · next: {next_intent[:160]}' if next_intent else '')
+    return say('kernel.verdict.verdict_at_phase_by', phase=phase, by=by, upper=outcome.upper(), score=score) + (f' · next: {next_intent[:160]}' if next_intent else '')
 
 
 def allow_fix(room, by, worker, reason):
@@ -1429,11 +1408,11 @@ def allow_fix(room, by, worker, reason):
     c, st = _state(room)
     _need(room, c, by, 'AUDITOR')
     if not reason:
-        raise ValueError('say what it corrects: --reason "..."')
+        raise ValueError(say('kernel.allow_fix.say_what_it_corrects'))
     key, wk = _worker(st, worker)
     _edit(room, lambda c2, s2: s2['workers'][key].update(fix_ok={'by': by, 'reason': reason, 'ts': time.time()}))
     _log(room, by, 'allow-fix', {'worker': key, 'reason': reason})
-    return f"🩹 {by} allows one fix run for {worker}: {reason[:160]} (research evaluate --kind fix)"
+    return say('kernel.allow_fix.allows_one_fix_run', by=by, worker=worker, reason=reason[:160])
 
 
 # ---------------------------------------------------------------------------------------------------------- the GPU
@@ -1457,52 +1436,52 @@ def hold(room, by, minutes, reason):
     evaluate starts while it holds, except the holder's own. It ends at release or after the minutes"""
     c, st = _state(room)
     if not by:
-        raise ValueError('--as NAME: who holds the GPU')
+        raise ValueError(say('kernel.hold.as_name_who_holds'))
     if not reason:
-        raise ValueError('say what for: --reason "..."')
+        raise ValueError(say('kernel.hold.say_what_for_reason'))
     minutes = float(minutes or 0)
     top = 720 if by in room.user_names() else 120
     if not (0 < minutes <= top):
-        raise ValueError(f'--minutes: how long, more than 0 and at most {top}')
+        raise ValueError(say('kernel.hold.minutes_how_long_more', top=top))
     other = _gpu_hold(room)
     if other and other['by'] != by:
-        raise ValueError(f"the GPU is already held by {other['by']} ({other['reason']})")
+        raise ValueError(say('kernel.hold.the_gpu_is_already', by=other['by'], reason=other['reason']))
     if _run_alive(room):
-        raise ValueError('a run is in progress: hold the GPU when it ends (research status)')
+        raise ValueError(say('kernel.hold.a_run_is_in'))
     h = {'by': by, 'reason': reason, 'until': time.time() + minutes * 60, 'pid': None}
     from chat import write_atomic
     write_atomic(_dir(room) / 'gpu.hold', json.dumps(h))
     _log(room, by, 'hold', h)
-    return f"⏸️ GPU held by {by} for {minutes:g} min: {reason[:160]} (research release when done)"
+    return say('kernel.hold.gpu_held_by_for', by=by, v2=format(minutes, 'g'), reason=reason[:160])
 
 
 def release(room, by):
     h = _gpu_hold(room)
     if not h:
         (_dir(room) / 'gpu.hold').unlink(missing_ok=True)
-        return 'the GPU is free'
+        return say('kernel.release.the_gpu_is_free')
     if h['by'] != by and by not in room.user_names():
-        raise ValueError(f"the GPU is held by {h['by']}: only they or the lead release it")
+        raise ValueError(say('kernel.release.the_gpu_is_held', by=h['by']))
     (_dir(room) / 'gpu.hold').unlink(missing_ok=True)
     _log(room, by, 'release', {'held_by': h['by']})
-    return f"▶️ GPU released by {by} (held by {h['by']}: {h['reason'][:120]})"
+    return say('kernel.release.gpu_released_by_held', by=by, by_=h['by'], reason=h['reason'][:120])
 
 
 def prebuild(room, by, worker):
     """the lead builds a worker's worktree before its first run, outside the run budget: the build runs detached (a
     session's background reaper cannot kill it), logs to runs/prebuild-WORKER.log, and holds the GPU until it exits"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user starts a prebuild')
+        raise ValueError(say('kernel.prebuild.only_the_lead_or'))
     c, st = _state(room)
     if not c.get('build'):
-        raise ValueError('the contract has no build (research amend --build "CMD")')
+        raise ValueError(say('kernel.prebuild.the_contract_has_no'))
     key, wk = _worker(st, worker)
     work = _check_work(c, wk)
     other = _gpu_hold(room)
     if other:
-        raise ValueError(f"the GPU is held by {other['by']} ({other['reason']}): one thing at a time")
+        raise ValueError(say('kernel.prebuild.the_gpu_is_held', by=other['by'], reason=other['reason']))
     if _run_alive(room):
-        raise ValueError('a run is in progress: start the prebuild when it ends')
+        raise ValueError(say('kernel.prebuild.a_run_is_in'))
     log = _dir(room) / 'runs' / f'prebuild-{key}.log'
     done = _dir(room) / 'runs' / f'prebuild-{key}.exit'
     done.unlink(missing_ok=True)
@@ -1521,12 +1500,11 @@ def prebuild(room, by, worker):
     else:
         proc = subprocess.Popen(argv, start_new_session=True, **kw)
     limit = (c.get('build_s') or 2 * c['budget_s']) * 3 + 600   # a reused pid cannot hold the GPU past this
-    h = {'by': by, 'reason': f'prebuild of {key}', 'until': time.time() + limit, 'pid': proc.pid, 'log': str(log), 'exit': str(done)}
+    h = {'by': by, 'reason': say('kernel.prebuild.prebuild_of', key=key), 'until': time.time() + limit, 'pid': proc.pid, 'log': str(log), 'exit': str(done)}
     from chat import write_atomic
     write_atomic(_dir(room) / 'gpu.hold', json.dumps(h))
     _log(room, by, 'prebuild', h)
-    return (f"🔨 prebuild of {key} started (pid {proc.pid}, log {log}): no evaluate starts until it exits; the build output "
-            f"must be in a --keep folder to survive the runs' cleaning")
+    return (say('kernel.prebuild.prebuild_of_started_pid', key=key, pid=proc.pid, log=log))
 
 
 # ---------------------------------------------------------------------------------------------------------- phases
@@ -1539,7 +1517,7 @@ def _settle(room, c, st, locked=False):
     caller holds eval.lock, so a pending run can only be a dead one"""
     if st.get('pending'):
         if not locked and _run_alive(room):
-            raise ValueError(f"att-{st['pending']['n']} is running: wait for it (research status)")
+            raise ValueError(say('kernel._settle.att_is_running_wait', n=st['pending']['n']))
         _reconcile(room, c, st)
         c, st = _state(room)
     return c, st
@@ -1568,7 +1546,7 @@ def seal(room, by, sealed=()):
     """phase 1 to 2: the drafted evaluator and program are committed and sealed, after a smoke run that reported the
     metric and, when the room has an auditor, its pass"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user seals the contract')
+        raise ValueError(say('kernel.seal.only_the_lead_or'))
     c, st = _state(room)
     return _locked(room, c, by, lambda: _seal(room, by, sealed))
 
@@ -1576,32 +1554,31 @@ def seal(room, by, sealed=()):
 def _seal(room, by, sealed):
     c, st = _state(room)
     if st['phase'] != 1:
-        raise ValueError('seal belongs to the drafting phase (1)')
+        raise ValueError(say('kernel._seal.seal_belongs_to_the'))
     c, st = _settle(room, c, st, locked=True)
     if not st.get('smoke_ok'):
-        raise ValueError('no smoke run has reported the metric yet: a WORKER runs research evaluate --kind smoke first')
+        raise ValueError(say('kernel._seal.no_smoke_run_has'))
     if c.get('roles', {}).get('AUDITOR') and not _verdict_holds(room, st, 1, 'pass'):
-        raise ValueError('the AUDITOR has not passed the drafting as it is now (research verdict --phase 1 pass, after the last smoke run)')
+        raise ValueError(say('kernel._seal.the_auditor_has_not'))
     work = _check_work(c, {'work': c['work'], 'branch': c['branch']})
     smoke = next(a for a in st['attempts'] if a['n'] == st['smoke_ok'])
     later = [a['n'] for a in st['attempts'] if a['kind'] == 'smoke' and a['n'] > smoke['n']]
     if later:
-        raise ValueError(f"the last good smoke run is att-{smoke['n']}, but att-{later[-1]} came after it and failed: fix the "
-                         f"drafting and smoke it again (sealing now would drop the later edits)")
+        raise ValueError(say('kernel._seal.the_last_good_smoke', n=smoke['n'], later=later[-1]))
     commit = _git(work, 'rev-parse', smoke['commit'])
     _git(work, 'reset', '-q', '--hard', commit)
     _clean(work, c)
     seals = {}
     for rel in c['sealed']:                               # the drafted evaluator is what gets sealed, not the empty start
         if not (work / rel).is_file():
-            raise ValueError(f'sealed file {rel} is not in the smoke-run commit')
+            raise ValueError(say('kernel._seal.sealed_file_is_not', rel=rel))
         seals[rel] = _git(work, 'rev-parse', f'{commit}:{rel}')
     for f in sealed:
         rel = _rel(Path(c['repo']), f) if Path(f).is_absolute() else Path(f).as_posix()
         if rel == c['program']:
-            raise ValueError(f'{rel} is the program: it cannot also be sealed')
+            raise ValueError(say('kernel._seal.is_the_program_it', rel=rel))
         if not (work / rel).is_file() or not _git(work, 'ls-files', '--', rel):
-            raise ValueError(f'sealed file {rel} is not committed in the research worktree')
+            raise ValueError(say('kernel._seal.sealed_file_is_not2', rel=rel))
         seals[rel] = _git(work, 'rev-parse', f'{commit}:{rel}')
     c['sealed'], c['base_commit'] = seals, commit
     _save(room, 'contract.json', c)
@@ -1614,14 +1591,14 @@ def _seal(room, by, sealed):
         s2['protocol'] = s2.get('protocol')
     _edit(room, apply)
     _log(room, by, 'seal', {'commit': commit, 'sealed': list(seals)})
-    return f"🔒 sealed by {by} at {commit[:7]}: {', '.join(seals) or 'no files'}; phase 2 (investigation): the first attempt is the baseline"
+    return say('kernel._seal.sealed_by_at_phase', by=by, commit=commit[:7], v3=', '.join(seals) or 'no files')
 
 
 def phase_next(room, by, force=''):
     """one step forward, when its gate holds: 2 to 3 needs the auditor's answer_ready (or the budget used up); 3 to 4 needs
     evidence runs (ablation, baseline...) or a forced "degraded"; 5 to 6 needs a report and the auditor's pass"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user moves the research to the next phase')
+        raise ValueError(say('kernel.phase_next.only_the_lead_or'))
     return _locked(room, _state(room)[0], by, lambda: _phase_next(room, by, force))
 
 
@@ -1631,56 +1608,56 @@ def _phase_next(room, by, force):
     auditor = bool(c.get('roles', {}).get('AUDITOR'))
     why, aux = '', []
     if p == 1:
-        why = 'phase 1 ends with research seal'
+        why = say('kernel._phase_next.phase_ends_with_research')
     elif p == 2:
         ready = _verdict_holds(room, st, 2, 'answer_ready') or not auditor
-        why = '' if ready or st['evals'] >= c['max_evals'] else 'the AUDITOR has not said answer_ready (research verdict --phase 2 answer_ready)'
+        why = '' if ready or st['evals'] >= c['max_evals'] else say('kernel._phase_next.the_auditor_has_not')
         if st['best'] is None:
-            why = 'there is no kept attempt to build evidence on'
+            why = say('kernel._phase_next.there_is_no_kept')
     elif p == 3:
         aux = [a for a in st['attempts'] if a['kind'] in AUX_KINDS and a['status'] != 'crash']
-        why = '' if aux or force == 'degraded' else 'no ablation, baseline or repeat run yet (or --force degraded, said in the report)'
+        why = '' if aux or force == 'degraded' else say('kernel._phase_next.no_ablation_baseline_or')
         if auditor and not _verdict_holds(room, st, 3, 'pass') and force != 'degraded':
-            why = why or 'the AUDITOR has not passed the evidence (research verdict --phase 3 pass)'
+            why = why or say('kernel._phase_next.the_auditor_has_not2')
     elif p == 4:
-        why = '' if st.get('final') or not c.get('final') else 'run the final evaluator first (research final)'
+        why = '' if st.get('final') or not c.get('final') else say('kernel._phase_next.run_the_final_evaluator')
     elif p == 5:
         report = _dir(room) / 'report.md'
-        why = '' if report.is_file() else 'write ROOM/research/report.md (research checklist gives its skeleton)'
+        why = '' if report.is_file() else say('kernel._phase_next.write_room_research_report')
         if not why:
             text = report.read_text(encoding='utf-8', errors='replace')
             left = [h for h in re.findall(r'<[^<>\n]+>', CHECKLIST + DEGRADED_LINE) if h in text]
-            why = f'the report still has {len(set(left))} parts of the skeleton to fill ({sorted(set(left))[0][:60]}...)' if left else ''
+            why = say('kernel._phase_next.the_report_still_has', len_set=len(set(left)), sorted=sorted(set(left))[0][:60]) if left else ''
             if not why and st.get('degraded') and 'DEGRADED' not in text:
-                why = 'the research is degraded: the report says so in a line starting with DEGRADED (research checklist shows it)'
+                why = say('kernel._phase_next.the_research_is_degraded')
         if not why and auditor and not _verdict_holds(room, st, 5, 'pass'):
-            why = 'the AUDITOR has not passed the report as it is now (research verdict --phase 5 pass)'
+            why = say('kernel._phase_next.the_auditor_has_not3')
     else:
-        why = 'the research is closed'
+        why = say('kernel._phase_next.the_research_is_closed')
     if why:
-        raise ValueError(f'phase {p} ({PHASES[p]}) cannot end yet: {why}')
+        raise ValueError(say('kernel._phase_next.phase_cannot_end_yet', p=p, PHASES=PHASES[p], why=why))
     skipped = p == 3 and force == 'degraded' and (not aux or (auditor and not _verdict_holds(room, st, 3, 'pass')))
     _edit(room, lambda c2, s2: s2.update(phase=p + 1, degraded=skipped or s2.get('degraded', False)))
     _log(room, by, 'phase', {'from': p, 'to': p + 1, 'force': force})
-    return f'🚦 research phase {p + 1}: {PHASES[p + 1]}' + (' (degraded: evidence not run or not passed)' if skipped else '')
+    return say('kernel._phase_next.research_phase', v1=p + 1, PHASES=PHASES[p + 1]) + (say('kernel._phase_next.degraded_evidence_not_run') if skipped else '')
 
 
 def final(room, by):
     """phase 4: the final evaluator, once, on the best program, on data nobody used before"""
     if by not in room.user_names():
-        raise ValueError('only the lead or the user runs the final evaluation')
+        raise ValueError(say('kernel.final.only_the_lead_or'))
     c, st = _state(room)
     if st['phase'] != 4:
-        raise ValueError('the final evaluation belongs to phase 4')
+        raise ValueError(say('kernel.final.the_final_evaluation_belongs'))
     if st.get('final'):
-        raise ValueError('the final evaluation ran already: it runs once')
+        raise ValueError(say('kernel.final.the_final_evaluation_ran'))
     if not c.get('final'):
-        raise ValueError('the contract has no final evaluator (research amend --final "cmd"); without it, move on with phase next')
+        raise ValueError(say('kernel.final.the_contract_has_no'))
     if not st['best']:
-        raise ValueError('no best program to evaluate')
+        raise ValueError(say('kernel.final.no_best_program_to'))
     held = _gpu_hold(room)
     if held and held['by'] != by:
-        raise ValueError(f"the GPU is held by {held['by']} ({held['reason']}): run the final when it is released")
+        raise ValueError(say('kernel.final.the_gpu_is_held', by=held['by'], reason=held['reason']))
     return _locked(room, c, by, lambda: _final(room, by))
 
 
@@ -1691,11 +1668,10 @@ def _final(room, by):
         _reconcile(room, c, st)
         c, st = _state(room)
     if st.get('final'):
-        raise ValueError('the final evaluation ran already: it runs once')
+        raise ValueError(say('kernel._final.the_final_evaluation_ran'))
     work = _check_work(c, {'work': c['work'], 'branch': c['branch']})
     if _git(work, 'status', '--porcelain', '--untracked-files=no', check=False):
-        raise ValueError(f'{work} has uncommitted changes: the final evaluation runs on the committed best only (commit or '
-                         f'git checkout -- . there first)')
+        raise ValueError(say('kernel._final.has_uncommitted_changes_the', work=work))
     commit = _git(work, 'rev-parse', st['best']['commit'])
     _git(work, 'checkout', '-q', '--detach', commit)
     _clean(work, c)
@@ -1721,7 +1697,7 @@ def _final(room, by):
     gap = ''
     if value is not None:
         gap = f" · search {st['best']['metric']:.6g} → final {value:.6g} (Δ {value - st['best']['metric']:+.6g})"
-    line = f"🏁 final evaluation of att-{st['best']['n']}: {c['metric']} = {'—' if value is None else f'{value:.6g}'}" + \
+    line = say('kernel._final.final_evaluation_of_att', n=st['best']['n'], metric=c['metric'], v3='—' if value is None else f'{value:.6g}') + \
            (f' ({why})' if why else '') + gap
     room.append(by, line, 'board')
     return line
@@ -1764,13 +1740,13 @@ def checklist(room):
     text = CHECKLIST + (DEGRADED_LINE if st.get('degraded') else '')
     if not path.exists():
         path.write_text(text, encoding='utf-8')
-        return f'report skeleton written to {path}'
-    return f'{path} exists; its sections:\n' + text
+        return say('kernel.checklist.report_skeleton_written_to', path=path)
+    return say('kernel.checklist.exists_its_sections', path=path) + text
 
 
 # ---------------------------------------------------------------------------------------------------------- views
 def _cut(text, limit=VIEW_MAX):
-    return text if len(text) <= limit else text[:limit - 60] + f'\n... ({len(text) - limit + 60} more characters: research expand ID)'
+    return text if len(text) <= limit else text[:limit - 60] + say('kernel._cut.more_characters_research_expand', v1=len(text) - limit + 60)
 
 
 def view(room, name):
@@ -1779,72 +1755,72 @@ def view(room, name):
     c, st = _state(room)
     role = _role_of(c, name) or ('LEAD' if name in room.user_names() else 'WORKER')
     att = st['attempts']
-    head = (f"research {c['tag']} · phase {st['phase']} ({PHASES[st['phase']]}) · {st['evals']}/{c['max_evals']} runs · best "
+    head = (say('kernel.view.research_phase_runs_best', tag=c['tag'], phase=st['phase'], PHASES=PHASES[st['phase']], evals=st['evals'], max_evals=c['max_evals'])
             + (f"att-{st['best']['n']} {st['best']['metric']:.6g} ({st['best'].get('worker', '?')})" if st['best'] else 'none')
-            + (' · DEGRADED (no evidence runs)' if st.get('degraded') else '') + f' · you: {role}')
+            + (say('kernel.view.degraded_no_evidence_runs') if st.get('degraded') else '') + say('kernel.view.you', role=role))
     out = [head]
     tried = lambda xs: '; '.join(f"att-{a['n']} {a['desc'][:50]} → {a['status']}" for a in xs)
     key = None
     if role == 'WORKER':
         try:
             key, wk = _worker(st, name)
-            out.append(f"your worktree {wk['work']} · from {wk.get('parent')} as {wk.get('type')} · your best "
+            out.append(say('kernel.view.your_worktree_from_as', work=wk['work'], get=wk.get('parent'), get_=wk.get('type'))
                        + (f"att-{wk['best']['n']} {wk['best']['metric']:.6g}" if wk.get('best') else 'none')
                        + (f" · idea {wk['idea']}" if wk.get('idea') else '') + (' · PAUSED' if wk.get('paused') else ''))
             if wk.get('idea'):
                 i = next((x for x in st['ideas'] if x['id'] == wk['idea']), None)
                 if i:
-                    out.append(f"idea {i['id']}: {i['title']} — {i['hypothesis'][:300]} — plan: {i['plan'][:400]} — rubrics: {i['rubrics']}")
+                    out.append(say('kernel.view.idea_plan_rubrics', id=i['id'], title=i['title'], hypothesis=i['hypothesis'][:300], plan=i['plan'][:400], rubrics=i['rubrics']))
             mine = [a for a in att if a['worker'] == key][-8:]
-            out.append('your line: ' + (tried(mine) or 'nothing yet'))
+            out.append(say('kernel.view.your_line') + (tried(mine) or say('kernel.view.nothing_yet')))
             cc = st['conclusions'].get(key)
             if cc:
-                out.append(f"registrar's conclusion on your line ({cc['state']}): {cc['text'][:500]}")
+                out.append(say('kernel.view.registrar_s_conclusion_on', state=cc['state'], text=cc['text'][:500]))
             path = _dir(room) / f'findings-{key}.md'
             if path.is_file():
-                out.append('findings of your line:\n' + '\n'.join(path.read_text(encoding='utf-8').splitlines()[-10:]))
+                out.append(say('kernel.view.findings_of_your_line') + '\n'.join(path.read_text(encoding='utf-8').splitlines()[-10:]))
         except ValueError as exc:
             out.append(str(exc))
         fails = [a for a in att if a['status'] in ('discard', 'crash') and a['worker'] != key][-6:]
         if fails:
-            out.append('do not repeat (other lines): ' + tried(fails))
+            out.append(say('kernel.view.do_not_repeat_other') + tried(fails))
     elif role == 'PROPOSER':
-        out.append(f"next idea mode: {st['next_mode']} · direction: {st['direction'].get('active', '-')}")
+        out.append(say('kernel.view.next_idea_mode_direction', next_mode=st['next_mode'], get=st['direction'].get('active', '-')))
         for i in st['ideas'][-12:]:
             res = [a for a in att if a.get('idea') == i['id']]
             out.append(f"{i['id']} [{i['mode']}/{i['changes']}] {i['title'][:80]} → " + (', '.join(f"att-{a['n']} {a['status']}" for a in res) or i['status']))
         if st['gaps']:
-            out.append('open gaps: ' + '; '.join(g['text'][:120] for g in st['gaps'][-4:]))
+            out.append(say('kernel.view.open_gaps') + '; '.join(g['text'][:120] for g in st['gaps'][-4:]))
         if st['direction'].get('no_positive'):
-            out.append('gave nothing: ' + '; '.join(map(str, st['direction']['no_positive']))[:400])
+            out.append(say('kernel.view.gave_nothing') + '; '.join(map(str, st['direction']['no_positive']))[:400])
     elif role == 'REGISTRAR':
         tent = [e for e in st['evidence'] if e['state'] == 'tentative']
         live = [e for e in st['evidence'] if e['state'] == 'committed']
-        out.append(f'{len(live)}/{CURATED_MAX} committed · to curate: ' + ('; '.join(f"{e['id']} ({','.join(e['source'])}) {e['text'][:100]}" for e in tent) or 'none'))
-        out.append('latest runs: ' + tried(att[-8:]))
+        out.append(say('kernel.view.committed_to_curate', len_live=len(live), CURATED_MAX=CURATED_MAX) + ('; '.join(f"{e['id']} ({','.join(e['source'])}) {e['text'][:100]}" for e in tent) or 'none'))
+        out.append(say('kernel.view.latest_runs') + tried(att[-8:]))
         out.append('direction: ' + json.dumps(st['direction'], ensure_ascii=False)[:500])
         out.append('conclusions: ' + ('; '.join(f"{k} ({cc['gate']}, {cc['state']}) {cc['text'][:120]}" for k, cc in st['conclusions'].items()) or 'none'))
         idle = [k for k, w in st['workers'].items() if w.get('since_evidence', 0) >= S_MAX - 1]
         if idle:
-            out.append('workers near the evidence limit: ' + ', '.join(idle))
+            out.append(say('kernel.view.workers_near_the_evidence') + ', '.join(idle))
     elif role in ('AUDITOR', 'LEAD'):
         keeps = [a for a in att if a['status'] == 'keep' and a['state'] != 'revoked'][-6:]
-        out.append('keeps to check (git show <tag>): ' + ('; '.join(f"att-{a['n']} {c['branch']}/att-{a['n']} {a['desc'][:60]}" for a in keeps) or 'none'))
+        out.append(say('kernel.view.keeps_to_check_git') + ('; '.join(f"att-{a['n']} {c['branch']}/att-{a['n']} {a['desc'][:60]}" for a in keeps) or 'none'))
         flags = detectors(c, st)
         if flags:
             out.append('detectors: ' + ' | '.join(flags))
         quar = [k for k, cc in st['conclusions'].items() if cc['state'] == 'quarantined']
         if quar:
-            out.append('quarantined conclusions (they cite revoked records): ' + ', '.join(quar))
+            out.append(say('kernel.view.quarantined_conclusions_they_cite') + ', '.join(quar))
         last = st['verdicts'][-1] if st['verdicts'] else None
         if last:
-            out.append(f"last verdict: phase {last['phase']} {last['outcome']}")
-        out.append('live evidence: ' + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] == 'committed')[:900] or 'none'))
+            out.append(say('kernel.view.last_verdict_phase', phase=last['phase'], outcome=last['outcome']))
+        out.append(say('kernel.view.live_evidence') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] == 'committed')[:900] or 'none'))
     elif role == 'SEARCHER':
-        out.append(f"task: {c['program']} · metric {c['metric']} · direction: {st['direction'].get('active', '-')}")
-        out.append('evidence so far: ' + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] in ('tentative', 'committed'))[:1200] or 'none'))
+        out.append(say('kernel.view.task_metric_direction', program=c['program'], metric=c['metric'], get=st['direction'].get('active', '-')))
+        out.append(say('kernel.view.evidence_so_far') + ('; '.join(f"{e['id']} {e['text'][:80]}" for e in st['evidence'] if e['state'] in ('tentative', 'committed'))[:1200] or 'none'))
         if st['gaps']:
-            out.append('open questions: ' + '; '.join(g['text'][:120] for g in st['gaps'][-4:]))
+            out.append(say('kernel.view.open_questions') + '; '.join(g['text'][:120] for g in st['gaps'][-4:]))
     return _cut('\n'.join(out))
 
 
@@ -1858,10 +1834,10 @@ def expand(room, rid):
     if m:
         a = next((x for x in st['attempts'] if x['n'] == int(m.group(1))), None)
         if a:
-            return json.dumps(a, indent=1, ensure_ascii=False) + f"\ncode: git show {c['branch']}/att-{a['n']}\nlog: {_dir(room) / 'runs' / (str(a['n']) + '.log')}"
+            return json.dumps(a, indent=1, ensure_ascii=False) + say('kernel.expand.code_git_show_att', branch=c['branch'], n=a['n'], v3=_dir(room) / 'runs' / (str(a['n']) + '.log'))
     if rid in st['workers']:
         return json.dumps(st['workers'][rid], indent=1, ensure_ascii=False)[:4000]
-    raise ValueError(f'no record {rid} (ideas I-n, evidence E-n, attempts att-N, worker names)')
+    raise ValueError(say('kernel.expand.no_record_ideas_i', rid=rid))
 
 
 def detectors(c, st):
@@ -1872,23 +1848,23 @@ def detectors(c, st):
         added = sum(a.get('added', 0) for a in mine)
         readded = sum(a.get('readded', 0) for a in mine)
         if added >= 10 and readded / added > 0.3:
-            out.append(f'{key}: {readded} of {added} added lines were deleted before in its line (cycling)')
+            out.append(say('kernel.detectors.of_added_lines_were', key=key, readded=readded, added=added))
         tun = [a for a in mine[-8:] if a.get('tuning')]
         if len(mine) >= 4 and len(tun) > len(mine[-8:]) / 2:
-            out.append(f'{key}: {len(tun)} of its last {len(mine[-8:])} attempts only changed numbers (send an explorer)')
+            out.append(say('kernel.detectors.of_its_last_attempts', key=key, len_tun=len(tun), len_mine=len(mine[-8:])))
         if w.get('paused'):
-            out.append(f'{key}: paused after {CRASH_MAX} crashes')
+            out.append(say('kernel.detectors.paused_after_crashes', key=key, CRASH_MAX=CRASH_MAX))
     runs = [a for a in st['attempts'] if a['kind'] == 'attempt']
     keeps = [a for a in runs if a['status'] == 'keep']
     if len(runs) >= 10 and keeps and runs[-1]['n'] - keeps[-1]['n'] >= 10:
-        out.append(f"no keep in the last {runs[-1]['n'] - keeps[-1]['n']} runs: plateau (explorers from base, or a new question)")
+        out.append(say('kernel.detectors.no_keep_in_the', v1=runs[-1]['n'] - keeps[-1]['n']))
     ideas = st['ideas']
     if len(ideas) >= 4:
         sims = [_similarity(_idea_text(a), _idea_text(b)) for i, a in enumerate(ideas) for b in ideas[i + 1:]]
         if sum(sims) / len(sims) > 0.25:
-            out.append(f'ideas are narrowing (mean similarity {sum(sims) / len(sims):.2f})')
+            out.append(say('kernel.detectors.ideas_are_narrowing_mean', v1=format(sum(sims) / len(sims), '.2f')))
     if st.get('final') and st['final'].get('metric') is not None and st['best']:
-        out.append(f"search {st['final']['search_metric']:.6g} vs final {st['final']['metric']:.6g}")
+        out.append(say('kernel.detectors.search_vs_final', v1=format(st['final']['search_metric'], '.6g'), v2=format(st['final']['metric'], '.6g')))
     return out
 
 
@@ -1897,30 +1873,27 @@ def status(room):
     rows = (_dir(room) / 'results.tsv').read_text(encoding='utf-8').splitlines()[1:]
     counts = {k: sum(1 for r in rows if r.split('\t')[3] == k) for k in ('keep', 'discard', 'crash')}
     best = st['best']
-    head = (f"research {c['tag']} · phase {st['phase']} ({PHASES[st['phase']]}) · {c['program']} · metric {c['metric']} "
-            f"({c['direction']}, from {'the result file' if c.get('metric_source') == 'file' else 'the output: a program could print a false one, prefer --result-file'}"
-            + (f", median of {c['repeats']}" if c.get('repeats', 1) > 1 else '') + (f", min gain {c['min_gain']}" if c.get('min_gain') else '') + ') · '
-            f"{st['evals']}/{c['max_evals']} runs of {c['budget_s']} s · keep {counts['keep']}, discard {counts['discard']}, crash {counts['crash']} · "
-            + (f"best att-{best['n']} {best['metric']:.6g} ({best['commit']}, {best.get('worker', '')})" if best else 'no baseline yet')
-            + (f" · att-{st['pending']['n']} in progress or cut off" if st.get('pending') else '')
-            + (' · DEGRADED: phase 3 closed without evidence runs' if st.get('degraded') else ''))
+    head = (say('kernel.status.research_phase_metric_from', tag=c['tag'], phase=st['phase'], PHASES=PHASES[st['phase']], program=c['program'], metric=c['metric'], direction=c['direction'], v7=say('kernel.word.result_file') if c.get('metric_source') == 'file' else say('kernel.word.output_unsafe'))
+            + (say('kernel.status.median_of', repeats=c['repeats']) if c.get('repeats', 1) > 1 else '') + (say('kernel.status.min_gain', min_gain=c['min_gain']) if c.get('min_gain') else '') + say('kernel.status.runs_of_s_keep', evals=st['evals'], max_evals=c['max_evals'], budget_s=c['budget_s'], keep=counts['keep'], discard=counts['discard'], crash=counts['crash'])
+            + (say('kernel.status.best_att', n=best['n'], v2=format(best['metric'], '.6g'), commit=best['commit'], get=best.get('worker', '')) if best else say('kernel.status.no_baseline_yet'))
+            + (say('kernel.status.att_in_progress_or', n=st['pending']['n']) if st.get('pending') else '')
+            + (say('kernel.status.degraded_phase_closed_without') if st.get('degraded') else ''))
     for f in sorted((_dir(room) / 'runs').glob('prebuild-*.exit')):
         code = f.read_text(errors='replace').strip()
-        head += f"\nprebuild of {f.stem[9:]}: " + ('done (exit 0)' if code == '0' else f'FAILED (exit {code}), log {f.with_suffix(".log")}')
+        head += say('kernel.status.prebuild_of', stem=f.stem[9:]) + (say('kernel.status.done_exit') if code == '0' else say('kernel.status.failed_exit_log', code=code, with_suffix=f.with_suffix(".log")))
     held = _gpu_hold(room)
     if held:
-        head += (f"\nGPU held by {held['by']}: {held['reason']}" + (f" (pid {held['pid']}, log {held.get('log')})" if held.get('pid')
+        head += (say('kernel.status.gpu_held_by', by=held['by'], reason=held['reason']) + (say('kernel.status.pid_log', pid=held['pid'], get=held.get('log')) if held.get('pid')
                  else f" until {time.strftime('%H:%M', time.localtime(held['until']))}"))
     lines = [head]
     if len(st['workers']) > 1 or '_main' not in st['workers']:
-        lines.append('workers: ' + '; '.join(f"{k} " + (f"best att-{w['best']['n']} {w['best']['metric']:.6g}" if w.get('best') else 'no best')
-                                             + f" ({w.get('type')} from {w.get('parent')})" + (' PAUSED' if w.get('paused') else '')
-                                             + (f" {w['crashes']} crashes in a row" if w.get('crashes') else '')
-                                             + (' fix allowed' if w.get('fix_ok') else '')
+        lines.append('workers: ' + '; '.join(f"{k} " + (say('kernel.status.best_att2', n=w['best']['n'], v2=format(w['best']['metric'], '.6g')) if w.get('best') else say('kernel.status.no_best'))
+                                             + say('kernel.status.from', get=w.get('type'), get_=w.get('parent')) + (' PAUSED' if w.get('paused') else '')
+                                             + (say('kernel.status.crashes_in_a_row', crashes=w['crashes']) if w.get('crashes') else '')
+                                             + (say('kernel.status.fix_allowed') if w.get('fix_ok') else '')
                                              for k, w in st['workers'].items() if k != '_main'))
     if st['ideas']:
-        lines.append(f"ideas: {len(st['ideas'])} (next: {st['next_mode']}) · evidence: "
-                     f"{sum(1 for e in st['evidence'] if e['state'] == 'committed')} committed, {sum(1 for e in st['evidence'] if e['state'] == 'tentative')} tentative")
+        lines.append(say('kernel.status.ideas_next_evidence_committed', len_ideas=len(st['ideas']), next_mode=st['next_mode'], sum=sum(1 for e in st['evidence'] if e['state'] == 'committed'), sum_=sum(1 for e in st['evidence'] if e['state'] == 'tentative')))
     flags = detectors(c, st)
     if flags:
         lines.append('detectors: ' + ' | '.join(flags))
@@ -1936,17 +1909,16 @@ def panel(room, by, question, out=None, limit=12):
     _need(room, c, by, 'AUDITOR', 'PROPOSER')
     key = os.environ.get('OPENROUTER_API_KEY')
     if not key:
-        raise ValueError('set OPENROUTER_API_KEY in the environment of this shell (never in the room or in the chat)')
+        raise ValueError(say('kernel.panel.set_openrouter_api_key'))
     if not question or not question.strip():
-        raise ValueError('a panel needs a question (--question FILE, the text to critique and what to answer)')
+        raise ValueError(say('kernel.panel.a_panel_needs_a'))
     req = urllib.request.Request('https://openrouter.ai/api/v1/models', headers={'Authorization': f'Bearer {key}'})
     models = json.loads(urllib.request.urlopen(req, timeout=60).read())['data']
     free = [m for m in models if str(m.get('pricing', {}).get('prompt')) in ('0', '0.0') and str(m.get('pricing', {}).get('completion')) in ('0', '0.0')]
     size = lambda m: (int(m.get('context_length') or 0), m.get('id', ''))
     free.sort(key=lambda m: ('stealth' not in (m.get('name', '') + m.get('description', '')).lower(), -size(m)[0]))
     path = Path(out) if out else _dir(room) / f"panel-{time.strftime('%m%d-%H%M')}.md"
-    head = (f'# Panel (free models on OpenRouter)\n\nThe question below was sent to third-party providers, which may keep it.\n\n'
-            f'## Question\n\n{question.strip()}\n\n')
+    head = (say('kernel.panel.panel_free_models_on', strip=question.strip()))
     path.write_text(head, encoding='utf-8')
     answers = []
     for m in free[:limit]:
@@ -1958,14 +1930,13 @@ def panel(room, by, question, out=None, limit=12):
             data = json.loads(urllib.request.urlopen(r, timeout=300).read())
             text = data['choices'][0]['message'].get('content') or ''
         except Exception as exc:                          # one model failing never stops the panel
-            text = f'(no answer: {type(exc).__name__}: {str(exc)[:200]})'
+            text = say('kernel.panel.no_answer', __name__=type(exc).__name__, str_exc=str(exc)[:200])
         answers.append(f"## {m['id']}\n\n{text.strip()}\n")
         with open(path, 'a', encoding='utf-8') as f:     # each answer saved as it comes: a stopped panel keeps what it got
             f.write(answers[-1] + '\n')
         time.sleep(3.2)                                   # 20 requests a minute on free models
     _log(room, by, 'panel', {'models': [m['id'] for m in free[:limit]], 'file': str(path)})
-    return (f'🗣️ panel of {len(answers)} free models written to {path}: these are opinions, to weigh against the evidence '
-            f'(the question went to third-party providers)')
+    return (say('kernel.panel.panel_of_free_models', len_answers=len(answers), path=path))
 
 
 # ---------------------------------------------------------------------------------------------------------- cli
@@ -1978,7 +1949,7 @@ def _json_arg(a):
     try:
         return json.loads(raw or '')
     except ValueError as exc:
-        raise ValueError(f'not valid JSON ({exc})')
+        raise ValueError(say('kernel._json_arg.not_valid_json', exc=exc))
 
 
 def cmd(room, a):
@@ -1988,7 +1959,7 @@ def cmd(room, a):
     except ValueError as exc:
         act = a.pairs[0] if a.pairs else 'status'
         if act == 'assign':
-            room.append(a.name or 'LEAD', f"⛔ assign {' '.join(a.pairs[1:2])} refused: {str(exc)[:300]}", 'board')
+            room.append(a.name or 'LEAD', say('kernel.cmd.assign_refused', pairs=' '.join(a.pairs[1:2]), str_exc=str(exc)[:300]), 'board')
         if act not in ('status', 'view', 'expand', 'checklist') and (act != 'phase' or a.pairs[1:2] == ['next']) and (_dir(room) / 'log.jsonl').parent.is_dir():
             _log(room, a.name, act, {'refused': str(exc)[:400], 'args': a.pairs[1:]}, ok=False)
         raise
@@ -2001,9 +1972,7 @@ def _cmd(room, a):
     post = lambda line: (room.append(a.name or 'LEAD', line, 'board'), print(line))
     if act == 'init':
         if not (a.program and a.metric and (a.evaluate or getattr(a, 'draft', False))):
-            sys.exit('research init --program FILE --metric NAME (--evaluate "CMD" | --draft) [--direction min|max] [--budget-min 5] '
-                     '[--max-evals 100] [--repo DIR] [--sealed a.py,b.py] [--tag NAME] [--result-file] [--keep data/] '
-                     '[--build "CMD" --build-min M] [--repeats N] [--min-gain X|X%] [--guard NAME:min|max:TOL,...] [--final "CMD"] --as LEAD')
+            sys.exit(say('kernel._cmd.research_init_program_file'))
         return post(init(room, a.name, a.program, a.evaluate, a.metric, a.direction or 'min',
                          5 if a.budget_min is None else a.budget_min, 100 if a.max_evals is None else a.max_evals,
                          a.repo or '.', split(a.sealed), a.tag, bool(a.result_file), split(getattr(a, 'keep', None)),
@@ -2029,7 +1998,7 @@ def _cmd(room, a):
                            getattr(a, 'type', None) or 'explorer', a.force))
     if act == 'evaluate':
         if not a.name:
-            sys.exit('--as NAME required')
+            sys.exit(say('kernel._cmd.as_name_required'))
         return print(evaluate(room, a.name, a.desc, getattr(a, 'idea', None), getattr(a, 'kind', None) or ('smoke' if _state(room)[1]['phase'] == 1 else 'attempt'),
                               getattr(a, 'of', None), getattr(a, 'seed', None)))
     if act == 'reanchor':
@@ -2073,7 +2042,4 @@ def _cmd(room, a):
         return post(panel(room, a.name or 'LEAD', q, a.out))
     if act == 'status':
         return print(status(room))
-    sys.exit('research: init | amend | roles | assign WORKER | prebuild WORKER | hold | release | allow-fix WORKER | evaluate '
-             '| resume WORKER | propose-idea | propose-evidence | curate '
-             '| direction | conclude WORKER | revoke ID | verdict | reanchor | seal | phase [next] | final | checklist | view | expand ID '
-             '| panel | status')
+    sys.exit(say('kernel._cmd.research_init_amend_roles'))

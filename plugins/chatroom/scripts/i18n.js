@@ -26,7 +26,7 @@
     return cats[lang] || {};
   }
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-  const pick = (v, f) => (v && typeof v === 'object' ? (f.n == 1 ? v.one : v.other) : v);
+  const pick = (v, f) => (v && typeof v === 'object' ? (String(f.n) === '1' ? v.one : v.other) : v);
   const empty = (v) => v == null || v === '';
   function find(key, f, lang) {
     lang = norm(lang);

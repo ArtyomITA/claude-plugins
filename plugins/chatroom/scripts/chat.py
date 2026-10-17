@@ -1471,7 +1471,7 @@ class Board:
                                     else say('chat.say.fn.ask_the_lead_lead')))
             new = [f for f in files if f not in t['files']]
             t['files'] += new
-            return say('chat.say.fn.now_also_changes', id=t['id'], v2=', '.join(new) or '(nothing new)', name=name)
+            return say('chat.say.fn.now_also_changes', id=t['id'], v2=', '.join(new) or say('chat.word.nothing_new'), name=name)
         return self.change(fn)
 
     def drop(self, name, tid):
@@ -1813,42 +1813,14 @@ def cmd_check(room, a):
     print('\n'.join(f'CHECK {t}' for _, t in found) if found else say('chat.say.cmd_check.check_nothing_wrong_seen'))
 
 
-AGENTS_MD = """# This folder is a chat room (chatroom plugin)
-
-Several agents (Claude Code and Codex alike) talk here through `chat.py`, the plugin's script. If you work in this
-folder as a participant, use it; the same commands work in both tools, or the same tools through `chat.py mcp`.
-
-- Read what is new: `python CHAT read --focus --as NAME --room ROOM` (in full only what concerns you, the rest as one
-  line per author with message numbers), `read --range A-B` to open those messages, or without `--focus` for everything.
-- Wait: `wait --focus --as NAME --timeout 100` returns for what concerns you or when your timer expires.
-- Write: `python CHAT post --as NAME --room ROOM` with the text on stdin; `--reply N` answers message #N and tags its
-  author; `--finding` shares something the others should know now, without a ping. Only the agents you tag are pinged
-  (everyone for @all, PLAN, VOTE, CLOSED): tag who should answer, and send the pings that `post` prints (ALERT line).
-- Status, with your percentage, ideally as JSON: `--status` with `{"task": "T3", "step": "...", "pct": 60, "files": [...],
-  "next": "...", "needs": "..."}`. Every fact carries its source (#n, file:line, a command and its exit code).
-- The shared plan is the task board: `board`, `task add "title" --files a,dir/ --deps T1`, `task take T3` or `task next`
-  before you start (refused if the files are taken or the dependencies are open; a task whose owner is silent for 5
-  heartbeats is free again), `task amend T3 --files c.py`, `task done T3 --proof "pytest -q: 12 passed, exit 0" --gaps
-  "what is not done"` (the proof must name an artifact; a task with a verify command closes only when it exits 0),
-  `task handoff T3 NAME --note "..."`, `task help T3 NAME --scope "..." --files a --done-when "..." --note "..."`
-  (lend a piece of your task to someone who waits; who receives it runs `task accept T9` within 10 minutes),
-  `task giveback T9 --note "..."`, `task decide "..."`. A task with a verify command is closed from your shell, in your
-  worktree, where its test runs.
-- Votes name what they rest on: `VOTE v2: yes, checked a.py:40` or `VOTE v2: no, because ...`. A CLOSED is refused until
-  everyone voted yes with evidence; a no is reviewed by the lead; after PLAN v3 only the lead posts a new version.
-- In a research room: change only the program in the research worktree and run `research evaluate --desc "..."`;
-  `research status` shows the best and the latest runs. The kernel commits, evaluates, keeps or resets.
-- Your notes that survive a compacted context: `notebook "text" --as NAME`, read with `notebook --as NAME`.
-
-CHAT is the plugin's scripts/chat.py; ROOM is this folder.
-"""
+# the room's AGENTS.md: templates/room_agents.md (or its translation in templates/<lang>/), CHAT and ROOM filled in
 
 
 def write_agents_md(room):
     """AGENTS.md in the room folder (the instruction file Codex and Claude Code read by themselves); kept if present"""
     path = room.dir / 'AGENTS.md'
     if not path.exists():
-        path.write_text(AGENTS_MD.replace('CHAT', str(Path(__file__).resolve()).replace('\\\\', '/')).replace('ROOM', str(room.dir).replace('\\\\', '/')),
+        path.write_text(room_agents_md(room).replace('CHAT', str(Path(__file__).resolve()).replace('\\\\', '/')).replace('ROOM', str(room.dir).replace('\\\\', '/')),
                         encoding='utf-8')
 
 
@@ -2385,7 +2357,6 @@ def cmd_add(room, a):
 # what the lead writes once about the room for the agents' prompts (chat.py brief); chat.py prompt fills the template
 # from it and from the config, so a prompt is never rewritten by hand and every agent gets the same rules
 BRIEF_KEYS = ('goal', 'style', 'materials', 'constraints', 'closing', 'max')
-LANGUAGE_NAME = {'en': 'English', 'it': 'Italian'}
 
 
 def checkpoint_every(room):
@@ -2416,6 +2387,15 @@ def cmd_brief(room, a):
     print((say('chat.say.cmd_brief.brief_saved') if a.pairs else 'brief: ') + json.dumps(data, ensure_ascii=False))
 
 
+def room_agents_md(room):
+    """the AGENTS.md text of a room, in its language when there is a translation"""
+    lang = lang_of(room.config())
+    path = HERE.parent / 'templates' / lang / 'room_agents.md'
+    if lang == 'en' or not path.is_file():
+        path = HERE.parent / 'templates' / 'room_agents.md'
+    return path.read_text(encoding='utf-8')
+
+
 def fill_prompt(room, name, template='agent_prompt.md'):
     """the prompt of one participant, filled from the template, the config and the brief: the lead passes it unchanged
     to the Agent tool (or spawn_agent), so no prompt is rewritten by hand"""
@@ -2426,11 +2406,16 @@ def fill_prompt(room, name, template='agent_prompt.md'):
     path = (HERE.parent / 'templates' / template).resolve()
     if (HERE.parent / 'templates').resolve() not in path.parents or not path.is_file():
         raise ValueError(say('chat.err.fill_prompt.no_template_in_the', v1=repr(template)))
+    translated = HERE.parent / 'templates' / lang / path.name     # the room's language, when a translation exists
+    if lang != 'en' and translated.is_file():
+        path = translated
+    if not path.is_file():
+        raise ValueError(say('chat.err.fill_prompt.no_template_in_the', v1=repr(template)))
     dossier = room.dir / 'DOSSIER.md'
     values = {
         'NAME': name, 'AS': name + (f'~{generation(room, name)}' if generation(room, name) else ''),
         'OTHERS': ', '.join(n for n in config['participants'] if n != name) or '-',
-        'LANGUAGE': LANGUAGE_NAME[lang], 'ROOM': str(room.dir.resolve()).replace('\\', '/'),
+        'LANGUAGE': tr(lang, 'meta.languageName'), 'ROOM': str(room.dir.resolve()).replace('\\', '/'),
         'CHAT': str(Path(__file__).resolve()).replace('\\', '/'), 'HEARTBEAT': str(room.heartbeat()),
         'ROLE': config.get('profiles', {}).get(name, {}).get('role') or '-', 'TOPIC': config.get('topic', ''),
         'GOAL': data.get('goal') or config.get('subtitle') or config.get('topic', ''),
@@ -2447,26 +2432,18 @@ def fill_prompt(room, name, template='agent_prompt.md'):
         if name in workers:
             work_of = workers[name]['work']
         elif set(workers) - {'_main'}:            # workers have their own worktrees: this one gets its own at assign
-            work_of = f'(not assigned yet: wait for the research assign {name} of the lead, then research view shows yours)'
+            work_of = tr(lang, 'prompt.notAssigned', name=name)
         c = dict(c, work=work_of)
         longest = research.max_run_seconds(c)
-        values.update({'PROGRAM': c['program'], 'EVALUATE': c['evaluate'] or '(being written, phase 1)', 'METRIC': c['metric'],
-                       'BETTER': 'lower' if c['direction'] == 'min' else 'higher', 'BUDGET_S': str(c['budget_s']),
+        values.update({'PROGRAM': c['program'], 'EVALUATE': c['evaluate'] or tr(lang, 'prompt.beingWritten'), 'METRIC': c['metric'],
+                       'BETTER': tr(lang, 'prompt.lower') if c['direction'] == 'min' else tr(lang, 'prompt.higher'), 'BUDGET_S': str(c['budget_s']),
                        'MAX_EVALS': str(c['max_evals']), 'WORK': c['work'].replace('\\', '/'),
                        'SEALED': ', '.join(c['sealed']) or '-', 'EVAL_TIMEOUT': str(longest),
                        'EVAL_TIMEOUT_MS': str(longest * 1000),
-                       'EVAL_HOW': (f"Run it from your shell with a timeout of at least {longest} s "
-                                    f"({longest * 1000} ms for the Bash tool of Claude Code)"
-                                    if longest <= 600 else
-                                    f"One evaluate call may last {longest} s (build, repeats), longer than one shell call may wait (600 s): start it in "
-                                    f"the background (Bash tool with run_in_background in Claude Code, a background job elsewhere) "
-                                    f"and wait for it to end; research status shows it running. On Windows a session may kill long "
-                                    f"background commands: for runs near an hour use a separate process (PowerShell Start-Process) "
-                                    f"and research status"),
-                       'METRIC_SOURCE': ('a result file the sealed evaluator writes ($CHATROOM_RESULT): nothing your program prints counts'
-                                         if c.get('metric_source') == 'file' else
-                                         'its output, where it must appear exactly once: never print a line starting with '
-                                         f"\"{c['metric']}:\" yourself (two such lines make the run a crash)")})
+                       'EVAL_HOW': (tr(lang, 'prompt.evalShort', s=longest, ms=longest * 1000) if longest <= 600
+                                    else tr(lang, 'prompt.evalLong', s=longest)),
+                       'METRIC_SOURCE': (tr(lang, 'prompt.metricFile') if c.get('metric_source') == 'file'
+                                         else tr(lang, 'prompt.metricOutput', metric=c['metric']))})
     text = re.sub(r'\{\{([A-Z_]+)\}\}', lambda m: values.get(m.group(1), m.group(0)), path.read_text(encoding='utf-8'))
     left = sorted(set(re.findall(r'\{\{([A-Z_]+)\}\}', text)))
     if left:
@@ -2476,13 +2453,18 @@ def fill_prompt(room, name, template='agent_prompt.md'):
 
 def guide_hint(mode):
     """the line that hands the lead its guide, printed wherever a lead starts a room or a mode"""
-    return say('chat.say.guide_hint.lead_read_your_guide', as_posix=Path(__file__).resolve().as_posix(), mode=mode)
+    from i18n import current
+    return say('chat.say.guide_hint.lead_read_your_guide', as_posix=Path(__file__).resolve().as_posix(),
+               mode=mode + (f' --lang {current()}' if current() != 'en' else ''))
 
 
 def cmd_guide(room, a):
     """chat.py guide normal|research: the lead's guide, with this chat.py's path in its commands"""
     mode = (a.pairs[0] if a.pairs else 'normal').lower()
+    lang = lang_of({'lang': getattr(a, 'lang', None) or (room.config().get('lang') if room and room.config_path.is_file() else None)})
     path = HERE.parent / 'guides' / f'lead-{mode}.md'
+    if lang != 'en' and (HERE.parent / 'guides' / lang / f'lead-{mode}.md').is_file():
+        path = HERE.parent / 'guides' / lang / f'lead-{mode}.md'
     if mode not in ('normal', 'research') or not path.is_file():
         sys.exit(say('chat.err.cmd_guide.guide_normal_or_research'))
     sys.stdout.write(path.read_text(encoding='utf-8').replace('python CHAT ', f'python "{Path(__file__).resolve().as_posix()}" '))
@@ -2526,7 +2508,7 @@ def cmd_remove(room, a):
         config['left'] = sorted(set(config.get('left', [])) | set(names))
         return config
     config = room.edit_config(change)
-    print(say('chat.say.cmd_remove.room_left_participants_now', dir=room.dir, names=', '.join(names), v3=', '.join(config['participants']) or 'none'))
+    print(say('chat.say.cmd_remove.room_left_participants_now', dir=room.dir, names=', '.join(names), v3=', '.join(config['participants']) or say('chat.word.none')))
 
 
 def cmd_command(room, a):
@@ -2951,18 +2933,18 @@ def cmd_serve(room, a):
         if not ask:
             raise ValueError(say('chat.err.answer_ask.no_such_pending_ask'))
         lines = lend_log.read_text(encoding='utf-8').splitlines() if lend_log.exists() else []
-        helper, say = f'AIUTO{1 + len(lines)}', None
+        helper, reply = f'AIUTO{1 + len(lines)}', None
         if ok:
             minutes = max(5, min(120, int(minutes)))
             b.answer_ask(aid, True, helper, model, minutes)
             prepare_helper(f'in{aid}', helper, b.host, ask['text'], model, effort, minutes)
             guest['lent'] = [t for t in guest['lent'] if t > time.time()] + [time.time() + minutes * 60]
-            say = say('chat.say.answer_ask.lends_to_min_for', name=me()['name'], helper=helper, host=b.host, model=model, effort=effort, minutes=minutes, text=ask['text'][:200])
+            reply = say('chat.say.answer_ask.lends_to_min_for', name=me()['name'], helper=helper, host=b.host, model=model, effort=effort, minutes=minutes, text=ask['text'][:200])
         else:
             b.answer_ask(aid, False)
-            say = say('chat.say.answer_ask.cannot_lend_an_agent', name=me()['name'], host=b.host)
+            reply = say('chat.say.answer_ask.cannot_lend_an_agent', name=me()['name'], host=b.host)
         with (common.dir / 'outbox.jsonl').open('a', encoding='utf-8') as f:
-            f.write(json.dumps({'from': me()['name'], 'text': say}, ensure_ascii=False) + '\n')
+            f.write(json.dumps({'from': me()['name'], 'text': reply}, ensure_ascii=False) + '\n')
 
     def auto_answer(asks):
         """lend_auto is on: the host's asks are answered yes at once (the Bridge calls this from its own thread)"""
@@ -3137,7 +3119,7 @@ def cmd_serve(room, a):
                     except OSError as exc:
                         cache.pop(m[2], None)           # an address that expired: ask yt-dlp again, once
                         if attempt:
-                            return self.send(502, say('chat.say.do_GET.youtube_did_not_give', v1="sound" if audio else "picture", exc=exc), 'text/plain')
+                            return self.send(502, say('chat.say.do_GET.youtube_did_not_give', v1=say('chat.word.sound') if audio else say('chat.word.picture'), exc=exc), 'text/plain')
                         continue
                     with up:
                         self.send_response(up.status)
@@ -3669,7 +3651,7 @@ def main():
     if a.command == 'rooms':
         return cmd_rooms(None, a)
     if a.command == 'guide':                             # no room needed: the lead reads it before making one
-        return cmd_guide(None, a)
+        return cmd_guide(Room(a.room) if a.room else None, a)
     if a.command == 'mcp' and not a.room:                # one server for every room: each call names its room
         return cmd_mcp(None, a)
     if not a.room:

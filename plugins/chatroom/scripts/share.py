@@ -32,6 +32,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 
+import sys  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import say  # noqa: E402
+
 BIN = Path.home() / '.claude' / 'chatroom' / 'bin'
 CLOUDFLARED = '2026.9.3'                                    # pinned, with the checksums from its release page
 SUMS = {
@@ -55,7 +59,7 @@ def person(d):
     """a coarse presence entry, checked: name, emoji, colour and working/break"""
     name = str(d.get('name', '')).strip()
     if not NAME.match(name):
-        raise ValueError('names are letters, digits, _ and -, up to 24')
+        raise ValueError(say('share.person.names_are_letters_digits'))
     return {'name': name, 'emoji': str(d.get('emoji', ''))[:8], 'color': d['color'] if COLOR.match(str(d.get('color', ''))) else '#888888',
             'state': 'break' if d.get('state') == 'break' else 'work'}
 
@@ -112,17 +116,17 @@ RT_WIDE = {'n': ('t', 'a'), 'z': ('f', 'h'), 'q': ('c',), 'o': ('c',)}      # fr
 def clean_rt(m):
     """a realtime message of a match, checked: the match, the kind, and only the numbers that kind carries"""
     if not isinstance(m, dict):
-        raise ValueError('a realtime message is an object')
+        raise ValueError(say('share.clean_rt.a_realtime_message_is'))
     k, g = str(m.get('k', '')), re.sub(r'[^a-z0-9]', '', str(m.get('g', '')))[:12]
     if k not in RT_KINDS or not g:
-        raise ValueError('unknown realtime message')
+        raise ValueError(say('share.clean_rt.unknown_realtime_message'))
     out = {'k': k, 'g': g}
     for f in RT_KINDS[k]:
         if f in m:
             out[f] = int(num(m[f], 0, 2 ** 32)) if f in RT_WIDE.get(k, ()) else round(num(m[f], -5000, 5000), 3)
     if k == 'n' and m.get('d'):                       # a lockstep packet: the changes of the buttons, "frame:mask,frame:mask"
         if not re.fullmatch(r'[0-9:,]{1,1500}', str(m['d'])):
-            raise ValueError('a bad list of button changes')
+            raise ValueError(say('share.clean_rt.a_bad_list_of'))
         out['d'] = str(m['d'])
     return out
 
@@ -141,9 +145,9 @@ def num(x, lo, hi):
     try:
         v = float(x)
     except (TypeError, ValueError, OverflowError):
-        raise ValueError('a number was expected')
+        raise ValueError(say('share.num.a_number_was_expected'))
     if not lo <= v <= hi:
-        raise ValueError('a number out of its range')
+        raise ValueError(say('share.num.a_number_out_of'))
     return v
 
 
@@ -152,28 +156,28 @@ def clean_game(g):
     try:
         return _clean_game(g)
     except (OverflowError, TypeError):                 # int(infinity), int([]): a bad number is a bad move, not a crash
-        raise ValueError('a game move has a bad number')
+        raise ValueError(say('share.clean_game.a_game_move_has'))
 
 
 def _clean_game(g):
     if not isinstance(g, dict):
-        raise ValueError('a game move must be an object')
+        raise ValueError(say('share._clean_game.a_game_move_must'))
     kind, op, gid = str(g.get('type', '')), str(g.get('op', '')), re.sub(r'[^a-z0-9]', '', str(g.get('id', '')))[:12]
     if kind not in GAMES or op not in GAMES[kind] or not gid:
-        raise ValueError('unknown game move')
+        raise ValueError(say('share._clean_game.unknown_game_move'))
     out = {'type': kind, 'op': op, 'id': gid}
     if op == 'move':
         out['cell'] = int(g.get('cell', -1))
         if not 0 <= out['cell'] <= 8:
-            raise ValueError('a tris cell goes from 0 to 8')
+            raise ValueError(say('share._clean_game.a_tris_cell_goes'))
     if op == 'commit':
         out['hash'] = str(g.get('hash', ''))
         if not re.fullmatch(r'[0-9a-f]{64}', out['hash']):
-            raise ValueError('a commit is a sha256 in hex')
+            raise ValueError(say('share._clean_game.a_commit_is_a'))
     if op == 'reveal':
         out['pick'], out['salt'] = str(g.get('pick', '')), str(g.get('salt', ''))
         if out['pick'] not in ('sasso', 'carta', 'forbici') or not re.fullmatch(r'[0-9a-f]{8,32}', out['salt']):
-            raise ValueError('a reveal is sasso, carta or forbici with its salt')
+            raise ValueError(say('share._clean_game.a_reveal_is_sasso'))
     if kind == 'tv':                                  # watch together: a YouTube video, from when it started
         out['v'] = str(g.get('v', ''))
         try:
@@ -181,9 +185,9 @@ def _clean_game(g):
         except OverflowError:
             out['t'] = 0.0
         if not re.fullmatch(r'[A-Za-z0-9_-]{11}', out['v']):
-            raise ValueError('a YouTube video id has 11 letters, digits, - or _')
+            raise ValueError(say('share._clean_game.a_youtube_video_id'))
         if not 1e9 <= out['t'] < 4e9:                 # seconds since 1970; also false for NaN and infinity, which would break the JSON
-            raise ValueError('the start time is seconds since 1970')
+            raise ValueError(say('share._clean_game.the_start_time_is'))
         out['title'] = re.sub(r'[\x00-\x1f<>]', '', str(g.get('title', '')))[:120]
         if g.get('pos') is not None:                  # the second the video is at, when it was there, and whether it is paused
             out['pos'] = round(num(g.get('pos'), 0, 864000), 2)
@@ -192,19 +196,19 @@ def _clean_game(g):
     if op == 'shot':                                  # pool: the angle and power of the shot, where the 16 balls ended, whose turn, the winner
         end = g.get('end')
         if not isinstance(end, list) or len(end) != 16:
-            raise ValueError('a pool shot ends with 16 balls')
+            raise ValueError(say('share._clean_game.a_pool_shot_ends'))
         out['a'], out['p'] = round(num(g.get('a'), -10, 10), 5), round(num(g.get('p'), 0, 1), 4)
         try:
             out['end'] = [None if b is None else [round(num(b[0], 0, POOL_W), 1), round(num(b[1], 0, POOL_H), 1)] for b in end]
         except (IndexError, KeyError, TypeError):
-            raise ValueError('a ball is null or [x, y]')
+            raise ValueError(say('share._clean_game.a_ball_is_null'))
         groups = g.get('groups')
         if not isinstance(groups, list) or len(groups) != 2 or any(x not in (None, 'solids', 'stripes') for x in groups):
-            raise ValueError('pool groups are solids, stripes or nothing, for the two players')
+            raise ValueError(say('share._clean_game.pool_groups_are_solids'))
         out['groups'] = groups
         if g.get('cue') is not None:                     # the cue it was played with, and for the spin which way
             if g.get('cue') not in ('classic', 'power', 'precise', 'spin'):
-                raise ValueError('a pool cue is classic, power, precise or spin')
+                raise ValueError(say('share._clean_game.a_pool_cue_is'))
             out['cue'] = g['cue']
             if g['cue'] == 'spin':
                 out['sp'] = -1 if g.get('sp') == -1 else 1
@@ -216,12 +220,12 @@ def _clean_game(g):
     if kind == 'nes' and op == 'new':                 # a NES game of the arcade, offered to a friend: which one, and its checksum, so both have the same file
         out['rom'] = str(g.get('rom', ''))
         if not re.fullmatch(r'[a-z0-9-]{1,40}', out['rom']):
-            raise ValueError('a game of the arcade is a short name')
+            raise ValueError(say('share._clean_game.a_game_of_the'))
         out['sha'] = str(g.get('sha', '')) if re.fullmatch(r'[0-9a-f]{64}', str(g.get('sha', ''))) else ''
     if kind == 'result':                              # the end of a game, for the leaderboards: who won, or the score of a run
         gk = str(g.get('g', ''))
         if gk not in RESULT_MATCH and gk not in RESULT_SCORE and not re.fullmatch(r'arc-[a-z0-9-]{1,32}', gk):
-            raise ValueError('unknown game for a result')
+            raise ValueError(say('share._clean_game.unknown_game_for_a'))
         out['g'] = gk
         if gk in RESULT_MATCH:
             out['win'] = int(num(g.get('win'), -1, 1))                          # 1 the poster won, 0 lost, -1 a draw
@@ -235,7 +239,7 @@ def _clean_game(g):
     if op == 'roll':
         out['roll'] = [int(x) for x in (g.get('roll') or [])][:5]
         if not out['roll'] or not all(1 <= x <= 6 for x in out['roll']):
-            raise ValueError('dice go from 1 to 6')
+            raise ValueError(say('share._clean_game.dice_go_from_to'))
     return out
 
 
@@ -285,11 +289,11 @@ def doc_name(name):
 def add_doc(common, author, name, data):
     """store a text document in the common room (ROOM/common/docs) and post a line pointing to it"""
     if len(data) > DOC_MAX:
-        raise ValueError('a document can be at most 5 MB')
+        raise ValueError(say('share.add_doc.a_document_can_be'))
     try:
         data.decode('utf-8')
     except UnicodeDecodeError:
-        raise ValueError('only text documents (UTF-8)')
+        raise ValueError(say('share.add_doc.only_text_documents_utf'))
     docs = Path(common.dir) / 'docs'
     docs.mkdir(exist_ok=True)
     did = 1 + sum(1 for _ in docs.iterdir())
@@ -334,7 +338,7 @@ class Share:
 
     def start(self, via):
         if via not in VIAS:
-            raise ValueError(f'via must be one of {VIAS}')
+            raise ValueError(say('share.start.via_must_be_one', VIAS=VIAS))
         self.stop()
         handler = make_handler(self)
         self.server = ThreadingHTTPServer(('0.0.0.0' if via == 'lan' else '127.0.0.1', 0), handler)
@@ -411,15 +415,15 @@ class Share:
             while self.fails and now - self.fails[0] > 600:
                 self.fails.popleft()
             if not self.pin:
-                raise ValueError('the room is not shared right now')
+                raise ValueError(say('share.join.the_room_is_not'))
             if len(self.fails) >= 10:
-                raise ValueError('too many wrong PINs: try again in a few minutes')
+                raise ValueError(say('share.join.too_many_wrong_pins'))
             if not hmac.compare_digest(str(pin).encode('utf-8'), self.pin.encode('utf-8')):      # str with non-ASCII letters would raise
                 self.fails.append(now)
-                raise ValueError('wrong PIN')
+                raise ValueError(say('share.join.wrong_pin'))
             g = person(guest)
             if any(x['name'] == g['name'] for x in self.guests.values()) or g['name'] == self.host:
-                raise ValueError('that name is taken in this room')
+                raise ValueError(say('share.join.that_name_is_taken'))
             token = secrets.token_hex(24)
             self.guests[token] = {**g, 'agents': [], 'seen': now, 'posts': deque(), 'cids': deque(maxlen=400), 'me': None, 'office': None}
         self.save()                                          # a restart of the viewer keeps this guest in
@@ -449,7 +453,7 @@ class Share:
         while g['posts'] and now - g['posts'][0] > 60:
             g['posts'].popleft()
         if len(g['posts']) >= 20:
-            raise ValueError('slow down: 20 lines a minute')
+            raise ValueError(say('share.post.slow_down_lines_a'))
         g['posts'].append(now)
         author = str(author or '').strip()
         name = g['name'] if not author or author == g['name'] else f"{g['name']}·{person({'name': author})['name']}"
@@ -477,7 +481,7 @@ class Share:
         while g['docs'] and now - g['docs'][0] > 3600:
             g['docs'].popleft()
         if len(g['docs']) >= 10:
-            raise ValueError('slow down: 10 documents an hour')
+            raise ValueError(say('share.doc.slow_down_documents_an'))
         g['docs'].append(now)
         author = str(author or '').strip()
         who = g['name'] if not author or author == g['name'] else f"{g['name']}·{person({'name': author})['name']}"
@@ -514,10 +518,10 @@ class Share:
         while g['posts'] and now - g['posts'][0] > 60:
             g['posts'].popleft()
         if len(g['posts']) >= 20:
-            raise ValueError('slow down: 20 lines a minute')
+            raise ValueError(say('share.room_post.slow_down_lines_a'))
         text = str(text).strip()[:LINE_MAX]
         if not text:
-            raise ValueError('empty message')
+            raise ValueError(say('share.room_post.empty_message'))
         g['posts'].append(now)
         n = self.room.post(g['name'], text, g.get('color'))
         if cid:
@@ -528,10 +532,10 @@ class Share:
         """a guest asks for help (research, a plan, a change to their files): the host decides, nothing runs before"""
         text = str(text).strip()[:1500]
         if not text:
-            raise ValueError('say what you need')
+            raise ValueError(say('share.ask.say_what_you_need'))
         with self.lock:
             if sum(1 for r in self.requests if r['guest'] == g['name'] and r['status'] == 'pending') >= 2:
-                raise ValueError('wait for the host to answer the requests already sent')
+                raise ValueError(say('share.ask.wait_for_the_host'))
             r = {'id': len(self.requests) + 1, 'guest': g['name'], 'text': text, 'ts': time.time(), 'status': 'pending'}
             self.requests.append(r)
         if self.on_ask:                                       # the host may have said: lend by yourself
@@ -545,12 +549,12 @@ class Share:
         """the host asks a guest to lend one of their agents: the guest decides on their side, nothing runs before"""
         text = str(text).strip()[:1500]
         if not text:
-            raise ValueError('say what you need')
+            raise ValueError(say('share.ask_guest.say_what_you_need'))
         with self.lock:
             if not any(g['name'] == name for g in self.guests.values()):
-                raise ValueError('that friend is not in the room')
+                raise ValueError(say('share.ask_guest.that_friend_is_not'))
             if sum(1 for a in self.asks if a['to'] == name and a['status'] == 'pending') >= 2:
-                raise ValueError('wait for the friend to answer the asks already sent')
+                raise ValueError(say('share.ask_guest.wait_for_the_friend'))
             a = {'id': len(self.asks) + 1, 'to': name, 'text': text, 'ts': time.time(), 'status': 'pending'}
             self.asks.append(a)
             return {'id': a['id']}
@@ -560,7 +564,7 @@ class Share:
         with self.lock:
             a = next((a for a in self.asks if a['id'] == rid and a['to'] == g['name']), None)
             if not a or a['status'] != 'pending':
-                raise ValueError('no such pending ask')
+                raise ValueError(say('share.ask_answer.no_such_pending_ask'))
             if ok:
                 minutes = int(num(minutes or 30, 5, 120))
                 a.update(helper=f"{g['name']}·{person({'name': helper})['name']}", model=str(model or '')[:24], minutes=minutes, until=time.time() + minutes * 60)
@@ -576,7 +580,7 @@ class Share:
         with self.lock:
             r = next((r for r in self.requests if r['id'] == rid), None)
             if not r or r['status'] != 'pending':
-                raise ValueError('no such pending request')
+                raise ValueError(say('share.answer.no_such_pending_request'))
             r['status'] = 'approved' if ok else 'declined'
             if ok:
                 r.update(helper=helper, model=model, effort=effort, minutes=minutes, until=time.time() + minutes * 60)
@@ -633,35 +637,35 @@ def make_handler(share):
         def body(self, limit=MAX_BODY):
             n = int(self.headers.get('Content-Length') or 0)
             if n < 0 or n > limit:
-                raise ValueError('bad length')
+                raise ValueError(say('share.body.bad_length'))
             return json.loads(self.rfile.read(n).decode('utf-8') or '{}')
 
         def do_GET(self):
             path, _, query = self.path.partition('?')
             if path not in ('/share/feed', '/share/office', '/share/room', '/share/tvsearch') and not re.fullmatch(r'/share/doc/\d{1,6}', path):
-                return self.send(404, {'error': 'not found'})
+                return self.send(404, {'error': say('share.do_GET.not_found')})
             g = share.guest(self.headers.get('X-Chatroom-Token'))
             if not g:
-                return self.send(401, {'error': 'join first'})
+                return self.send(401, {'error': say('share.do_GET.join_first')})
             if path.startswith('/share/doc/'):              # a document of the common room, as plain text
                 did = int(path.rsplit('/', 1)[1])
                 line = next((m for m in share.common.messages() if (m.get('doc') or {}).get('id') == did), None)
                 p = doc_path(share.common.dir, line['doc']) if line else None
                 if not p:
-                    return self.send(404, {'error': 'no such document'})
+                    return self.send(404, {'error': say('share.do_GET.no_such_document')})
                 data = p.read_bytes()
                 self.send_response(200); self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('X-Content-Type-Options', 'nosniff'); self.send_header('Content-Length', str(len(data))); self.end_headers()
                 return self.wfile.write(data)
             if path == '/share/tvsearch':                 # a guest that cannot search YouTube searches through the host (6 a minute)
                 if not share.search:
-                    return self.send(404, {'error': 'the host cannot search'})
+                    return self.send(404, {'error': say('share.do_GET.the_host_cannot_search')})
                 now = time.time()
                 g.setdefault('searches', deque())
                 while g['searches'] and now - g['searches'][0] > 60:
                     g['searches'].popleft()
                 if len(g['searches']) >= 6:
-                    return self.send(429, {'error': 'slow down: 6 searches a minute'})
+                    return self.send(429, {'error': say('share.do_GET.slow_down_searches_a')})
                 g['searches'].append(now)
                 q = re.sub(r'[\x00-\x1f]', ' ', (re.search(r'(?:^|&)q=([^&]*)', query) or [0, ''])[1])
                 try:
@@ -671,7 +675,7 @@ def make_handler(share):
                     return self.send(503, {'error': str(exc)})
             if path == '/share/room':                     # the room's own chat, when the host shares it with friends
                 if not share.room or not share.room.allowed():
-                    return self.send(403, {'error': 'the host does not share the room chat'})
+                    return self.send(403, {'error': say('share.do_GET.the_host_does_not')})
                 since = int((re.search(r'(?:^|&)since=(\d+)', query) or [0, 0])[1])
                 return self.send(200, {'messages': share.room.read(since)[:300], 'config': share.room.config()})
             if path == '/share/office':                   # a visit: the host's plan and everyone's coarse presence
@@ -687,7 +691,7 @@ def make_handler(share):
             try:
                 body = self.body(DOC_BODY if path == '/share/doc' else MAX_BODY)
             except (ValueError, json.JSONDecodeError):
-                return self.send(400, {'error': 'bad request'})
+                return self.send(400, {'error': say('share.do_POST.bad_request')})
             if path == '/share/join':
                 try:
                     token = share.join(str(body.get('pin', '')), body)
@@ -696,11 +700,11 @@ def make_handler(share):
                 return self.send(200, {'token': token, 'title': share.title, 'host': share.host})
             g = share.guest(self.headers.get('X-Chatroom-Token'))
             if not g:
-                return self.send(401, {'error': 'join first'})
+                return self.send(401, {'error': say('share.do_POST.join_first')})
             try:
                 if path == '/share/room':
                     if not share.room or not share.room.allowed():
-                        return self.send(403, {'error': 'the host does not share the room chat'})
+                        return self.send(403, {'error': say('share.do_POST.the_host_does_not')})
                     return self.send(200, {'n': share.room_post(g, body.get('text', ''), body.get('cid'))})
                 if path == '/share/post':
                     return self.send(200, {'n': share.post(g, body.get('from'), body.get('text', ''), body.get('game'), body.get('cid'))})
@@ -719,7 +723,7 @@ def make_handler(share):
                     try:
                         data = base64.b64decode(str(body.get('data', '')), validate=True)
                     except (ValueError, TypeError):
-                        raise ValueError('the document must be base64')
+                        raise ValueError(say('share.do_POST.the_document_must_be'))
                     return self.send(200, {'n': share.doc(g, body.get('from'), body.get('name'), data, body.get('cid'))})
                 if path == '/share/rt':               # a guest's realtime messages in, the others' out (a match in real time)
                     return self.send(200, share.rt_exchange(g, body.get('msgs'), body.get('since', 0), body.get('wait', 0)))
@@ -732,7 +736,7 @@ def make_handler(share):
                     return self.send(200, {})
             except ValueError as exc:
                 return self.send(429 if 'slow' in str(exc) else 400, {'error': str(exc)})
-            self.send(404, {'error': 'not found'})
+            self.send(404, {'error': say('share.do_POST.not_found')})
     return Handler
 
 
@@ -769,13 +773,13 @@ def install_cloudflared():
     osname = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'darwin'}.get(platform.system())
     arch = {'AMD64': 'amd64', 'x86_64': 'amd64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(platform.machine())
     if (osname, arch) not in SUMS:
-        raise ValueError(f'no cloudflared build for {platform.system()} {platform.machine()}: install it yourself')
+        raise ValueError(say('share.install_cloudflared.no_cloudflared_build_for', system=platform.system(), machine=platform.machine()))
     asset, digest = SUMS[(osname, arch)]
     url = f'https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED}/{asset}'
     with urllib.request.urlopen(url, timeout=180) as r:
         data = r.read()
     if hashlib.sha256(data).hexdigest() != digest:
-        raise ValueError('the download does not match its published checksum: nothing installed')
+        raise ValueError(say('share.install_cloudflared.the_download_does_not'))
     BIN.mkdir(parents=True, exist_ok=True)
     target = BIN / ('cloudflared.exe' if osname == 'windows' else 'cloudflared')
     if asset.endswith('.tgz'):
@@ -837,7 +841,7 @@ def watch_tunnel(share, pid, log, pattern):
                         break
             if not alive(pid):
                 if share.tunnel_pid == pid:
-                    share.error, share.url = 'the tunnel closed', None
+                    share.error, share.url = say('share.run.the_tunnel_closed'), None
                 return
             time.sleep(0.5)
     threading.Thread(target=run, daemon=True).start()
@@ -851,12 +855,12 @@ def start_tunnel(via, port, share, log):
     if via == 'cloudflared':
         exe = cloudflared_path()
         if not exe:
-            raise ValueError('cloudflared is not installed')
+            raise ValueError(say('share.start_tunnel.cloudflared_is_not_installed'))
         cmd = [exe, 'tunnel', '--no-autoupdate', '--url', f'http://127.0.0.1:{port}']
     else:
         ssh = shutil.which('ssh')
         if not ssh:
-            raise ValueError('ssh is not available on this computer')
+            raise ValueError(say('share.start_tunnel.ssh_is_not_available'))
         cmd = [ssh, '-T', '-p', '443', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ServerAliveInterval=30',
                '-o', 'ExitOnForwardFailure=yes', f'-R0:127.0.0.1:{port}', 'free.pinggy.io']
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -873,7 +877,7 @@ def start_tunnel(via, port, share, log):
         try:
             pid = int(pidfile.read_text(encoding='utf-8-sig').strip())
         except (OSError, ValueError):
-            raise ValueError('the tunnel did not start')
+            raise ValueError(say('share.start_tunnel.the_tunnel_did_not'))
     else:
         with open(log, 'w') as out:
             pid = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True).pid
@@ -1069,7 +1073,7 @@ def call(url, path, token=None, body=None, timeout=10):
             cap = DOC_MAX if path.startswith('/share/doc/') else 2 * 1024 * 1024    # a friend's server is still someone else's
             data = r.read(cap + 1)
             if len(data) > cap:
-                raise ValueError('the other side sent too much')
+                raise ValueError(say('share.call.the_other_side_sent'))
             return data if path.startswith('/share/doc/') else json.loads(data.decode('utf-8') or '{}')
     except urllib.error.HTTPError as exc:
         try:
@@ -1096,7 +1100,7 @@ class Bridge:
 
     def start(self, token=None, title='', host=''):
         if not re.match(r'^https?://[\w.-]+(:\d+)?/?$', self.url):
-            raise ValueError('the address looks like https://something.trycloudflare.com')
+            raise ValueError(say('share.start.the_address_looks_like'))
         if token:                                                    # back after a restart of the viewer: the same pass, no PIN
             self.token, self.title, self.host = str(token)[:100], str(title)[:120], clean_name(host)
             try:
@@ -1178,7 +1182,7 @@ class Bridge:
                         pass
                 self.error = None
             except PermissionError as exc:
-                self.error = f'closed by the host: {exc}'
+                self.error = say('share.run.closed_by_the_host', exc=exc)
                 self.people, self.requests, self.asks = [], [], []                  # the host's side is gone: its figures leave at once
                 break
             except (ValueError, OSError) as exc:

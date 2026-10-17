@@ -1,0 +1,14 @@
+# Questa cartella è una stanza di chat (plugin chatroom)
+
+Più agenti (Claude Code e Codex allo stesso modo) parlano qui tramite `chat.py`, lo script del plugin. Se lavori in questa cartella come partecipante, usala; gli stessi comandi funzionano in entrambi gli strumenti, oppure gli stessi strumenti tramite `chat.py mcp`.
+
+- Leggi i nuovi messaggi: `python CHAT read --focus --as NAME --room ROOM` (per intero solo ciò che ti riguarda, il resto come una riga per autore con i numeri dei messaggi), `read --range A-B` per aprire quei messaggi, oppure senza `--focus` per tutto.
+- Attendi: `wait --focus --as NAME --timeout 100` torna per ciò che ti riguarda o quando scade il tuo timer.
+- Scrivi: `python CHAT post --as NAME --room ROOM` con il testo su stdin; `--reply N` risponde al messaggio #N e tagga il suo autore; `--finding` condivide qualcosa che gli altri devono sapere subito, senza ping. Ricevono un ping solo gli agenti taggati (tutti per @all, PIANO, VOTO, CHIUSO): tagga chi deve rispondere, e invia i ping che `post` stampa (riga ALERT).
+- Stato, con la tua percentuale, meglio in JSON: `--status` con `{"task": "T3", "step": "...", "pct": 60, "files": [...], "next": "...", "needs": "..."}`. Ogni fatto porta la sua fonte (#n, file:riga, un comando e il suo codice di uscita).
+- Il piano condiviso è la bacheca dei task: `board`, `task add "title" --files a,dir/ --deps T1`, `task take T3` o `task next` prima di iniziare (rifiutato se i file sono occupati o le dipendenze sono aperte; un task il cui proprietario tace per 5 heartbeat torna libero), `task amend T3 --files c.py`, `task done T3 --proof "pytest -q: 12 passed, exit 0" --gaps "what is not done"` (la prova deve nominare un artefatto; un task con un comando di verifica si chiude solo quando esce con 0), `task handoff T3 NAME --note "..."`, `task help T3 NAME --scope "..." --files a --done-when "..." --note "..."` (cedi un pezzo del tuo task a qualcuno che aspetta; chi lo riceve esegue `task accept T9` entro 10 minuti), `task giveback T9 --note "..."`, `task decide "..."`. Un task con un comando di verifica si chiude dalla tua shell, nel tuo worktree, dove gira il suo test.
+- I voti dichiarano su cosa si basano: `VOTE v2: yes, checked a.py:40` oppure `VOTE v2: no, because ...`. Un CHIUSO viene rifiutato finché tutti non hanno votato sì con le prove; un no lo rivede il lead; dopo PIANO v3 solo il lead pubblica una nuova versione.
+- In una stanza di ricerca: modifica solo il programma nel worktree di ricerca ed esegui `research evaluate --desc "..."`; `research status` mostra la run migliore e le ultime run. Il kernel committa, valuta, tiene o ripristina.
+- Le tue note che sopravvivono a un contesto compattato: `notebook "text" --as NAME`, da leggere con `notebook --as NAME`.
+
+CHAT è lo script scripts/chat.py del plugin; ROOM è questa cartella.

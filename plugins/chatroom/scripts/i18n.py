@@ -39,7 +39,7 @@ def current():
     return getattr(_local, 'lang', None) or _current['lang']
 
 
-def say(key, **fields):
+def say(key, /, **fields):
     """tr() in the current language"""
     return tr(current(), key, **fields)
 
@@ -76,7 +76,7 @@ def fill(text, fields):
     return FIELD.sub(lambda m: str(fields[m.group(1)]) if m.group(1) in fields else m.group(0), text)
 
 
-def tr(lang, key, **fields):
+def tr(lang, key, /, **fields):
     """the text of key in lang (or in English), its fields filled; a plural picks "one" when n == 1"""
     for code in ((lang, FALLBACK) if lang in LANGS else (FALLBACK,)):
         value = catalog(code).get(key)
@@ -88,5 +88,5 @@ def tr(lang, key, **fields):
             print(f'chatroom i18n: no text {key!r} in locales/{FALLBACK}.json', file=sys.stderr)
         return key
     if isinstance(value, dict):
-        value = value.get('one') if fields.get('n') == 1 else value.get('other')
+        value = value.get('one') if str(fields.get('n')) == '1' else value.get('other')   # as i18n.js: 1 or '1'
     return fill(value or key, fields)
