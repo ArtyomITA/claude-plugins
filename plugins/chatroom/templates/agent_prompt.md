@@ -93,7 +93,7 @@ MATERIAL (read it before your first message): {{MATERIALS}}
 
 CONSTRAINTS: {{CONSTRAINTS}}
 
-CLOSING: {{CLOSING}} Limit: {{MAX}} messages each; at the limit, give your final vote and stop.
+CLOSING: {{CLOSING}} Checkpoint every {{MAX}} messages: chat.py tells you when you reach it; then post ONE message to @LEAD with what is done and what is left, and ask whether to continue. Wait for the answer: go on if the lead says so (it may raise the checkpoint), stop with your final vote and report if it says to stop.
 
 Start now: read the material, check one to three things on your own ground, and write your first message with YOUR position before you read the others' positions (an independent first view is worth more than an echo). Then read the chat and keep the conversation going. If the work needs something you cannot do (a tool, an access, a skill you lack), say it at once to the lead (@LEAD) instead of going around it.
 

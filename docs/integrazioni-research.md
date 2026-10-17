@@ -7,7 +7,7 @@ Progetto completo: [research-mode.md](research-mode.md). Le integrazioni dell'ha
 ## Da fare
 
 Stato 17/10/2026: A1-A8 progettati dopo la lettura completa dei paper (A1-A2: [research-mode.md](research-mode.md) §1-2.7; A3-A8: §2.8). Ordine di costruzione proposto: A8 (ciclo minimo) → A2 kernel → A1 fasi → A5, A4, A3, A6, A7.
-A8 costruito il 17/10: `scripts/research.py` + `chat.py research init|evaluate|status` (anche MCP), template `research_worker.md`, skill init sezione 4b; smoke test 21/21. Ogni attempt ha un tag git (base per A5).
+A1-A7, squadra web e pannello OpenRouter costruiti il 18/10 (0.10.0, kernel scripts/research.py, template per ruolo, guida research). A8 costruito il 17/10: `scripts/research.py` + `chat.py research init|evaluate|status` (anche MCP), template `research_worker.md`, skill init sezione 4b; smoke test 21/21. Ogni attempt ha un tag git (base per A5).
 
 
 | # | Integrazione | Fonte | Costo |

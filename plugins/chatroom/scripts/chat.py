@@ -1180,6 +1180,12 @@ def cmd_post(room, a, text=None):
     if kind:
         return
     print_alert(room, a.name, n, text, images)
+    every = checkpoint_every(room)
+    if every and a.name in room.config().get('participants', []):
+        mine = sum(1 for m in room.messages() if m['from'] == a.name and not m.get('kind'))
+        if mine % every == 0:
+            print(f'CHECKPOINT: this is your message number {mine} ({every} per checkpoint). Post ONE message to @LEAD: what is '
+                  f'done, what is left, and whether you should continue; then wait for the answer.')
     if loose_heading(text):
         print('NOTE: "PLAN vN" / "CLOSED vN" count only as a heading, followed by a colon or a bracket ("PLAN v2: ...", '
               '"PLAN v2 (draft): ..."). Written like this it is a sentence: post it again as "PLAN vN: ..." if it is a plan.')
@@ -1874,6 +1880,13 @@ def failures(room, now=None):
         if v and len(voters) >= 2 and not dissent:
             out.append((f"consensus:{m['n']}", f"CLOSED v{v} (#{m['n']}) without a single no on any version: premature "
                         f"consensus? Ask who tested the plan, and how."))
+    every = checkpoint_every(room)
+    if every:
+        for k in people:
+            mine = sum(1 for m in items if m['from'] == k and not m.get('kind'))
+            if mine >= every:
+                out.append((f"checkpoint:{k}:{mine // every}", f"{k} reached {mine // every * every} messages: it asks you whether to "
+                            f"continue. Answer it (go on, or stop); `chat.py brief max=N` changes the checkpoint."))
     budget = int(config.get('budget_calls', BUDGET_CALLS))
     for k, v in room.counters().items():
         used = sum(v.values())
@@ -1986,10 +1999,19 @@ MCP_TOOLS = [
          'id': {'type': 'string'}, 'text': {'type': 'string'}, 'files': {'type': 'array', 'items': {'type': 'string'}},
          'deps': {'type': 'array', 'items': {'type': 'string'}}, 'proof': {'type': 'string'}, 'to': {'type': 'string'},
          'note': {'type': 'string'}, 'force': {'type': 'boolean'}, 'scope': {'type': 'string'}, 'done_when': {'type': 'string'}}}},
-    {'name': 'research', 'description': 'The research kernel: evaluate (desc: what this attempt tries) commits the program, '
-                                        'runs the sealed evaluator and keeps or resets; status shows the best and the results.',
+    {'name': 'research', 'description': 'The research kernel, by role: view (what your role needs), expand (one record), evaluate '
+                                        '(desc; kind, idea, of, seed), propose-idea (json), propose-evidence (text, source), curate, '
+                                        'direction (json), conclude (id=worker, gate, trigger, text), verdict (phase, outcome, json), '
+                                        'revoke (id, reason), status.',
      'inputSchema': {'type': 'object', 'required': ['action'], 'properties': {
-         'action': {'type': 'string', 'enum': ['evaluate', 'status']}, 'desc': {'type': 'string'}}}},
+         'action': {'type': 'string', 'enum': ['evaluate', 'status', 'view', 'expand', 'propose-idea', 'propose-evidence', 'curate',
+                                               'direction', 'conclude', 'verdict', 'revoke', 'reanchor']},
+         'desc': {'type': 'string'}, 'id': {'type': 'string', 'description': 'expand/revoke: the record; conclude: the worker'},
+         'idea': {'type': 'string'}, 'kind': {'type': 'string'}, 'of': {'type': 'string'}, 'seed': {'type': 'string'},
+         'text': {'type': 'string'}, 'source': {'type': 'string'}, 'accept': {'type': 'string'}, 'reject': {'type': 'string'},
+         'drop': {'type': 'string'}, 'gate': {'type': 'string'}, 'trigger': {'type': 'string'}, 'reason': {'type': 'string'},
+         'phase': {'type': 'integer'}, 'outcome': {'type': 'string'}, 'next_intent': {'type': 'string'},
+         'json': {'description': 'propose-idea, direction, verdict: the object'}}}},
     {'name': 'notebook', 'description': 'Your own notes, which survive a compacted context: with text adds a line, without reads them.',
      'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}},
     {'name': 'check', 'description': 'What is going wrong in the room: tasks closed without proof or with gaps, one file in two '
@@ -2086,14 +2108,28 @@ def mcp_call(room, name, tool, args, cancel=None, wait_cap=None):
                 cmd_task(room, ns)
             elif tool == 'research':
                 ns.pairs, ns.desc = [str(args.get('action', 'status'))], args.get('desc')
-                if ns.pairs[0] not in ('evaluate', 'status'):
-                    return 'research: evaluate or status (the lead starts or changes a research from the shell)', True
+                act = ns.pairs[0]
+                if act not in ('evaluate', 'status', 'view', 'expand', 'propose-idea', 'propose-evidence', 'curate', 'direction',
+                               'conclude', 'verdict', 'revoke', 'reanchor'):
+                    return 'research: the lead starts, assigns, seals and moves phases from the shell', True
+                if name in room.user_names():
+                    return ('research through MCP is for the agents; the lead and the user use the shell (chat.py research ... '
+                            '--as LEAD)'), True
+                if args.get('id'):
+                    ns.pairs.append(str(args['id']))
+                for k in ('idea', 'kind', 'of', 'seed', 'text', 'source', 'accept', 'reject', 'drop', 'gate', 'trigger', 'reason',
+                          'outcome', 'next_intent'):
+                    setattr(ns, k, args.get(k))
+                ns.phase = args.get('phase')
+                ns.json = json.dumps(args['json']) if isinstance(args.get('json'), (dict, list)) else args.get('json')
+                ns.force, ns.mcp = False, True
                 if ns.pairs[0] == 'evaluate' and wait_cap:
+                    import research
                     contract = room.dir / 'research' / 'contract.json'
-                    budget = json.loads(contract.read_text(encoding='utf-8')).get('budget_s', 300) if contract.is_file() else 300
-                    if 2 * budget + 30 > wait_cap + 10:   # this client would stop the call before the run ends
-                        return (f'error: a run may last {2 * budget} s, longer than this client lets a tool run: evaluate from your '
-                                f'shell with a timeout of at least {2 * budget + 120} s (chat.py research evaluate ...)'), True
+                    longest = research.max_run_seconds(read_json(contract, {'budget_s': 300}))
+                    if longest > wait_cap:                # this client would stop the call before the run ends
+                        return (f'error: a run may last {longest} s, longer than this client lets a tool run: evaluate from your '
+                                f'shell with a timeout of at least {longest} s (chat.py research evaluate ...)'), True
                 cmd_research(room, ns)
             elif tool == 'notebook':
                 ns.pairs = [str(args['text'])] if args.get('text') else []
@@ -2444,6 +2480,8 @@ def cmd_add(room, a):
     names = [n.strip() for n in (a.participants or '').split(',') if n.strip()]
     if not names and not a.name:
         sys.exit('add: give --participants and/or --as')
+    if a.name and (a.name in names or a.name in read_json(room.dir / 'config.json', {}).get('participants', [])):
+        sys.exit(f'add: {a.name} is a participant: a lead is a name of its own (--as LEAD2)')
     profiles = [parse_profile(text) for text in a.profile or []]
 
     def change(config):
@@ -2481,6 +2519,15 @@ BRIEF_DEFAULT = {
 LANGUAGE_NAME = {'en': 'English', 'it': 'Italian'}
 
 
+def checkpoint_every(room):
+    """how many real messages an agent writes between two checkpoints with the lead (the brief's max, 45 by default;
+    0 turns it off)"""
+    try:
+        return max(0, int(brief(room).get('max') or 45))
+    except (ValueError, TypeError):
+        return 45
+
+
 def brief(room):
     return read_json(room.dir / 'brief.json', {})
 
@@ -2513,7 +2560,7 @@ def fill_prompt(room, name, template='agent_prompt.md'):
     dossier = room.dir / 'DOSSIER.md'
     values = {
         'NAME': name, 'OTHERS': ', '.join(n for n in config['participants'] if n != name) or '-',
-        'LANGUAGE': LANGUAGE_NAME[lang], 'ROOM': str(room.dir).replace('\\', '/'),
+        'LANGUAGE': LANGUAGE_NAME[lang], 'ROOM': str(room.dir.resolve()).replace('\\', '/'),
         'CHAT': str(Path(__file__).resolve()).replace('\\', '/'), 'HEARTBEAT': str(room.heartbeat()),
         'ROLE': config.get('profiles', {}).get(name, {}).get('role') or '-', 'TOPIC': config.get('topic', ''),
         'GOAL': data.get('goal') or config.get('subtitle') or config.get('topic', ''),
@@ -2524,15 +2571,24 @@ def fill_prompt(room, name, template='agent_prompt.md'):
     contract = room.dir / 'research' / 'contract.json'
     if contract.is_file():                      # a research room: the worker templates name the contract's terms
         c = json.loads(contract.read_text(encoding='utf-8'))
-        values.update({'PROGRAM': c['program'], 'EVALUATE': c['evaluate'], 'METRIC': c['metric'],
+        import research
+        work_of = c['work']
+        workers = read_json(room.dir / 'research' / 'state.json', {}).get('workers', {})
+        if name in workers:
+            work_of = workers[name]['work']
+        elif set(workers) - {'_main'}:            # workers have their own worktrees: this one gets its own at assign
+            work_of = f'(not assigned yet: wait for the research assign {name} of the lead, then research view shows yours)'
+        c = dict(c, work=work_of)
+        longest = research.max_run_seconds(c)
+        values.update({'PROGRAM': c['program'], 'EVALUATE': c['evaluate'] or '(being written, phase 1)', 'METRIC': c['metric'],
                        'BETTER': 'lower' if c['direction'] == 'min' else 'higher', 'BUDGET_S': str(c['budget_s']),
                        'MAX_EVALS': str(c['max_evals']), 'WORK': c['work'].replace('\\', '/'),
-                       'SEALED': ', '.join(c['sealed']) or '-', 'EVAL_TIMEOUT': str(2 * c['budget_s'] + 120),
-                       'EVAL_TIMEOUT_MS': str((2 * c['budget_s'] + 120) * 1000),
-                       'EVAL_HOW': (f"Run it from your shell with a timeout of at least {2 * c['budget_s'] + 120} s "
-                                    f"({(2 * c['budget_s'] + 120) * 1000} ms for the Bash tool of Claude Code)"
-                                    if 2 * c['budget_s'] + 120 <= 600 else
-                                    f"A run may last {2 * c['budget_s']} s, longer than one shell call may wait (600 s): start it in "
+                       'SEALED': ', '.join(c['sealed']) or '-', 'EVAL_TIMEOUT': str(longest),
+                       'EVAL_TIMEOUT_MS': str(longest * 1000),
+                       'EVAL_HOW': (f"Run it from your shell with a timeout of at least {longest} s "
+                                    f"({longest * 1000} ms for the Bash tool of Claude Code)"
+                                    if longest <= 600 else
+                                    f"One evaluate call may last {longest} s (build, repeats), longer than one shell call may wait (600 s): start it in "
                                     f"the background (Bash tool with run_in_background in Claude Code, a background job elsewhere) "
                                     f"and wait for it to end; research status shows it running"),
                        'METRIC_SOURCE': ('a result file the sealed evaluator writes ($CHATROOM_RESULT): nothing your program prints counts'
@@ -3665,6 +3721,31 @@ def main():
     p.add_argument('--sealed', help='research init: files that must not change (the evaluator, the data loader), comma separated')
     p.add_argument('--tag', help='research init: the name of the run (branch research/TAG)')
     p.add_argument('--desc', help='research evaluate: what this attempt tries, in one line')
+    p.add_argument('--draft', action='store_true', help='research init: start at phase 1, the evaluator still to be written and sealed')
+    p.add_argument('--final', help='research init/amend: the final evaluator, run once in phase 4 on the best')
+    p.add_argument('--build', help='research init/amend: a build command run before each measure, with its own time limit')
+    p.add_argument('--build-min', dest='build_min', type=float, help='research init/amend: minutes a build may take')
+    p.add_argument('--repeats', type=int, help='research init/amend: measures per run; the median counts')
+    p.add_argument('--min-gain', dest='min_gain', help='research init/amend: how much a keep must beat the best by (a number or N%%)')
+    p.add_argument('--idea', help='research assign/evaluate: the idea (I-number) a cycle or a run works on')
+    p.add_argument('--parent', help='research assign: base, best or att-N: where the cycle starts')
+    p.add_argument('--type', help='research assign: explorer (a fresh agent, one new idea) or optimizer (the same agent refines)')
+    p.add_argument('--kind', help='research evaluate: attempt, smoke, ablation, baseline, control or repeat')
+    p.add_argument('--of', help='research evaluate: what an ablation or baseline is measured against (att-N)')
+    p.add_argument('--seed', help='research evaluate: a seed handed to the evaluator as CHATROOM_SEED')
+    p.add_argument('--text', help='research propose-evidence/conclude: the text')
+    p.add_argument('--source', help='research propose-evidence: att-N, E-number or a link, comma separated')
+    p.add_argument('--accept', help='research curate: evidence to accept')
+    p.add_argument('--reject', help='research curate: evidence to reject')
+    p.add_argument('--drop', help='research curate: committed evidence to drop')
+    p.add_argument('--gate', help='research conclude: updated, kept or skipped')
+    p.add_argument('--trigger', help='research conclude: a, b, c, d or none')
+    p.add_argument('--reason', help='research revoke: why')
+    p.add_argument('--phase', type=int, help='research verdict: the phase judged')
+    p.add_argument('--outcome', help='research verdict: pass, fail, answer_ready or search_more')
+    p.add_argument('--next-intent', dest='next_intent', help='research verdict: the one next thing to search or try')
+    p.add_argument('--json', help='research propose-idea/direction/verdict: a JSON file or text (else stdin)')
+    p.add_argument('--question', help='research panel: the question for the free models (a file or text)')
     p.add_argument('--keep', help='research init: folders of the worktree the kernel never cleans (data the evaluator needs), comma separated')
     p.add_argument('--result-file', dest='result_file', action='store_const', const=True, default=None,
                    help='research init/amend: the sealed evaluator writes "METRIC: value" to $CHATROOM_RESULT; only that counts')
