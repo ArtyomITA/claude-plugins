@@ -49,7 +49,7 @@ CURATED_MAX = 60          # committed evidence kept at once (the registrar drops
 SIMILAR = 0.5             # an idea this close to an earlier one (word trigrams, Jaccard) is refused
 VIEW_MAX = 3000           # characters of a role's view; research expand ID opens one record
 AUX_KINDS = ('ablation', 'baseline', 'control', 'repeat')
-KERNEL = (0, 11, 1)      # written into the state: an older kernel (another install, an MCP server not restarted) refuses it
+KERNEL = (0, 11, 2)      # written into the state: an older kernel (another install, an MCP server not restarted) refuses it
 AUX_BASE, SMOKE_BASE = 100000, 200000   # numbers of evidence and smoke runs: never the same as an attempt's (at most 100000)
 NO_HOOKS = str(Path(__file__).resolve().parent / '.no-git-hooks')   # a folder that does not exist: git finds no hooks there
 SECRET_ENV = ('OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN')
@@ -673,18 +673,28 @@ def _row(room, n, commit, value, status, secs, lines, name, desc, kind='attempt'
                            ' '.join(desc.split()), kind, idea or '', spread]) + '\n')
 
 
+def _built_mark(d, work):
+    """the sha of the program the last kernel build in this worktree compiled"""
+    return Path(d) / 'runs' / f'built-{Path(work).name}.sha'
+
+
 def _measure(c, work, d, n, env, log, on_start=None):
     """build once (its own limit), then evaluate --repeats times; the median counts. Returns (value, why, secs, spread,
     protocol lines, all output)"""
     secs, text = 0.0, ''
-    try:                                                  # a copied file keeps its old mtime: make every build see it as new
-        os.utime(Path(work) / c['program'], None)
-    except OSError:
-        pass
+    mark, sha = _built_mark(d, work), _sha(Path(work) / c['program'])
+    if not mark.is_file() or mark.read_text(encoding='utf-8').strip() != sha:
+        try:                                              # a copied file keeps its old mtime: a new program must look new to the build
+            os.utime(Path(work) / c['program'], None)
+        except OSError:
+            pass
     if c.get('build'):
+        mark.unlink(missing_ok=True)                      # a build cut off halfway proves nothing
         code, s = _run(c['build'], work, log, c.get('build_s') or 2 * c['budget_s'], env, on_start=on_start)
         secs += s
         text = log.read_text(encoding='utf-8', errors='replace')
+        if code == 0:
+            mark.write_text(sha, encoding='utf-8')        # the same program next time needs no forced rebuild
         if code != 0:
             return None, (say('kernel._measure.build_over_s_killed', v1=c.get('build_s') or 2 * c['budget_s']) if code is None else say('kernel._measure.build_exit', code=code)), \
                 secs, '', [], text
@@ -1529,6 +1539,7 @@ def prebuild(room, by, worker):
     if _run_alive(room):
         raise ValueError(say('kernel.prebuild.a_run_is_in'))
     log = _dir(room) / 'runs' / f'prebuild-{key}.log'
+    _built_mark(_dir(room), work).unlink(missing_ok=True)   # the prebuild compiles whatever is there: the next run decides anew
     done = _dir(room) / 'runs' / f'prebuild-{key}.exit'
     done.unlink(missing_ok=True)
     wrap = ('import subprocess, sys, time\n'
