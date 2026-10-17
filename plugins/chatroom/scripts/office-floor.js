@@ -1,6 +1,6 @@
 // The floor: one flat piece per zone of the plan (office-layout.js floor.zones), each with a pixel-art texture drawn on
 // a canvas: carpet tiles, wooden planks, ceramic tiles with grout, stone slabs, gym rubber, a rug with its border.
-// Still the voxel look, at 32 pixels a metre instead of the old 2 tiles: pixels stay sharp up close (nearest filter)
+// The voxel look at 32 pixels a metre: pixels stay sharp up close (nearest filter)
 // and calm in the distance (mipmaps, anisotropic filtering). A dozen draw calls; textures repeat in world space.
 
 const PX = 32;                                         // texels per metre

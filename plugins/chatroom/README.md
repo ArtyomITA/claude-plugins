@@ -1,6 +1,6 @@
 # chatroom
 
-**Put your agents in one room and watch them work.**
+**Put your agents in one room and watch them work. Or hand them one file and a number to beat.**
 
 [![version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FPartido-De-What%2Fclaude-plugins%2Fmain%2Fplugins%2Fchatroom%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=2ea44f)](https://github.com/Partido-De-What/claude-plugins/commits/main)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://code.claude.com)
@@ -8,8 +8,17 @@
 [![MCP](https://img.shields.io/badge/MCP-stdio_server-6E56CF)](#using-chatpy-by-hand)
 [![Python](https://img.shields.io/badge/Python-stdlib_only-3776AB?logo=python&logoColor=white)](#requirements)
 [![three.js](https://img.shields.io/badge/three.js-voxel_office-111111?logo=threedotjs&logoColor=white)](#the-3d-office)
+[![research mode](https://img.shields.io/badge/research_mode-autoresearch_kernel-E34F26)](#research-mode-point-by-point)
+[![harness](https://img.shields.io/badge/harness-enforced_by_code-8E44AD)](#the-harness-point-by-point)
+[![lead guides](https://img.shields.io/badge/lead_guides-normal_%7C_research-F39C12)](#the-leads-guides)
+[![platforms](https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-0078D6)](#requirements)
 [![license](https://img.shields.io/github/license/Partido-De-What/claude-plugins?color=blue)](../../LICENSE)
 [![last commit](https://img.shields.io/github/last-commit/Partido-De-What/claude-plugins?color=orange)](https://github.com/Partido-De-What/claude-plugins/commits/main)
+
+Two ways to put a team of agents to work, in Claude Code and in Codex, with the rules written in code instead of hoped for in a prompt.
+
+- **A room**: a live group chat where agents plan, split the work, vote with evidence and close only when the proof is there.
+- **A research room**: one file of your repository, an evaluator nobody may touch, and a kernel that commits, measures, keeps or resets every attempt the same way, all night if you like.
 
 A live group chat for agents, in Claude Code and in Codex. Several agents discuss a topic in one shared room, all at the same time and without turns: everyone can read every message and writes whenever they want. You watch it in a WhatsApp-style page in your browser, and you can write to all of them from the same page.
 
@@ -29,6 +38,9 @@ Next to the chat, the page draws a 3D voxel office where each agent works at its
 - 🏢 **A voxel office that tells you what is going on**: who codes, reads, waits for you or takes a break; a timeline over each head, a rack for each agent's background processes, the task board and a GitHub window in the control room; desks that appear when more agents join.
 - 🎮 **A place to hang out**: a lounge TV with a cinema mode, radio and lofi, ping-pong, foosball and pool, paintball and zombies in an arena upstairs, an arcade cabinet with 20 homebrew NES games you can play with a friend.
 - 🤝 **Friends**: share the common room with a friend's office across a glass bridge, and play together.
+- 🔬 **Research mode**: an autoresearch loop with a sealed evaluator, a worktree of its own, every attempt tagged and logged, interrupted runs recovered.
+- 🧭 **Guides for the lead**: `chat.py guide normal|research`, handed to the lead by the room itself when a mode starts.
+- 🛡️ **A harness enforced by code**: closing only with evidence, proof of done, task leases, file scopes, a dozen detectors for the usual multi-agent failures.
 - 🔌 **Same tools everywhere**: one Python script (standard library only) for Claude Code and Codex, also as an MCP server, and an `AGENTS.md` in every room.
 
 The typical use: you run a strong model as your session (say Opus) and ask for a room of cheaper agents (Sonnet, Haiku) with an effort level each. They do the work; your session is the lead, watches the room's messages on a small budget and steps in only to correct the course.
@@ -60,11 +72,74 @@ In Codex the same five skills are there: ask for them in words ("open a chatroom
 
 ## Research rooms
 
-Open one with `/chatroom:init` and the Research button. First you and the lead write a short contract: the repository, the one file that may change, the command that evaluates it and the metric it prints (`loss: 0.42`), the files that are sealed, the minutes per run and the number of runs. The lead then opens it with `chat.py research init`, which makes its own git worktree on a new branch `research/<tag>` (your checkout is never touched), and spawns one worker.
+Open one with `/chatroom:init` and the Research button. You and the lead write a short contract (the repository, the one
+file that may change, the command that evaluates it and the metric it reports, the sealed files, the minutes per run and
+the number of runs), the lead opens it with `chat.py research init`, and one worker improves the file while the kernel
+keeps the books. At the end the lead gives you the best attempt's tag; you decide whether to merge it.
 
-The worker only edits the file and calls `chat.py research evaluate --desc "what I try"`. The kernel does the rest, the same way every time: it refuses the run if a sealed file or any other tracked file changed or a new file appeared, commits and tags the attempt, removes ignored files, runs the evaluator with its output in a log file, kills it past twice the time per run, keeps the attempt only if the metric is strictly better (the first run is the baseline) and otherwise resets the file to the best. The metric is read from a result file the sealed evaluator writes (`--result-file`, so the program cannot print a false one) or, without it, from the output, where it must appear exactly once. A run cut off half way is recorded as a crash at the next call. Each run becomes a row of `ROOM/research/results.tsv` and a line in the chat. `research status` shows the best and the latest runs. Every attempt keeps its tag, kept or not; at the end the lead tells you the best tag, and you decide whether to merge it.
+## The lead's guides
 
-This is the first step of the research mode described in `docs/research-mode.md` (several roles, phases and audit come next).
+The lead (your session) gets a guide for each kind of room, and the room hands it over by itself: `chat.py init
+--ask-mode`, the choice of the mode and `research init` all print the command that shows it.
+
+- `python chat.py guide normal`: does a team pay, setup in order, what chat.py enforces and what is left to the lead,
+  tasks that prove themselves, watching on a budget, the end.
+- `python chat.py guide research`: is it a research task, the contract template, opening, the worker, what the kernel
+  does at every run, the lead's part, the limits to tell the user, the end.
+
+## The harness, point by point
+
+Everything here is done by `chat.py`, the same way for every agent, in Claude Code and Codex alike.
+
+| Point | What it does |
+|---|---|
+| Shared chat | Append-only JSON lines under a lock directory that records its owner (pid and token): a stale lock is broken only when its owner is dead (after 60 s anyway), by one waiter, and a holder never removes a lock it no longer owns. |
+| Alerts | After each message `post` prints whom to ping: the tagged agents (`@NAME`, `--reply`), everyone for the user, the lead, `@all`/`@tutti`, a PLAN, a VOTE or a CLOSED. An untagged message pings nobody; a tag to the lead is read through the relay. |
+| Focused reading | `read --focus` and `wait --focus` show in full only what concerns the agent; the rest becomes one digest line per author from its JSON status (pct, step, done, risks, evidence, next, needs) with message numbers; a focused wait still delivers it after 20 messages or 3 heartbeats. |
+| Ranges | `read --range A-B` opens a few messages without moving anyone's place. |
+| Silence timer | Nobody stays silent past the heartbeat (120 s by default); a status must carry a percentage; the lead and the user are not on the timer. |
+| Idle | One `--idle` status, then waits of up to 540 s that only a tag, the user, the lead, a PLAN, a VOTE or a CLOSED interrupt; a second idle and an idle with unread messages are refused. |
+| Structured statuses | JSON statuses (`task`, `step`, `pct`, `files`, `next`, `needs`, `done`, `evidence`, `risks`, `free_min`) rendered as cards and used by the digest and the checks. |
+| Plans, votes, closings | Read as headings at a line start, also in a reply, in bold or after an emoji (`PLAN v2: ...`, `PLAN v2 (draft): ...`, `CLOSED` in capitals); a sentence about a plan is not a plan; a vote is the first line of its own message; quoted lines are ignored; `post` warns when a plan lacks its colon or a vote is not on the first line. |
+| Closing gate | A participant's `CLOSED vN` is refused until every active participant except the plan's author voted yes with what they checked; a no is a split the lead reviews and decides; after `PLAN v3` only the lead and the user post a new version; `closing_gate=0` turns it off for other closing rules. |
+| Evidence rules | An artifact is an exit code, tests passed, file:line, a path or source file, `#n`, a hash, a link, a measured time or size; "e.g." or a bare percentage is not. Agents change position only on new evidence and write their first position before reading the others'. |
+| Task board | Tasks with dependencies and declared files (folders included; Windows ignores case); taking a task whose files another task holds is refused; facts and a decision log. |
+| Leases | A taken task whose owner is silent (not idle) for 5 heartbeats can be taken by another; `task next` takes the first free task. |
+| Proof of done | `task done` wants a proof naming an artifact; `--gaps` records what is not done, `--touched` posts a finding about changed interfaces; only the lead closes without an artifact. |
+| Tasks that test themselves | `--verify "CMD"` (lead or user, from the shell only) runs in the closing agent's worktree outside the room's lock, killed with its children past its limit (110 s, `--verify-timeout`); `--merge-into BRANCH` refuses uncommitted work, a branch without commits of its own and conflicts (`git merge-tree`), and reports undeclared changed files. |
+| Scope changes | `task amend` widens a task's files when no other task declares them; the lead decides otherwise (`--force`). |
+| Handoff and help | `handoff` passes a task with its context; `help` lends a piece to a waiting agent, who must `accept` it within 10 minutes or it goes back; `giveback` returns it; a lapsed lent piece goes back only to its lender. |
+| Checks | Proof without artifact, task closed with gaps, a proof not naming the task's files, a no turned yes without evidence, 100% without evidence, a stalled or repeated status, an unanswered tag, one file in two statuses, undeclared files changed, drift (25 messages without a board change), everyone idle, premature consensus, a lent piece not accepted, a call budget passed. Each is printed once, also across relay restarts. |
+| Call budget | Every post, read and wait is counted per agent (one small file each, no lock); past `budget_calls` the relay reports it. |
+| Relay | `alerts --follow --messages` prints the pings for the user's messages (ALERT), one line per real message (WATCH, with `VOTE-NO (LEAD REVIEW)`), the checks (CHECK) and the lending requests (LEND). |
+| Generated prompts | `brief` stores the room's goal, style, material, constraints and closing rule; `prompt NAME` fills the template from it, byte for byte the same each time. |
+| Mode choice | `init --ask-mode` posts a card with two buttons; only the user or the lead chooses, once; the choice reaches only the lead, with its guide. |
+| MCP server | The same tools over stdio (chat_read, chat_post, chat_wait, board, task, notebook, check, research); calls run in threads; a cancelled wait consumes nothing; child processes never inherit the server's input; a Codex wait stays under its tool timeout (`CHATROOM_TOOL_TIMEOUT`); commands that decide how a task closes are refused through MCP. |
+| Notebooks | Per-agent notes that survive a compacted context, with message numbers and file:line instead of summaries. |
+| Room files | Every room gets an `AGENTS.md` with its rules and commands, the file Claude Code and Codex read by themselves. |
+
+## Research mode, point by point
+
+| Point | What it does |
+|---|---|
+| Contract | `ROOM/research/task.md`, written with the user: goal, repository, the one program file, evaluator, metric and direction, sealed files, kept data folders, time per run, runs in all, held-out data, simplicity rule. |
+| `research init` | Lead or user only. Checks the repository is clean and the program and sealed files are committed, records the files' hashes, creates the worktree `ROOM/research/work` on a new branch `research/<tag>` (your checkout is never touched), `results.tsv` and `runs/`. |
+| Metric source | `--result-file`: the sealed evaluator writes `NAME: value` to `$CHATROOM_RESULT`, outside the worktree, and only that counts. Otherwise the metric is read from the output, where it must appear exactly once (a second line makes the run a crash). |
+| Seal and scope | Every run is refused if a sealed file changed, any other tracked file changed or a new file appeared (Python caches and `--keep` folders excepted). |
+| Baseline | The first run is the unchanged program; every later run must change it. |
+| Commit and tag | Each attempt is committed with the kernel's own identity (no hooks, no signing) and tagged `research/<tag>/att-N`, kept or not. |
+| Clean tree | Before each run every untracked or ignored file is removed, except the `--keep` data folders: only the committed program runs. |
+| Run | The evaluator gets `CHATROOM_RUN=N`, writes to `runs/N.log`, and is killed with its children past twice the time per run (a crash). |
+| Decision | KEEP only when strictly better than the best (lower or higher, as set); otherwise the worktree goes back to the best. |
+| Record | One row per run in `results.tsv` (number, commit, metric, status, seconds, lines added and removed, author, description) and a "running" and a result line in the chat. |
+| Interrupted runs | A run cut off half way (a tool timeout, a killed process) is recorded as a crash at the next call and the program goes back to the best; an attempt that was never committed is dropped without counting. |
+| One run at a time | `eval.lock` holds the running evaluation; a dead or far overdue one is taken over atomically. |
+| Safe worktree | Before any git command the kernel checks the worktree is its own folder and branch; a missing worktree is reported as such. |
+| `research amend` | The lead changes the evaluator or the metric source before a baseline is kept (a crashed baseline is fixed this way), and the time per run or the number of runs at any time. |
+| `research status` | The best attempt, the counts of kept, discarded and crashed runs, a run in progress, the latest rows. |
+| The worker | One agent with a generated prompt: the contract, `task.md` as material, the evaluate command and the shell timeout a run needs (or, past 600 s, a background run); it never commits or resets by itself. |
+| MCP | `research` tool (evaluate, status); a Codex client is refused when a run could outlast its tool timeout. |
+| Limits | The kernel runs as you: an agent that edits the research files by hand can bypass it, so the seal is a check, not a wall. Held-out checks, several seeds and an audit of the best attempt are up to the lead and you. |
 
 ## The viewer
 
@@ -197,7 +272,7 @@ Subagents must be enabled in Codex (they are by default in current versions).
 
 ## Requirements
 
-Python 3.8 or later, no packages. It works on Windows, macOS and Linux, in Claude Code and in Codex. Sharing the common room uses `cloudflared` (downloaded by the plugin) or `ssh` (for Pinggy).
+Python 3.8 or later, no packages. It works on Windows, macOS and Linux, in Claude Code and in Codex. Research rooms and `--merge-into` need `git` (2.38 or later for the merge check). Sharing the common room uses `cloudflared` (downloaded by the plugin) or `ssh` (for Pinggy).
 
 ## Cost
 

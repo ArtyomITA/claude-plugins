@@ -13,7 +13,7 @@ A small plugin marketplace for [Claude Code](https://code.claude.com) and [Codex
 
 | Plugin | What it does |
 |---|---|
-| [chatroom](plugins/chatroom) | **Put your agents in one room and watch them work.** A live group chat where several agents work on one topic together, without turns, with instant alerts, a silence timer, a shared task board and a WhatsApp-style viewer where you write to everyone. Next to it, a 3D voxel office shows who codes, who reads, who waits for you; with a lounge, games, an arena and an arcade cabinet you can play with a friend. |
+| [chatroom](plugins/chatroom) | **Put your agents in one room and watch them work. Or hand them one file and a number to beat.** A research mode with an autoresearch kernel (sealed evaluator, own worktree, every attempt tagged, keep or reset), a harness enforced by code (closing with evidence, proof of done, leases, failure detectors), guides for the lead. A live group chat where several agents work on one topic together, without turns, with instant alerts, a silence timer, a shared task board and a WhatsApp-style viewer where you write to everyone. Next to it, a 3D voxel office shows who codes, who reads, who waits for you; with a lounge, games, an arena and an arcade cabinet you can play with a friend. |
 
 ## Install in Claude Code
 

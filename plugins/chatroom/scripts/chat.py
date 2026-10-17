@@ -44,6 +44,7 @@ Commands (the room is --room DIR or the CHATROOM_DIR environment variable):
   chat.py brief [key=value ...]                             (the room's brief for the prompts: goal, style, materials,
                                                             constraints, closing, max)
   chat.py prompt NAME [--template FILE] [--out FILE]        (the filled prompt of one participant: pass it unchanged)
+  chat.py guide normal|research                             (the lead's guide for that kind of room)
   chat.py research init|amend|evaluate|status               (the research kernel: one file changes, a sealed evaluator,
                                                             keep if better or reset; see research.py)
 
@@ -85,7 +86,7 @@ IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                '.gif': 'image/gif'}
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_NAME = re.compile(r'^[A-Za-z0-9_.-]+$')
-STATUS_KINDS = ('status', 'stato', 'board', 'finding')   # 'stato' is how the first versions wrote a status; 'board' a change of the task board
+STATUS_KINDS = ('status', 'stato', 'board', 'finding')   # 'stato': older rooms' statuses; 'board': a change of the task board
 STATE_KEYS = {'task': str, 'step': str, 'pct': int, 'files': list, 'blocked_by': str, 'next': str, 'needs': str,
               'done': str, 'evidence': list, 'risks': str, 'free_min': int}
 IDLE = 'idle'
@@ -948,6 +949,15 @@ class Room:
                 or m.get('kind') == 'finding' or (m.get('kind') == 'board' and names(m.get('text', ''), name))
                 or names(str((m.get('state') or {}).get('needs', '')), name))
 
+    def hand_guide(self, items, name):
+        """the lead that reads the user's choice of mode is handed the guide of that mode, every time, by chat.py"""
+        if name not in self.user_names():
+            return
+        for m in items:
+            if m.get('kind') == 'mode':
+                mode = 'research' if 'RESEARCH' in m.get('text', '').upper() else 'normal'
+                print(guide_hint(mode), flush=True)
+
     def read_range(self, first, last):
         """messages first..last in full, the cursor untouched: what a digest line points to (#n), without the whole chat"""
         items = [m for m in self.messages() if first <= m['n'] <= last]
@@ -966,12 +976,14 @@ class Room:
         if not items:
             return print('(nothing new from the others)')
         if not focus:
-            return self.show(items)
+            self.show(items)
+            return self.hand_guide(items, name)
         # focus: in full only what concerns you (tags, the user, the lead, plans and votes, board lines and needs that
         # name you); the rest in one digest line per author with their latest state, so a busy agent reads less
         users = self.user_names()
         mine = [m for m in items if self.concerns(m, name, users)]
         self.show(mine)
+        self.hand_guide(mine, name)
         shown = {m['n'] for m in mine}
         rest = [m for m in items if m['n'] not in shown and m['from'] != name]
         if not mine and not rest:
@@ -1055,6 +1067,9 @@ def cmd_init(room, a):
     if a.ask_mode:
         room.append('LEAD', MODE_ASK['it' if config['lang'] == 'it' else 'en'], 'choice')
     print(f'room ready: {room.dir}' + (' (the viewer asks the user to choose normal or research)' if a.ask_mode else ''))
+    if a.ask_mode:
+        print('LEAD: when the choice arrives, read the guide of that mode: python "'
+              + Path(__file__).resolve().as_posix() + '" guide normal|research')
 
 
 def cmd_config(room, a):
@@ -1777,9 +1792,9 @@ def cmd_notebook(room, a):
 
 
 def failures(room, now=None):
-    """the commonest ways a multi-agent chat goes wrong (MAST, 2025), seen in the room: [(key, text)]. A task closed
-    without proof; one file in the statuses of two participants within 20 minutes; a tag not answered while the tagged
-    one keeps posting; the same status three times in a row."""
+    """the commonest ways a multi-agent chat goes wrong, seen in the room: [(key, text)]. Tasks closed without an artifact
+    or with gaps, one file in two agents' statuses, tags left unanswered, stalls and loops, votes flipped without evidence,
+    claims of 100% without evidence, drift, everyone idle, premature consensus, lent pieces not accepted, call budgets."""
     now = now or time.time()
     config = room.config()
     items, out, people, users = room.messages(), [], set(config.get('participants', [])), room.user_names()
@@ -2531,10 +2546,26 @@ def fill_prompt(room, name, template='agent_prompt.md'):
     return text
 
 
+def guide_hint(mode):
+    """the line that hands the lead its guide, printed wherever a lead starts a room or a mode"""
+    return f'LEAD: read your guide now and follow it: python "{Path(__file__).resolve().as_posix()}" guide {mode}'
+
+
+def cmd_guide(room, a):
+    """chat.py guide normal|research: the lead's guide, with this chat.py's path in its commands"""
+    mode = (a.pairs[0] if a.pairs else 'normal').lower()
+    path = HERE.parent / 'guides' / f'lead-{mode}.md'
+    if mode not in ('normal', 'research') or not path.is_file():
+        sys.exit('guide: normal or research')
+    sys.stdout.write(path.read_text(encoding='utf-8').replace('python CHAT ', f'python "{Path(__file__).resolve().as_posix()}" '))
+
+
 def cmd_research(room, a):
     """chat.py research init|evaluate|status: the research kernel (research.py), first step: an autoresearch loop"""
     import research
     research.cmd(room, a)
+    if (a.pairs or ['status'])[0] == 'init':
+        print(guide_hint('research'))
 
 
 def cmd_prompt(room, a):
@@ -3113,7 +3144,7 @@ def cmd_serve(room, a):
             if self.headers.get('Host') not in hosts:
                 return False
             origin = self.headers.get('Origin')
-            return origin is None or origin.removeprefix('http://') in hosts
+            return origin is None or (origin[7:] if origin.startswith('http://') else origin) in hosts
 
         def do_GET(self):
             if not self.trusted():
@@ -3592,7 +3623,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['init', 'config', 'roster', 'post', 'read', 'wait', 'status', 'transcript',
                                         'serve', 'command', 'alerts', 'rooms', 'add', 'remove', 'task', 'board', 'check', 'notebook', 'mcp',
-                                        'helpers', 'brief', 'prompt', 'research'])
+                                        'helpers', 'brief', 'prompt', 'research', 'guide'])
     p.add_argument('pairs', nargs='*', help='roster: NAME=<agent ID or path> pairs; config: key=value pairs')
     p.add_argument('--room', default=os.environ.get('CHATROOM_DIR'))
     p.add_argument('--as', dest='name')
@@ -3663,6 +3694,8 @@ def main():
     a = p.parse_intermixed_args()        # roster and config pairs may come after the options
     if a.command == 'rooms':
         return cmd_rooms(None, a)
+    if a.command == 'guide':                             # no room needed: the lead reads it before making one
+        return cmd_guide(None, a)
     if a.command == 'mcp' and not a.room:                # one server for every room: each call names its room
         return cmd_mcp(None, a)
     if not a.room:
@@ -3677,7 +3710,7 @@ def main():
                     'serve': cmd_serve, 'command': cmd_command, 'alerts': cmd_alerts, 'add': cmd_add, 'remove': cmd_remove,
                     'task': cmd_task, 'board': cmd_board, 'check': cmd_check, 'notebook': cmd_notebook, 'mcp': cmd_mcp,
                     'helpers': cmd_helpers, 'brief': cmd_brief, 'prompt': cmd_prompt,
-                    'research': cmd_research}
+                    'research': cmd_research, 'guide': cmd_guide}
         if a.command in commands:
             return commands[a.command](room, a)
     except ValueError as exc:

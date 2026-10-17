@@ -1,4 +1,4 @@
-"""The research kernel of the chat room, first step (A8 in docs/integrazioni-research.md): an autoresearch loop.
+"""The research kernel of the chat room: an autoresearch loop.
 
 One file of a git repository may change; the evaluator and the files named in the contract are sealed. A worker edits
 the program in the research worktree and calls `chat.py research evaluate`: the kernel (this file, never the agent)

@@ -593,9 +593,8 @@ async function loadConfig(force) {
   try {
     const r = await fetch((await FRIEND) + 'config.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) {
-      // compare the server's text, not the merged object: its keys come in another order, so the old comparison
-      // saw a change every 5 s and rebuilt the whole feed, cutting the flash of a #n jump and hiding again a
-      // status just opened by a click
+      // compare the server's text, not the merged object (its keys come in another order): a false change would
+      // rebuild the whole feed every 5 s
       const text = await r.text();
       const changed = text !== configText;
       configText = text;

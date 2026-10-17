@@ -37,9 +37,11 @@ Give the user the address with the chat view: `http://127.0.0.1:<port>/?view=cha
 
 ## 3. Wait for the choice
 
-Tell the user in one line that the room is open and waits for their choice in the chat. Then listen: repeatedly run `python "CHAT" wait --room "ROOM" --as LEAD --timeout 100` and read what arrives. A timeout with no message is not the end. The choice arrives as a message of the user that starts with `@LEAD MODALITÀ:` / `@LEAD MODE:`. Answer any other message of the user in the room (`post --as LEAD`) while you wait.
+Tell the user in one line that the room is open and waits for their choice in the chat. Then listen: repeatedly run `python "CHAT" wait --room "ROOM" --as LEAD --timeout 100` and read what arrives. A timeout with no message is not the end. The choice arrives as a message of the user that starts with `@LEAD MODALITÀ:` / `@LEAD MODE:`. chat.py hands you, with it, the command of the guide for that mode (`python "CHAT" guide normal` or `guide research`): run it and follow it before anything else. Answer any other message of the user in the room (`post --as LEAD`) while you wait.
 
 ## 4a. Normal
+
+The lead's guide for this mode: `python "CHAT" guide normal`.
 
 Keep the room as it is and set it up with the user, in the room: ask the topic, the goal, the participants (roles, models, effort) and the look; wait for their answer before spawning anyone. Then follow the chatroom start skill from "Decide the setup" with these differences:
 
@@ -49,7 +51,9 @@ Keep the room as it is and set it up with the user, in the room: ask the topic, 
 
 ## 4b. Research
 
-Research rooms follow docs/research-mode.md of the plugin's repository. What runs today is the first step of the research kernel: an autoresearch loop (one file changes, a sealed evaluator, keep if strictly better or reset). The full mode (several roles, phases, audit) comes later; say so to the user if they ask for it.
+The lead's guide for this mode, with the contract template and what the kernel does at every run: `python "CHAT" guide research`. The steps below are its short form.
+
+A research room runs the research kernel: an autoresearch loop (one file changes, a sealed evaluator, keep if strictly better or reset). Several roles, phases and an audit are not part of it yet; say so to the user if they ask for them.
 
 1. **Phase 0, the contract**, in the room with the user. Ask the task, then write `ROOM/research/task.md` together: Goal; the repository and the ONE file that may change (the program); the evaluator command and the metric it prints as `NAME: value` (lower or higher is better); the files that are sealed (the evaluator, the data loader, anything that measures); the time per run and the number of runs; what is held out for a final check and never used before it; the simplicity rule (at equal results the shorter program wins). The repository must be committed and clean. Post each draft in the room and change it until the user writes that they approve it.
 2. **Open the research** with the approved terms (only you or the user can):
